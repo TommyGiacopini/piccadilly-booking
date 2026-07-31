@@ -1,0 +1,30 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# Tests
+/coverage
+
+# Next.js
+/.next/
+/out/
+/build
+
+# Local environment files; the documented example is intentionally tracked.
+.env*
+!.env.example
+
+# Deployment and tooling
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+
+# Operating systems and certificates
+.DS_Store
+Thumbs.db
+*.pem
+
+# Temporary M1 scaffold
+/m1-nextjs-temp/
