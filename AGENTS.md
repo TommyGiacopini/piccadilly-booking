@@ -1,8 +1,8 @@
-\# Piccadilly Booking — Istruzioni permanenti per Codex
+# Piccadilly Booking — Istruzioni permanenti per Codex
 
 
 
-\## Missione
+## Missione
 
 
 
@@ -36,7 +36,7 @@ Il sistema deve diventare l'unica fonte ufficiale per:
 
 
 
-\## Documentazione ufficiale
+## Documentazione ufficiale
 
 
 
@@ -66,7 +66,7 @@ In caso di conflitto tra il codice e le specifiche, non modificare automaticamen
 
 
 
-\## Metodo di lavoro
+## Metodo di lavoro
 
 
 
@@ -92,7 +92,7 @@ In caso di conflitto tra il codice e le specifiche, non modificare automaticamen
 
 
 
-\## Ambienti
+## Ambienti
 
 
 
@@ -126,7 +126,7 @@ Regole:
 
 
 
-\## Stack tecnico iniziale
+## Stack tecnico iniziale
 
 
 
@@ -160,7 +160,7 @@ Non aggiungere dipendenze importanti senza motivarne l'utilità.
 
 
 
-\## Fonte ufficiale dei dati
+## Fonte ufficiale dei dati
 
 
 
@@ -186,7 +186,7 @@ Excel non deve essere utilizzato come database principale.
 
 
 
-\## Regole sulle prenotazioni
+## Regole sulle prenotazioni
 
 
 
@@ -210,7 +210,7 @@ Excel non deve essere utilizzato come database principale.
 
 
 
-\## WhatsApp ed email
+## WhatsApp ed email
 
 
 
@@ -240,7 +240,7 @@ Le risorse Meta e WhatsApp definitive verranno create direttamente per il ristor
 
 
 
-\## Sicurezza
+## Sicurezza
 
 
 
@@ -270,7 +270,7 @@ Le risorse Meta e WhatsApp definitive verranno create direttamente per il ristor
 
 
 
-\## Qualità obbligatoria
+## Qualità obbligatoria
 
 
 
@@ -298,7 +298,7 @@ Non dichiarare completata una funzione quando i test falliscono.
 
 
 
-\## Git
+## Git
 
 
 
@@ -318,7 +318,7 @@ Non dichiarare completata una funzione quando i test falliscono.
 
 
 
-\## Interfaccia
+## Interfaccia
 
 
 
@@ -356,7 +356,7 @@ Requisiti:
 
 
 
-\## Lingue del progetto
+## Lingue del progetto
 
 
 
@@ -372,7 +372,7 @@ Requisiti:
 
 
 
-\## Comportamento richiesto a Codex
+## Comportamento richiesto a Codex
 
 
 
@@ -397,4 +397,3 @@ Prima di implementare:
 
 
 Non eseguire autonomamente operazioni irreversibili.
-

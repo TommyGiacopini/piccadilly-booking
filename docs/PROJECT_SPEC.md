@@ -1,18 +1,18 @@
-\# Piccadilly Booking — Specifiche funzionali
+# Piccadilly Booking — Specifiche funzionali
 
 
 
-\*\*Versione:\*\* 1.0  
+**Versione:** 1.0  
 
-\*\*Stato:\*\* approvato per lo sviluppo iniziale  
+**Stato:** approvato per lo sviluppo iniziale  
 
-\*\*Repository iniziale:\*\* personale  
+**Repository iniziale:** personale  
 
-\*\*Produzione finale:\*\* intestata al Risto Pizza Piccadilly
+**Produzione finale:** intestata al Risto Pizza Piccadilly
 
 
 
-\## 1. Obiettivo
+## 1. Obiettivo
 
 
 
@@ -48,7 +48,7 @@ WhatsApp, email, PDF ed Excel sono strumenti collegati e non devono essere indis
 
 
 
-\## 2. Struttura prevista
+## 2. Struttura prevista
 
 
 
@@ -82,11 +82,11 @@ La produzione finale verrà ricreata su account intestati al ristorante.
 
 
 
-\## 3. Aree del ristorante
+## 3. Aree del ristorante
 
 
 
-\### Sala 1
+### Sala 1
 
 
 
@@ -94,7 +94,7 @@ Sala principale, prevalentemente destinata agli adulti. Non contiene giochi e os
 
 
 
-\### Sala 2
+### Sala 2
 
 
 
@@ -102,7 +102,7 @@ Sala separata dal corpo principale tramite la galleria. Utilizzata anche per com
 
 
 
-\### Sala 3
+### Sala 3
 
 
 
@@ -110,7 +110,7 @@ Grande sala dotata di giochi, preferita dalle famiglie con bambini e utilizzata 
 
 
 
-\### Galleria
+### Galleria
 
 
 
@@ -118,7 +118,7 @@ Area coperta ma all'aperto, disponibile quando temperatura e condizioni lo perme
 
 
 
-\### Terrazzo
+### Terrazzo
 
 
 
@@ -142,7 +142,7 @@ Galleria e Terrazzo devono poter essere attivate o disattivate dal pannello ammi
 
 
 
-\## 4. Giorni e servizi
+## 4. Giorni e servizi
 
 
 
@@ -178,7 +178,7 @@ L'amministratore deve poter modificare:
 
 
 
-\### Pranzo
+### Pranzo
 
 
 
@@ -190,7 +190,7 @@ L'amministratore deve poter modificare:
 
 
 
-\### Cena
+### Cena
 
 
 
@@ -206,7 +206,7 @@ Il cliente conserva il tavolo senza durata prestabilita.
 
 
 
-\## 5. Limite iniziale
+## 5. Limite iniziale
 
 
 
@@ -226,7 +226,7 @@ Il personale deve poter superare manualmente il limite quando inserisce una pren
 
 
 
-\## 6. Chiusura delle prenotazioni online
+## 6. Chiusura delle prenotazioni online
 
 
 
@@ -250,7 +250,7 @@ La chiusura online non deve impedire al personale di inserire prenotazioni telef
 
 
 
-\## 7. Modulo pubblico
+## 7. Modulo pubblico
 
 
 
@@ -324,7 +324,7 @@ La prenotazione viene confermata immediatamente quando disponibile.
 
 
 
-\## 8. Pagina personale
+## 8. Pagina personale
 
 
 
@@ -366,7 +366,7 @@ Il token non deve contenere l'ID progressivo del database.
 
 
 
-\## 9. Modifiche e cancellazioni
+## 9. Modifiche e cancellazioni
 
 
 
@@ -422,7 +422,7 @@ Ogni modifica deve conservare:
 
 
 
-\## 10. WhatsApp
+## 10. WhatsApp
 
 
 
@@ -464,7 +464,7 @@ L'invio automatico nel gruppo interno deve essere trattato come funzione opziona
 
 
 
-\## 11. Prenotazioni telefoniche
+## 11. Prenotazioni telefoniche
 
 
 
@@ -508,7 +508,7 @@ Deve essere presente un'opzione per inviare o non inviare la conferma WhatsApp.
 
 
 
-\## 12. Dashboard
+## 12. Dashboard
 
 
 
@@ -528,7 +528,7 @@ Ruoli:
 
 
 
-\### Admin
+### Admin
 
 
 
@@ -536,7 +536,7 @@ Può modificare configurazioni, utenti, orari, sale, limiti e prenotazioni.
 
 
 
-\### Staff
+### Staff
 
 
 
@@ -570,7 +570,7 @@ La dashboard deve aprirsi sul giorno corrente e mostrare:
 
 
 
-\## 13. Tavoli
+## 13. Tavoli
 
 
 
@@ -594,7 +594,7 @@ La preferenza originale del cliente deve restare visibile.
 
 
 
-\## 14. PDF
+## 14. PDF
 
 
 
@@ -640,7 +640,7 @@ Colonne:
 
 
 
-\## 15. Excel
+## 15. Excel
 
 
 
@@ -666,7 +666,7 @@ La dashboard web deve restare lo strumento principale per modificare i dati.
 
 
 
-\## 16. Lingue e grafica
+## 16. Lingue e grafica
 
 
 
@@ -702,7 +702,7 @@ Grafica:
 
 
 
-\## 17. Sicurezza
+## 17. Sicurezza
 
 
 
@@ -736,11 +736,11 @@ Requisiti minimi:
 
 
 
-\## 18. Ambienti
+## 18. Ambienti
 
 
 
-\### Sviluppo locale
+### Sviluppo locale
 
 
 
@@ -754,7 +754,7 @@ Requisiti minimi:
 
 
 
-\### Staging personale
+### Staging personale
 
 
 
@@ -768,7 +768,7 @@ Requisiti minimi:
 
 
 
-\### Produzione
+### Produzione
 
 
 
@@ -786,7 +786,7 @@ Requisiti minimi:
 
 
 
-\## 19. Proprietà finale
+## 19. Proprietà finale
 
 
 
@@ -802,7 +802,7 @@ Il progetto deve poter continuare a funzionare senza dipendere dagli account per
 
 
 
-\## 20. Ordine delle milestone
+## 20. Ordine delle milestone
 
 
 
@@ -831,4 +831,3 @@ Il progetto deve poter continuare a funzionare senza dipendere dagli account per
 12\. test;
 
 13\. produzione e consegna.
-
