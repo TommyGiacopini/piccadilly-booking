@@ -2,11 +2,11 @@
 
 
 
-**Versione:** 1.0  
+**Versione:** 1.0
 
-**Stato:** approvato per lo sviluppo iniziale  
+**Stato:** approvato per lo sviluppo iniziale
 
-**Repository iniziale:** personale  
+**Repository iniziale:** personale
 
 **Produzione finale:** intestata al Risto Pizza Piccadilly
 
@@ -56,15 +56,15 @@ Flusso principale:
 
 
 
-Sito Piccadilly  
+Sito Piccadilly
 
-→ pulsante Prenota  
+→ pulsante Prenota
 
-→ applicazione proprietaria  
+→ applicazione proprietaria
 
-→ database PostgreSQL  
+→ database PostgreSQL
 
-→ dashboard del personale  
+→ dashboard del personale
 
 → notifiche, PDF ed Excel
 
