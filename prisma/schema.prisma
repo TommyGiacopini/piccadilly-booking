@@ -7,12 +7,63 @@ datasource db {
   provider = "postgresql"
 }
 
+enum UserRole {
+  ADMIN
+  STAFF
+}
+
 model Restaurant {
   id        String   @id @default(uuid()) @db.Uuid
   name      String
   timezone  String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  users     User[]
 
   @@map("restaurants")
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  restaurantId String     @map("restaurant_id") @db.Uuid
+  username     String     @db.VarChar(64)
+  passwordHash String     @map("password_hash") @db.VarChar(255)
+  role         UserRole
+  isActive     Boolean    @default(true) @map("is_active")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  disabledAt   DateTime?  @map("disabled_at") @db.Timestamptz(3)
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  sessions     Session[]
+
+  @@unique([restaurantId, username], map: "users_restaurant_id_username_key")
+  @@index([restaurantId, role, isActive], map: "users_restaurant_role_active_idx")
+  @@map("users")
+}
+
+model Session {
+  id         String    @id @db.Uuid
+  secretHash String    @map("secret_hash") @db.Char(64)
+  userId     String    @map("user_id") @db.Uuid
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(3)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt], map: "sessions_user_id_expires_at_idx")
+  @@index([expiresAt, revokedAt], map: "sessions_expires_at_revoked_at_idx")
+  @@map("sessions")
+}
+
+model LoginRateLimit {
+  keyHash         String    @id @map("key_hash") @db.Char(64)
+  attempts        Int       @default(0)
+  windowStartedAt DateTime  @map("window_started_at") @db.Timestamptz(3)
+  blockedUntil    DateTime? @map("blocked_until") @db.Timestamptz(3)
+  expiresAt       DateTime  @map("expires_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([expiresAt], map: "login_rate_limits_expires_at_idx")
+  @@map("login_rate_limits")
 }
