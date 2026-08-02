@@ -21,6 +21,9 @@
 next-env.d.ts
 npm-debug.log*
 
+# Generated Prisma Client
+/src/generated/prisma
+
 # Operating systems and certificates
 .DS_Store
 Thumbs.db
