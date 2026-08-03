@@ -37,6 +37,13 @@ export default async function DashboardPage() {
             realizzata nelle milestone successive.
           </p>
 
+          <a
+            className="mt-6 inline-flex rounded-xl bg-orange-500 px-6 py-3 font-bold text-white transition hover:bg-orange-600 focus:ring-4 focus:ring-orange-200 focus:outline-none"
+            href="/dashboard/reservations/new"
+          >
+            Nuova prenotazione tecnica
+          </a>
+
           <form action="/api/auth/logout" className="mt-8" method="post">
             <button
               className="rounded-xl bg-zinc-950 px-6 py-3 font-bold text-white transition hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-200"

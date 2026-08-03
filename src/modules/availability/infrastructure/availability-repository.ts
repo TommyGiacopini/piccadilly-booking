@@ -2,6 +2,7 @@ import "server-only";
 
 import {
   DayOfWeek,
+  type PrismaClient,
   ServiceType,
   SpecialDateScope,
 } from "@/generated/prisma/client";
@@ -16,6 +17,8 @@ import {
   operationalTimeFromDatabase,
 } from "@/modules/configuration/domain/operational-time";
 import { prisma } from "@/server/db/prisma";
+
+type AvailabilityRepositoryClient = Pick<PrismaClient, "restaurant">;
 
 function mapSpecialDateRule(override: {
   scope: SpecialDateScope;
@@ -42,9 +45,9 @@ export async function readAvailabilityConfiguration(input: {
   date: string;
   dayOfWeek: LocalDayOfWeek;
   serviceType: AvailabilityServiceType;
-}): Promise<AvailabilityConfigurationInput | null> {
+}, client: AvailabilityRepositoryClient = prisma): Promise<AvailabilityConfigurationInput | null> {
   const serviceType = ServiceType[input.serviceType];
-  const restaurant = await prisma.restaurant.findUnique({
+  const restaurant = await client.restaurant.findUnique({
     where: { id: input.restaurantId },
     select: {
       timezone: true,

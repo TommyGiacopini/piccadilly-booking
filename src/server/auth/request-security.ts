@@ -4,6 +4,7 @@ import { createHmac } from "node:crypto";
 
 const ALLOWED_POST_LOGIN_PATHS = new Set([
   "/dashboard",
+  "/dashboard/reservations/new",
   "/admin",
   "/admin/configuration",
   "/admin/rooms",
