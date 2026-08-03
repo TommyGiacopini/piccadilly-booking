@@ -367,12 +367,16 @@ describe.sequential("M5 availability with real PostgreSQL", () => {
     expect(after).toEqual(before);
   });
 
-  it("has no Reservation table or model-backed persistence", async () => {
-    const rows = await prisma.$queryRaw<Array<{ reservationTable: string | null }>>`
-      SELECT to_regclass('public.reservations')::text AS "reservationTable"
-    `;
+  it("keeps the preview consultative and does not create reservations", async () => {
+    const before = await prisma.reservation.count({
+      where: { restaurantId },
+    });
 
-    expect(rows[0]?.reservationTable).toBeNull();
+    await preview(restaurantId, apiDate, "DINNER");
+
+    await expect(
+      prisma.reservation.count({ where: { restaurantId } }),
+    ).resolves.toBe(before);
   });
 
   it("authorizes ADMIN and returns a no-store minimal DTO", async () => {
