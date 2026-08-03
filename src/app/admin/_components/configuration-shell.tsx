@@ -6,6 +6,7 @@ const links = [
   { href: "/admin/rooms", label: "Sale e tavoli" },
   { href: "/admin/schedules", label: "Orari settimanali" },
   { href: "/admin/special-dates", label: "Date speciali" },
+  { href: "/admin/availability-preview", label: "Anteprima disponibilità" },
 ] as const;
 
 export function ConfigurationShell({
@@ -96,4 +97,3 @@ export const fieldClassName =
 
 export const buttonClassName =
   "rounded-xl bg-zinc-950 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-200";
-

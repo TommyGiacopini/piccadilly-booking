@@ -1,6 +1,6 @@
 # Piccadilly Booking
 
-Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. La Milestone M4 aggiunge la configurazione operativa del ristorante e il calendario tecnico protetto; non comprende ancora prenotazioni, disponibilità pubblica o dashboard operative.
+Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. La Milestone M5 aggiunge il motore server-side di disponibilità e l'anteprima tecnica protetta; non comprende ancora prenotazioni persistenti, disponibilità pubblica o dashboard operative.
 
 ## Requisiti locali
 
@@ -98,6 +98,29 @@ Le impostazioni iniziali sono:
 
 Capacità, slot, orari, abilitazione dei servizi e cut-off sono modificabili dall'Admin. La durata della finestra mobile viene persistita e mostrata, ma resta fissata a 30 minuti nella prima versione per rispettare la decisione architetturale approvata. Le date speciali possono chiudere l'intera giornata, soltanto il pranzo o soltanto la cena; un'apertura può avere orari e capacità speciali opzionali. Il seed non inserisce date speciali, perché non sono documentate chiusure reali approvate.
 
+## Motore availability M5
+
+Il modulo `src/modules/availability` calcola una vista riutilizzabile e indipendente da Next.js, React e Prisma. Riceve ristorante, data locale, servizio, coperti richiesti, clock esplicito, canale e un array tipizzato di arrivi già esistenti. Il repository Prisma si limita a leggere PostgreSQL e trasformare la configurazione in tipi applicativi; non contiene regole di disponibilità.
+
+Gli slot sono generati in ordine crescente con estremi inclusivi: `startTime` è il primo slot ed `endTime` è l'ultimo. Con la configurazione demo il pranzo produce 12:00–14:00 inclusi e la cena 19:00–22:15 inclusi, ogni 15 minuti. Configurazioni invertite, intervalli non positivi o un ultimo slot non raggiungibile esattamente vengono classificate come `CONFIGURATION_INVALID`.
+
+La configurazione effettiva segue questa precedenza:
+
+1. eccezione per data e servizio specifico;
+2. eccezione `ALL` per la data;
+3. regola settimanale;
+4. impostazioni generali del ristorante per capacità, finestra e cutoff.
+
+Un'eccezione specifica aperta prevale quindi su una chiusura `ALL`. Orari o capacità opzionali non indicati da un'apertura speciale ereditano rispettivamente dalla regola settimanale e dalle impostazioni del ristorante.
+
+La capacità usa finestre mobili ancorate a ogni slot configurato, mai blocchi fissi. Ogni finestra somma gli arrivi con estremi `[inizio, fine)`: con 30 minuti, la finestra 19:00 include 19:00 e 19:15 ma esclude 19:30. Una richiesta candidata viene aggiunta virtualmente a tutte le finestre che la contengono; lo slot è disponibile soltanto se nessuna supera il limite. La capacità residua di base è il margine minimo fra tutte le finestre interessate.
+
+Tutti i confronti operativi usano la timezone IANA del ristorante, inizialmente `Europe/Rome`, tramite `Intl.DateTimeFormat` e un clock iniettato. Date `YYYY-MM-DD` e orari `HH:mm` restano valori locali e non vengono convertiti in timestamp UTC fittizi; i cambi tra ora solare e legale sono coperti da test deterministici.
+
+Per `PUBLIC`, gli slot trascorsi non sono disponibili e il dinner dello stesso venerdì o sabato chiude online al cutoff configurato, inizialmente 17:30. Il cutoff non si applica a date future o a `LUNCH`. Il canale `STAFF` ignora il cutoff online, ma continua a rispettare chiusure, configurazione e slot trascorsi.
+
+`Reservation` non esiste ancora. L'anteprima M5 usa intenzionalmente `arrivals: []`, non salva carichi simulati e non rappresenta disponibilità reale pubblica. Il controllo definitivo dovrà rileggere configurazione e prenotazioni e rivalidare tutte le finestre nella futura transazione di creazione della prenotazione.
+
 ## Account locali fittizi
 
 | Ruolo | Username | Password |
@@ -109,12 +132,15 @@ Queste identità non corrispondono a persone reali. Le password di `.env.example
 
 `ADMIN` accede anche alla pagina tecnica `/admin`; `STAFF` può usare l'area protetta ordinaria ma viene respinto dalle pagine e dalle mutazioni di configurazione. I controlli sono eseguiti sul server e ogni aggiornamento è limitato al `restaurantId` della sessione.
 
-## Percorsi Admin M4
+## Percorsi Admin M4–M5
 
 - `/admin/configuration`: capacità e cut-off;
 - `/admin/rooms`: ordine e stato delle sale, modifica dei tavoli demo;
 - `/admin/schedules`: servizi e orari settimanali;
 - `/admin/special-dates`: creazione, modifica e rimozione delle eccezioni locali.
+- `/admin/availability-preview`: anteprima M5 di slot e capacità con carico persistente vuoto.
+
+La corrispondente lettura JSON è `GET /api/admin/availability-preview?date=YYYY-MM-DD&service=LUNCH|DINNER&partySize=2&channel=PUBLIC|STAFF`. Pagina e API sono accessibili esclusivamente ad `ADMIN`, isolate sul `restaurantId` della sessione, validate sul server e restituite con `Cache-Control: no-store`. L'endpoint non accetta arrivi o query arbitrarie e non effettua scritture.
 
 Le pagine sono minimali e tecniche. Un anonimo viene reindirizzato a `/login`; `STAFF` non può effettuare scritture. Le mutazioni POST same-origin validano sul server un elenco esplicito di campi e non espongono query, stack trace o dettagli interni.
 
@@ -132,6 +158,8 @@ npm run dev
 - sale e tavoli ADMIN: [http://localhost:4000/admin/rooms](http://localhost:4000/admin/rooms);
 - orari ADMIN: [http://localhost:4000/admin/schedules](http://localhost:4000/admin/schedules);
 - date speciali ADMIN: [http://localhost:4000/admin/special-dates](http://localhost:4000/admin/special-dates);
+- anteprima disponibilità ADMIN: [http://localhost:4000/admin/availability-preview](http://localhost:4000/admin/availability-preview);
+- API anteprima disponibilità ADMIN: [http://localhost:4000/api/admin/availability-preview](http://localhost:4000/api/admin/availability-preview);
 - health check: [http://localhost:4000/api/health](http://localhost:4000/api/health).
 
 Il login accetta username normalizzati e password di almeno 12 caratteri. Le risposte per username inesistente, password errata e utente disabilitato non rivelano quale controllo sia fallito.
@@ -167,6 +195,6 @@ npm run build
 
 La suite Vitest comprende test unitari e test d'integrazione con PostgreSQL reale; non usa SQLite.
 
-## Confini della Milestone M4
+## Confini della Milestone M5
 
-La dashboard e le pagine Admin restano tecniche. Non esistono modelli `Reservation`, `ServiceInstance`, clienti, disponibilità o slot prenotabili definitivi. Restano esclusi modulo pubblico, pagina personale, agenda, assegnazione prenotazioni–tavoli, override per prenotazione, gestione utenti definitiva, audit completo, eventi, notifiche, outbox, WhatsApp, email, PDF, Excel, deploy, database cloud e dati reali.
+La dashboard e le pagine Admin restano tecniche. Non esistono modelli `Reservation`, `ServiceInstance`, clienti o slot prenotabili pubblici definitivi. Restano esclusi persistenza e concorrenza delle prenotazioni, transazioni e lock di capacità, idempotenza, cancellazioni, override, modulo pubblico, pagina personale, agenda, assegnazione prenotazioni–tavoli, gestione utenti definitiva, audit completo, eventi, notifiche, outbox, WhatsApp, email, PDF, Excel, deploy, database cloud e dati reali.
