@@ -38,12 +38,28 @@ export async function requireAuthenticatedUser(
   return user;
 }
 
-export async function requireAdmin(): Promise<AuthenticatedUser> {
-  const user = await requireAuthenticatedUser("/admin");
+export async function requireAdmin(
+  returnTo = "/admin",
+): Promise<AuthenticatedUser> {
+  const user = await requireAuthenticatedUser(returnTo);
 
   if (!canAccessAdminArea(user.role)) {
     redirect("/dashboard?access=denied");
   }
 
   return user;
+}
+
+export async function getRequestUser(
+  request: Request,
+): Promise<AuthenticatedUser | null> {
+  const cookieName = getSessionCookieName(getAppEnvironment());
+  const token = request.headers
+    .get("cookie")
+    ?.split(";")
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith(`${cookieName}=`))
+    ?.slice(cookieName.length + 1);
+
+  return validateSessionToken(token);
 }
