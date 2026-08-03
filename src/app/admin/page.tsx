@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/server/auth/authorization";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +16,15 @@ export default async function AdminTechnicalPage() {
           Area tecnica ADMIN
         </h1>
         <p className="mt-5 leading-7 text-zinc-600">
-          Accesso autorizzato per {user.username}. Questa pagina dimostra il
-          controllo del ruolo sul server e non è il pannello di gestione utenti.
+          Accesso autorizzato per {user.username}. La configurazione operativa è
+          disponibile nella sezione tecnica dedicata.
         </p>
+        <Link
+          className="mt-7 inline-flex rounded-xl bg-orange-600 px-6 py-3 font-bold text-white"
+          href="/admin/configuration"
+        >
+          Apri configurazione
+        </Link>
         <form action="/api/auth/logout" className="mt-8" method="post">
           <button
             className="rounded-xl bg-zinc-950 px-6 py-3 font-bold text-white"

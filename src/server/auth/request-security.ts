@@ -2,7 +2,14 @@ import "server-only";
 
 import { createHmac } from "node:crypto";
 
-const ALLOWED_POST_LOGIN_PATHS = new Set(["/dashboard", "/admin"]);
+const ALLOWED_POST_LOGIN_PATHS = new Set([
+  "/dashboard",
+  "/admin",
+  "/admin/configuration",
+  "/admin/rooms",
+  "/admin/schedules",
+  "/admin/special-dates",
+]);
 
 function firstForwardedValue(value: string | null): string | null {
   return value?.split(",", 1)[0]?.trim() || null;
