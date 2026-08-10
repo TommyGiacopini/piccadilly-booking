@@ -10,6 +10,7 @@ import type { LocalDayOfWeek } from "@/modules/availability/domain/local-calenda
 import type {
   AvailabilityConfigurationInput,
   AvailabilityServiceType,
+  CapacityArrival,
   SpecialDateAvailabilityRule,
 } from "@/modules/availability/domain/types";
 import {
@@ -18,7 +19,10 @@ import {
 } from "@/modules/configuration/domain/operational-time";
 import { prisma } from "@/server/db/prisma";
 
-type AvailabilityRepositoryClient = Pick<PrismaClient, "restaurant">;
+type AvailabilityRepositoryClient = Pick<
+  PrismaClient,
+  "restaurant" | "reservation"
+>;
 
 function mapSpecialDateRule(override: {
   scope: SpecialDateScope;
@@ -135,4 +139,29 @@ export async function readAvailabilityConfiguration(input: {
       ? mapSpecialDateRule(serviceDateOverride)
       : null,
   };
+}
+
+export async function readAvailabilityArrivals(
+  input: {
+    restaurantId: string;
+    date: string;
+    serviceType: AvailabilityServiceType;
+  },
+  client: AvailabilityRepositoryClient = prisma,
+): Promise<CapacityArrival[]> {
+  const reservations = await client.reservation.findMany({
+    where: {
+      restaurantId: input.restaurantId,
+      localDate: localDateToDatabase(input.date),
+      serviceType: ServiceType[input.serviceType],
+      status: "CONFIRMED",
+    },
+    select: { arrivalTime: true, partySize: true },
+  });
+
+  return reservations.map((reservation) => ({
+    arrivalTime: operationalTimeFromDatabase(reservation.arrivalTime),
+    covers: reservation.partySize,
+    countsTowardCapacity: true,
+  }));
 }

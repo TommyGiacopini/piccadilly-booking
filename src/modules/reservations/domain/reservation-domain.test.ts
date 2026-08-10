@@ -63,12 +63,17 @@ function storedReservation(): StoredReservation {
     privacyPolicyVersion: "local-demo-v1",
     privacyConsentAt: new Date("2099-01-01T10:00:00.000Z"),
     privacyConsentMethod: "VERBAL",
+    termsPolicyVersion: null,
+    termsConsentAt: null,
+    termsConsentMethod: null,
+    consentLanguage: null,
     createdByUserId: "00000000-0000-4000-8000-000000000102",
     capacityOverride: false,
     capacityOverrideReason: null,
     createdAt: new Date("2099-01-01T10:00:00.000Z"),
     updatedAt: new Date("2099-01-01T10:00:00.000Z"),
     cancelledAt: null,
+    version: 1,
   };
 }
 

@@ -64,6 +64,8 @@ export async function readOperationalConfiguration(restaurantId: string) {
           saturdayDinnerBookingCutoff: operationalTimeFromDatabase(
             restaurant.bookingSettings.saturdayDinnerBookingCutoff,
           ),
+          managementLinkDurationHours:
+            restaurant.bookingSettings.managementLinkDurationHours,
         }
       : null,
     rooms: restaurant.rooms,
@@ -185,6 +187,7 @@ export async function updateBookingSettingsForRestaurant(
         saturdayDinnerBookingCutoff: operationalTimeToDatabase(
           input.saturdayDinnerBookingCutoff,
         ),
+        managementLinkDurationHours: input.managementLinkDurationHours,
       },
     });
 
@@ -242,4 +245,3 @@ export async function deleteSpecialDateForRestaurant(
 
   return result.count === 1;
 }
-

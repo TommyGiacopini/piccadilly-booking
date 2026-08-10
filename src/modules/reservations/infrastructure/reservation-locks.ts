@@ -6,6 +6,7 @@ import { Prisma } from "@/generated/prisma/client";
 
 const CAPACITY_LOCK_NAMESPACE = "reservation-capacity-v1";
 const IDEMPOTENCY_LOCK_NAMESPACE = "reservation-idempotency-v1";
+const MANAGEMENT_LOCK_NAMESPACE = "reservation-management-v1";
 
 export function deriveAdvisoryLockKey(
   namespace: string,
@@ -71,4 +72,38 @@ export async function acquireCapacityLock(
       input.serviceType,
     ]),
   );
+}
+
+export async function acquireManagementLock(
+  client: Prisma.TransactionClient,
+  tokenHash: string,
+): Promise<void> {
+  await acquireTransactionLock(
+    client,
+    deriveAdvisoryLockKey(MANAGEMENT_LOCK_NAMESPACE, [tokenHash]),
+  );
+}
+
+export async function acquireCapacityLocks(
+  client: Prisma.TransactionClient,
+  identities: readonly {
+    restaurantId: string;
+    localDate: string;
+    serviceType: string;
+  }[],
+): Promise<void> {
+  const uniqueIdentities = new Map(
+    identities.map((identity) => [
+      [identity.restaurantId, identity.localDate, identity.serviceType].join(
+        "\u0000",
+      ),
+      identity,
+    ]),
+  );
+
+  for (const [, identity] of [...uniqueIdentities].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    await acquireCapacityLock(client, identity);
+  }
 }

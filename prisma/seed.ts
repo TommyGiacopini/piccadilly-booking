@@ -13,6 +13,7 @@ import {
 import {
   DAY_OF_WEEK_VALUES,
   DEFAULT_BOOKING_CUTOFFS,
+  DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
   DEFAULT_ROLLING_CAPACITY_COVERS,
   DEFAULT_SERVICE_TIMES,
   DEFAULT_SLOT_INTERVAL_MINUTES,
@@ -94,6 +95,7 @@ export async function seedDemoOperationalConfiguration(
       saturdayDinnerBookingCutoff: operationalTimeToDatabase(
         DEFAULT_BOOKING_CUTOFFS.saturdayDinnerBookingCutoff,
       ),
+      managementLinkDurationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
     },
     create: {
       restaurantId: DEMO_RESTAURANT_ID,
@@ -111,6 +113,7 @@ export async function seedDemoOperationalConfiguration(
       saturdayDinnerBookingCutoff: operationalTimeToDatabase(
         DEFAULT_BOOKING_CUTOFFS.saturdayDinnerBookingCutoff,
       ),
+      managementLinkDurationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
     },
   });
 

@@ -8,8 +8,12 @@ import type {
   AvailabilityConfigurationInput,
   AvailabilityResult,
   AvailabilityServiceType,
+  CapacityArrival,
 } from "@/modules/availability/domain/types";
-import { readAvailabilityConfiguration } from "@/modules/availability/infrastructure/availability-repository";
+import {
+  readAvailabilityArrivals,
+  readAvailabilityConfiguration,
+} from "@/modules/availability/infrastructure/availability-repository";
 import { isLocalDate } from "@/modules/configuration/domain/operational-time";
 
 export interface AvailabilityConfigurationRepository {
@@ -21,8 +25,20 @@ export interface AvailabilityConfigurationRepository {
   }): Promise<AvailabilityConfigurationInput | null>;
 }
 
+export interface AvailabilityArrivalsRepository {
+  read(input: {
+    restaurantId: string;
+    date: string;
+    serviceType: AvailabilityServiceType;
+  }): Promise<CapacityArrival[]>;
+}
+
 const prismaAvailabilityConfigurationRepository: AvailabilityConfigurationRepository = {
   read: readAvailabilityConfiguration,
+};
+
+const prismaAvailabilityArrivalsRepository: AvailabilityArrivalsRepository = {
+  read: readAvailabilityArrivals,
 };
 
 export interface GetAvailabilityPreviewInput {
@@ -32,12 +48,14 @@ export interface GetAvailabilityPreviewInput {
   partySize: number;
   channel: AvailabilityChannel;
   now: Date;
+  includePersistentLoad?: boolean;
 }
 
 export async function getAvailabilityPreview(
   input: GetAvailabilityPreviewInput,
   dependencies: {
     repository?: AvailabilityConfigurationRepository;
+    arrivalsRepository?: AvailabilityArrivalsRepository;
   } = {},
 ): Promise<AvailabilityResult> {
   if (!isLocalDate(input.date)) {
@@ -63,6 +81,17 @@ export async function getAvailabilityPreview(
     );
   }
 
+  const arrivals = input.includePersistentLoad
+    ? await (
+        dependencies.arrivalsRepository ??
+        prismaAvailabilityArrivalsRepository
+      ).read({
+        restaurantId: input.restaurantId,
+        date: input.date,
+        serviceType: input.serviceType,
+      })
+    : [];
+
   return calculateAvailability({
     date: input.date,
     serviceType: input.serviceType,
@@ -70,8 +99,6 @@ export async function getAvailabilityPreview(
     now: input.now,
     channel: input.channel,
     configuration,
-    // Reservation does not exist yet. Persistent load will be read and
-    // rechecked transactionally by the future reservation milestone.
-    arrivals: [],
+    arrivals,
   });
 }

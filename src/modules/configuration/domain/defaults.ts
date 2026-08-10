@@ -2,6 +2,7 @@ export const RESTAURANT_TIMEZONE = "Europe/Rome";
 export const DEFAULT_SLOT_INTERVAL_MINUTES = 15;
 export const DEFAULT_ROLLING_CAPACITY_COVERS = 30;
 export const FIXED_ROLLING_WINDOW_MINUTES = 30;
+export const DEFAULT_MANAGEMENT_LINK_DURATION_HOURS = 24;
 
 export const DEFAULT_SERVICE_TIMES = {
   LUNCH: { startTime: "12:00", endTime: "14:00" },
@@ -59,4 +60,3 @@ export const DEMO_ROOMS = [
   { name: "Galleria", code: "galleria", displayOrder: 4 },
   { name: "Terrazzo", code: "terrazzo", displayOrder: 5 },
 ] as const;
-

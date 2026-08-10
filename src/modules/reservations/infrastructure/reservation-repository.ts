@@ -60,7 +60,7 @@ function mapSpecialDateRule(override: {
   };
 }
 
-function mapReservation(row: PrismaReservation): StoredReservation {
+export function mapReservation(row: PrismaReservation): StoredReservation {
   return {
     id: row.id,
     restaurantId: row.restaurantId,
@@ -80,12 +80,20 @@ function mapReservation(row: PrismaReservation): StoredReservation {
     privacyPolicyVersion: row.privacyPolicyVersion,
     privacyConsentAt: row.privacyConsentAt,
     privacyConsentMethod: row.privacyConsentMethod,
+    termsPolicyVersion: row.termsPolicyVersion,
+    termsConsentAt: row.termsConsentAt,
+    termsConsentMethod: row.termsConsentMethod,
+    consentLanguage:
+      row.consentLanguage === "it" || row.consentLanguage === "en"
+        ? row.consentLanguage
+        : null,
     createdByUserId: row.createdByUserId,
     capacityOverride: row.capacityOverride,
     capacityOverrideReason: row.capacityOverrideReason,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     cancelledAt: row.cancelledAt,
+    version: row.version,
   };
 }
 
@@ -258,6 +266,7 @@ export async function readConfirmedArrivals(
     restaurantId: string;
     localDate: string;
     serviceType: "LUNCH" | "DINNER";
+    excludeReservationId?: string;
   },
 ): Promise<CapacityArrival[]> {
   const rows = await client.reservation.findMany({
@@ -266,6 +275,9 @@ export async function readConfirmedArrivals(
       localDate: localDateToDatabase(input.localDate),
       serviceType: input.serviceType,
       status: "CONFIRMED",
+      ...(input.excludeReservationId
+        ? { id: { not: input.excludeReservationId } }
+        : {}),
     },
     select: { arrivalTime: true, partySize: true },
   });

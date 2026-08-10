@@ -137,6 +137,7 @@ function create(
     now,
     config: {
       privacyPolicyVersion: "local-test-v1",
+      termsVersion: "local-test-terms-v1",
       idempotencyTtlMs: 24 * 60 * 60 * 1000,
     },
   });
@@ -403,6 +404,7 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
         now: new Date("2099-01-01T12:00:30.000Z"),
         config: {
           privacyPolicyVersion: "local-test-v1",
+          termsVersion: "local-test-terms-v1",
           idempotencyTtlMs: 86_400_000,
         },
       }),
@@ -547,6 +549,7 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
         now,
         config: {
           privacyPolicyVersion: "local-test-v1",
+          termsVersion: "local-test-terms-v1",
           idempotencyTtlMs: 86_400_000,
         },
       }),

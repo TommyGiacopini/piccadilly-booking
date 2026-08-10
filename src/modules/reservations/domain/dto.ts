@@ -7,7 +7,7 @@ export interface ReservationDto {
   arrivalTime: string;
   partySize: number;
   status: "CONFIRMED" | "CANCELLED";
-  origin: "STAFF" | "PHONE";
+  origin: "STAFF" | "PHONE" | "PUBLIC";
   customer: {
     firstName: string;
     lastName: string;

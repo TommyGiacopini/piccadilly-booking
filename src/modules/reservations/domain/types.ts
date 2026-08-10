@@ -1,8 +1,9 @@
 export const RESERVATION_STATUSES = ["CONFIRMED", "CANCELLED"] as const;
-export const RESERVATION_ORIGINS = ["STAFF", "PHONE"] as const;
+export const RESERVATION_ORIGINS = ["STAFF", "PHONE", "PUBLIC"] as const;
 export const PRIVACY_CONSENT_METHODS = [
   "VERBAL",
   "STAFF_RECORDED",
+  "WEB_CHECKBOX",
 ] as const;
 
 export type ReservationStatus = (typeof RESERVATION_STATUSES)[number];
@@ -55,10 +56,15 @@ export interface StoredReservation {
   privacyPolicyVersion: string;
   privacyConsentAt: Date;
   privacyConsentMethod: PrivacyConsentMethod;
+  termsPolicyVersion: string | null;
+  termsConsentAt: Date | null;
+  termsConsentMethod: PrivacyConsentMethod | null;
+  consentLanguage: "it" | "en" | null;
   createdByUserId: string | null;
   capacityOverride: boolean;
   capacityOverrideReason: string | null;
   createdAt: Date;
   updatedAt: Date;
   cancelledAt: Date | null;
+  version: number;
 }

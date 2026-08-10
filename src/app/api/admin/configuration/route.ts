@@ -136,6 +136,10 @@ export async function POST(request: Request): Promise<Response> {
             formData,
             "saturdayDinnerBookingCutoff",
           ),
+          managementLinkDurationHours: formValue(
+            formData,
+            "managementLinkDurationHours",
+          ),
         });
         break;
       case "update-room":
