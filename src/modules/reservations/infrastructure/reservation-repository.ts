@@ -114,19 +114,24 @@ export async function findIdempotencyKey(
     where: {
       restaurantId_keyHash: input,
     },
-    include: { reservation: true },
   });
 
   if (!row) {
     return null;
   }
 
+  const reservation = row.reservationId
+    ? await client.reservation.findUnique({
+        where: { id: row.reservationId },
+      })
+    : null;
+
   return {
     id: row.id,
     requestHash: row.requestHash,
     reservationId: row.reservationId,
     expiresAt: row.expiresAt,
-    reservation: row.reservation ? mapReservation(row.reservation) : null,
+    reservation: reservation ? mapReservation(reservation) : null,
   };
 }
 

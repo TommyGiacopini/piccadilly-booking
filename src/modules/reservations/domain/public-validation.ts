@@ -106,6 +106,14 @@ export interface PublicAllergyData {
   intolerances: string | null;
 }
 
+export interface ParsedPublicPreferenceData extends PublicPreferenceData {
+  legacyText: string | null;
+}
+
+export interface ParsedPublicAllergyData extends PublicAllergyData {
+  legacyText: string | null;
+}
+
 export function serializePublicPreferences(
   input: PublicCreateReservationInput | PublicUpdateReservationInput,
 ): string {
@@ -130,28 +138,79 @@ export function serializePublicAllergies(
   } satisfies PublicAllergyData);
 }
 
-export function parsePublicPreferences(value: string | null): PublicPreferenceData {
-  const parsed = JSON.parse(value ?? "null") as unknown;
-  return z
-    .object({
-      roomCode: z.string(),
-      highChair: z.boolean(),
-      stroller: z.boolean(),
-      accessibility: z.boolean(),
-      children: z.boolean(),
-      celebration: z.string().nullable(),
-      animals: z.boolean(),
-    })
-    .parse(parsed);
+function legacyText(value: string | null): string | null {
+  const normalized = value?.replace(/\r\n?/gu, "\n").trim();
+  return normalized || null;
 }
 
-export function parsePublicAllergies(value: string | null): PublicAllergyData {
-  const parsed = JSON.parse(value ?? "null") as unknown;
-  return z
-    .object({
-      celiac: z.boolean(),
-      allergies: z.string().nullable(),
-      intolerances: z.string().nullable(),
-    })
-    .parse(parsed);
+function parsedWithLegacyText<T extends object>(
+  value: T,
+  legacy: string | null,
+): T & { legacyText: string | null } {
+  return Object.defineProperty(value, "legacyText", {
+    value: legacy,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  }) as T & { legacyText: string | null };
+}
+
+export function parsePublicPreferences(
+  value: string | null,
+): ParsedPublicPreferenceData {
+  try {
+    const parsed = z
+      .object({
+        roomCode: z.string(),
+        highChair: z.boolean(),
+        stroller: z.boolean(),
+        accessibility: z.boolean(),
+        children: z.boolean(),
+        celebration: z.string().nullable(),
+        animals: z.boolean(),
+      })
+      .safeParse(JSON.parse(value ?? "null") as unknown);
+
+    if (parsed.success) {
+      return parsedWithLegacyText(parsed.data, null);
+    }
+  } catch {
+    // M6 stored free-form text. It remains readable but is never interpreted as JSON.
+  }
+
+  return parsedWithLegacyText({
+    roomCode: "",
+    highChair: false,
+    stroller: false,
+    accessibility: false,
+    children: false,
+    celebration: null,
+    animals: false,
+  }, legacyText(value));
+}
+
+export function parsePublicAllergies(
+  value: string | null,
+): ParsedPublicAllergyData {
+  try {
+    const parsed = z
+      .object({
+        celiac: z.boolean(),
+        allergies: z.string().nullable(),
+        intolerances: z.string().nullable(),
+      })
+      .safeParse(JSON.parse(value ?? "null") as unknown);
+
+    if (parsed.success) {
+      return parsedWithLegacyText(parsed.data, null);
+    }
+  } catch {
+    // M6 stored free-form text. Preserve it as a legacy declaration.
+  }
+
+  return parsedWithLegacyText({
+    celiac: false,
+    allergies: null,
+    intolerances: null,
+  }, legacyText(value));
 }

@@ -3,8 +3,13 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { GET as reservationGet } from "@/app/api/staff/reservations/[id]/route";
+import {
+  DELETE as reservationDelete,
+  GET as reservationGet,
+  PATCH as reservationPatch,
+} from "@/app/api/staff/reservations/[id]/route";
 import { POST as reservationPost } from "@/app/api/staff/reservations/route";
+import { GET as staffAvailabilityGet } from "@/app/api/staff/availability/route";
 import {
   DayOfWeek,
   PrivacyConsentMethod,
@@ -125,6 +130,36 @@ function payload(
   };
 }
 
+function phoneApiPayload(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    localDate: apiDate,
+    serviceType: "DINNER",
+    arrivalTime: "19:15",
+    partySize: 2,
+    roomCode: "sala-test",
+    customerFirstName: "Cliente",
+    customerLastName: "Telefonico Fittizio",
+    customerPhone: "+39 000 000 0000",
+    customerEmail: "cliente@example.invalid",
+    highChair: false,
+    stroller: false,
+    accessibility: false,
+    children: false,
+    celiac: false,
+    allergies: null,
+    intolerances: null,
+    celebration: null,
+    animals: false,
+    notes: "Nota fittizia",
+    verbalConsentConfirmed: true,
+    capacityOverride: false,
+    capacityOverrideReason: null,
+    ...overrides,
+  };
+}
+
 function create(
   actor: typeof staffActor | typeof adminActor,
   overrides: Record<string, unknown> = {},
@@ -165,7 +200,7 @@ function postRequest(input: {
   return new Request("http://localhost:4000/api/staff/reservations", {
     method: "POST",
     headers,
-    body: JSON.stringify(input.body ?? payload({ localDate: apiDate })),
+    body: JSON.stringify(input.body ?? phoneApiPayload()),
   });
 }
 
@@ -179,6 +214,43 @@ function getRequest(cookie: string | undefined, id: string): Request {
   return new Request(`http://localhost:4000/api/staff/reservations/${id}`, {
     headers,
   });
+}
+
+function mutationRequest(input: {
+  cookie?: string;
+  id: string;
+  method: "PATCH" | "DELETE";
+  body: Record<string, unknown>;
+  origin?: string;
+}): Request {
+  const headers = new Headers({
+    "content-type": "application/json",
+    origin: input.origin ?? "http://localhost:4000",
+  });
+
+  if (input.cookie) headers.set("cookie", input.cookie);
+
+  return new Request(
+    `http://localhost:4000/api/staff/reservations/${input.id}`,
+    {
+      method: input.method,
+      headers,
+      body: JSON.stringify(input.body),
+    },
+  );
+}
+
+function availabilityRequest(
+  cookie?: string,
+  query = `date=${apiDate}&service=DINNER&partySize=2`,
+): Request {
+  const headers = new Headers();
+  if (cookie) headers.set("cookie", cookie);
+
+  return new Request(
+    `http://localhost:4000/api/staff/availability?${query}`,
+    { headers },
+  );
 }
 
 describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
@@ -216,6 +288,24 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
         scope: SpecialDateScope.DINNER,
         isClosed: true,
       },
+    });
+    await prisma.room.createMany({
+      data: [
+        {
+          restaurantId,
+          code: "sala-test",
+          name: "Sala test M6",
+          displayOrder: 1,
+          isActive: true,
+        },
+        {
+          restaurantId: otherRestaurantId,
+          code: "sala-test-other",
+          name: "Sala test M6 other",
+          displayOrder: 1,
+          isActive: true,
+        },
+      ],
     });
     await prisma.user.createMany({
       data: [
@@ -255,12 +345,18 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
   });
 
   beforeEach(async () => {
+    await prisma.reservationAuditEvent.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
     await prisma.reservation.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
   });
 
   afterAll(async () => {
+    await prisma.reservationAuditEvent.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
     await prisma.reservationIdempotencyKey.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -347,34 +443,39 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("rejects STAFF override and allows ADMIN override with a reason", async () => {
+  it("allows STAFF and ADMIN override with a reason", async () => {
     await create(staffActor, {
       localDate: overrideDate,
       arrivalTime: "19:00",
       partySize: 6,
     });
 
-    await expect(
-      create(staffActor, {
-        localDate: overrideDate,
-        arrivalTime: "19:15",
-        partySize: 1,
-        capacityOverride: true,
-        capacityOverrideReason: "Autorizzazione demo",
-      }),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-
-    const overridden = await create(adminActor, {
+    const staffOverridden = await create(staffActor, {
       localDate: overrideDate,
       arrivalTime: "19:15",
       partySize: 1,
       capacityOverride: true,
-      capacityOverrideReason: "Autorizzazione demo",
+      capacityOverrideReason: "Autorizzazione demo Staff",
     });
 
+    await create(staffActor, {
+      localDate: exactCapacityDate,
+      arrivalTime: "19:00",
+      partySize: 6,
+    });
+
+    const overridden = await create(adminActor, {
+      localDate: exactCapacityDate,
+      arrivalTime: "19:15",
+      partySize: 1,
+      capacityOverride: true,
+      capacityOverrideReason: "Autorizzazione demo Admin",
+    });
+
+    expect(staffOverridden.reservation.override.applied).toBe(true);
     expect(overridden.reservation.override).toEqual({
       applied: true,
-      reason: "Autorizzazione demo",
+      reason: "Autorizzazione demo Admin",
     });
     await expect(
       create(staffActor, {
@@ -575,17 +676,25 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
 
   it("cleans up expired idempotency keys without memory state", async () => {
     const createdAt = new Date("2098-12-30T10:00:00.000Z");
+    const keyHash = "a".repeat(64);
     await prisma.reservationIdempotencyKey.create({
       data: {
         restaurantId,
-        keyHash: "a".repeat(64),
+        keyHash,
         requestHash: "b".repeat(64),
         createdAt,
         expiresAt: new Date("2098-12-31T10:00:00.000Z"),
       },
     });
 
-    await expect(cleanupExpiredReservationIdempotencyKeys(now)).resolves.toBe(1);
+    await expect(cleanupExpiredReservationIdempotencyKeys(now)).resolves.toBeGreaterThanOrEqual(
+      1,
+    );
+    await expect(
+      prisma.reservationIdempotencyKey.findUnique({
+        where: { restaurantId_keyHash: { restaurantId, keyHash } },
+      }),
+    ).resolves.toBeNull();
   });
 
   it("protects POST, requires idempotency and authorizes STAFF", async () => {
@@ -601,32 +710,44 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
     expect(created.headers.get("cache-control")).toContain("no-store");
   });
 
-  it("rejects STAFF API override and allows ADMIN replay", async () => {
+  it("allows STAFF API override and preserves ADMIN replay", async () => {
     await create(staffActor, {
       localDate: apiDate,
       arrivalTime: "19:00",
       partySize: 6,
     });
-    const overrideBody = payload({
+    await create(staffActor, {
+      localDate: overrideDate,
+      arrivalTime: "19:00",
+      partySize: 6,
+    });
+    const staffOverrideBody = phoneApiPayload({
       localDate: apiDate,
       arrivalTime: "19:15",
       partySize: 1,
       capacityOverride: true,
-      capacityOverrideReason: "Override API fittizio",
+      capacityOverrideReason: "Override API Staff fittizio",
+    });
+    const adminOverrideBody = phoneApiPayload({
+      localDate: overrideDate,
+      arrivalTime: "19:15",
+      partySize: 1,
+      capacityOverride: true,
+      capacityOverrideReason: "Override API Admin fittizio",
     });
     const staffResponse = await reservationPost(
-      postRequest({ cookie: staffCookie, body: overrideBody }),
+      postRequest({ cookie: staffCookie, body: staffOverrideBody }),
     );
     const key = randomUUID();
     const adminResponse = await reservationPost(
-      postRequest({ cookie: adminCookie, body: overrideBody, idempotencyKey: key }),
+      postRequest({ cookie: adminCookie, body: adminOverrideBody, idempotencyKey: key }),
     );
     const replayResponse = await reservationPost(
-      postRequest({ cookie: adminCookie, body: overrideBody, idempotencyKey: key }),
+      postRequest({ cookie: adminCookie, body: adminOverrideBody, idempotencyKey: key }),
     );
     const replayBody = await replayResponse.json();
 
-    expect(staffResponse.status).toBe(403);
+    expect(staffResponse.status).toBe(201);
     expect(adminResponse.status).toBe(201);
     expect(replayResponse.status).toBe(200);
     expect(replayBody.replayed).toBe(true);
@@ -654,5 +775,126 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
     expect(serialized).not.toContain("keyHash");
     expect(serialized).not.toContain("requestHash");
     expect(serialized).not.toContain("password");
+  });
+
+  it("protects Staff availability and derives its restaurant from the session", async () => {
+    const anonymous = await staffAvailabilityGet(availabilityRequest());
+    const currentRestaurant = await staffAvailabilityGet(
+      availabilityRequest(staffCookie),
+    );
+    const otherRestaurant = await staffAvailabilityGet(
+      availabilityRequest(otherStaffCookie),
+    );
+    const invalid = await staffAvailabilityGet(
+      availabilityRequest(
+        staffCookie,
+        `date=${apiDate}&service=DINNER&partySize=2&unexpected=1`,
+      ),
+    );
+    const currentBody = await currentRestaurant.json();
+    const otherBody = await otherRestaurant.json();
+
+    expect(anonymous.status).toBe(401);
+    expect(currentRestaurant.status).toBe(200);
+    expect(otherRestaurant.status).toBe(200);
+    expect(invalid.status).toBe(400);
+    expect(currentRestaurant.headers.get("cache-control")).toContain("no-store");
+    expect(currentBody.rooms).toEqual([
+      { code: "sala-test", name: "Sala test M6" },
+    ]);
+    expect(otherBody.rooms).toEqual([
+      { code: "sala-test-other", name: "Sala test M6 other" },
+    ]);
+  });
+
+  it("protects PATCH/DELETE with same-origin and tenant isolation", async () => {
+    const created = await create(staffActor, { localDate: apiDate });
+    const createdRow = await prisma.reservation.findUniqueOrThrow({
+      where: { id: created.reservation.id },
+      select: { version: true },
+    });
+    const { verbalConsentConfirmed: ignoredConsent, ...updateFields } =
+      phoneApiPayload();
+    expect(ignoredConsent).toBe(true);
+    const updateBody = { ...updateFields, version: createdRow.version };
+    const context = { params: Promise.resolve({ id: created.reservation.id }) };
+    const anonymous = await reservationPatch(
+      mutationRequest({
+        id: created.reservation.id,
+        method: "PATCH",
+        body: updateBody,
+      }),
+      context,
+    );
+    const forgedOrigin = await reservationPatch(
+      mutationRequest({
+        cookie: staffCookie,
+        id: created.reservation.id,
+        method: "PATCH",
+        body: updateBody,
+        origin: "https://evil.example.invalid",
+      }),
+      context,
+    );
+    const crossPatch = await reservationPatch(
+      mutationRequest({
+        cookie: otherStaffCookie,
+        id: created.reservation.id,
+        method: "PATCH",
+        body: updateBody,
+      }),
+      context,
+    );
+    const crossDelete = await reservationDelete(
+      mutationRequest({
+        cookie: otherStaffCookie,
+        id: created.reservation.id,
+        method: "DELETE",
+        body: { version: createdRow.version },
+      }),
+      context,
+    );
+    const updated = await reservationPatch(
+      mutationRequest({
+        cookie: staffCookie,
+        id: created.reservation.id,
+        method: "PATCH",
+        body: updateBody,
+      }),
+      context,
+    );
+    const updatedBody = await updated.json();
+    const cancelled = await reservationDelete(
+      mutationRequest({
+        cookie: adminCookie,
+        id: created.reservation.id,
+        method: "DELETE",
+        body: { version: updatedBody.reservation.version },
+      }),
+      context,
+    );
+    const replayedCancellation = await reservationDelete(
+      mutationRequest({
+        cookie: staffCookie,
+        id: created.reservation.id,
+        method: "DELETE",
+        body: { version: updatedBody.reservation.version },
+      }),
+      context,
+    );
+    const replayBody = await replayedCancellation.json();
+
+    expect(anonymous.status).toBe(401);
+    expect(forgedOrigin.status).toBe(403);
+    expect(crossPatch.status).toBe(404);
+    expect(crossDelete.status).toBe(404);
+    expect(updated.status).toBe(200);
+    expect(cancelled.status).toBe(200);
+    expect(replayedCancellation.status).toBe(200);
+    expect(replayBody).toMatchObject({
+      changed: false,
+      reservation: { status: "CANCELLED", version: 3 },
+    });
+    expect(cancelled.headers.get("cache-control")).toContain("no-store");
   });
 });

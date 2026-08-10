@@ -130,7 +130,7 @@ export async function createReservation(input: {
   if (!canUseCapacityOverride(actor.role, command.capacityOverride)) {
     throw new ReservationApplicationError(
       "FORBIDDEN",
-      "L'override della capacità è riservato agli amministratori.",
+      "L'override della capacità è riservato a Staff e Admin.",
     );
   }
 
@@ -229,6 +229,13 @@ export async function createReservation(input: {
       throw new ReservationApplicationError(
         "SLOT_NOT_AVAILABLE",
         "L'orario selezionato non appartiene agli slot configurati.",
+      );
+    }
+
+    if (command.capacityOverride && selectedSlot.reason !== "CAPACITY_EXCEEDED") {
+      throw new ReservationApplicationError(
+        "OVERRIDE_NOT_REQUIRED",
+        "L'override è consentito solo quando la capacità del turno è superata.",
       );
     }
 

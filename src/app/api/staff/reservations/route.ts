@@ -4,7 +4,7 @@ import {
   ReservationApplicationError,
   reservationErrorStatus,
 } from "@/modules/reservations/application/reservation-errors";
-import { createReservation } from "@/modules/reservations/application/reservation-service";
+import { createPhoneReservation } from "@/modules/reservations/application/staff-reservation-service";
 import { getRequestUser } from "@/server/auth/authorization";
 import { resolveAuthConfig } from "@/server/auth/auth-config";
 import { isSameOriginRequest } from "@/server/auth/request-security";
@@ -53,7 +53,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const result = await createReservation({
+    const result = await createPhoneReservation({
       actor: {
         id: user.id,
         restaurantId: user.restaurantId,

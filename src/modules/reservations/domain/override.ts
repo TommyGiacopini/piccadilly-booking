@@ -4,5 +4,5 @@ export function canUseCapacityOverride(
   role: ReservationActorRole,
   requested: boolean,
 ): boolean {
-  return !requested || role === "ADMIN";
+  return !requested || role === "ADMIN" || role === "STAFF";
 }
