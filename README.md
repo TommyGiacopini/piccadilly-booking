@@ -1,6 +1,6 @@
 # Piccadilly Booking
 
-Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. La Milestone M7 completa il flusso pubblico: disponibilità persistente, creazione online idempotente e pagina personale con modifica e cancellazione sicure.
+Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. La Milestone M8 aggiunge la dashboard giornaliera operativa, le prenotazioni telefoniche idempotenti e la gestione Staff/Admin con capacità e audit atomici.
 
 ## Requisiti locali
 
@@ -63,6 +63,7 @@ Le migrazioni sono progressive:
 - `20260803090743_add_operational_configuration`: configurazione operativa M4.
 - `20260803141513_add_reservation_core`: nucleo persistente delle prenotazioni M6.
 - `20260810090000_add_public_booking_management`: prenotazione pubblica, link personale, audit e rate limit M7.
+- `20260810160000_add_authenticated_reservation_audit`: autore, ruolo e metadati dell'override per l'audit autenticato M8.
 
 La migrazione M4 aggiunge:
 
@@ -156,14 +157,17 @@ L'idempotenza non usa memoria o Redis. La chiave grezza non viene salvata: Postg
 
 STAFF e ADMIN possono creare origini `STAFF` e `PHONE`. `PHONE` richiede consenso `VERBAL`; `STAFF` richiede `STAFF_RECORDED`. La versione informativa proviene da `RESERVATION_PRIVACY_POLICY_VERSION` e il timestamp viene fissato dal server. Il cutoff online PUBLIC non si applica, ma servizio chiuso, slot inesistente o trascorso, input invalido e configurazione incoerente restano bloccanti.
 
-Soltanto ADMIN può richiedere esplicitamente un override della capacità, sempre con motivo non vuoto e limitato. L'override salta esclusivamente `CAPACITY_EXCEEDED`: non disabilita gli altri controlli e non modifica il limite configurato. Questa restrizione M6 è più severa della decisione documentale generale che contempla anche STAFF; i documenti approvati non vengono modificati da questa milestone.
+M8 applica D-007: STAFF e ADMIN possono richiedere esplicitamente un override della capacità, sempre con motivo non vuoto. L'override è accettato soltanto quando il controllo produce `CAPACITY_EXCEEDED`: non disabilita gli altri controlli, non rende valide sale o slot inesistenti e non modifica il limite configurato.
 
 API tecniche protette:
 
-- `POST /api/staff/reservations`: JSON same-origin, sessione STAFF/ADMIN e header obbligatorio `Idempotency-Key`;
-- `GET /api/staff/reservations/:id`: DTO minimale isolato sul ristorante della sessione.
+- `POST /api/staff/reservations`: creazione telefonica JSON same-origin, sessione STAFF/ADMIN e header obbligatorio `Idempotency-Key`;
+- `GET /api/staff/reservations/:id`: DTO operativo isolato sul ristorante della sessione;
+- `PATCH /api/staff/reservations/:id`: modifica autenticata con versione ottimistica;
+- `DELETE /api/staff/reservations/:id`: cancellazione logica autenticata e idempotente;
+- `GET /api/staff/availability`: slot e sale attive con carico PostgreSQL reale.
 
-Le risposte usano `Cache-Control: no-store` e non espongono hash, dati auth, query, stack trace o configurazioni interne. La pagina `/dashboard/reservations/new` è un modulo tecnico responsive per STAFF/ADMIN; mostra l'override solo all'ADMIN, genera una chiave casuale per ogni tentativo logico e riusa la stessa chiave in caso di retry invariato.
+Le risposte usano `Cache-Control: no-store` e non espongono hash, dati auth, query, stack trace o configurazioni interne. La pagina `/dashboard/reservations/new` è esclusivamente telefonica: il client non sceglie origine, metodo di consenso, versione, timestamp o autore. Genera una chiave casuale per ogni tentativo logico e la riusa in caso di retry invariato.
 
 ## Flusso pubblico M7
 
@@ -200,7 +204,29 @@ Le pagine personali inviano `Cache-Control: no-store`, `Referrer-Policy: no-refe
 
 Availability, creazione, visualizzazione, modifica e cancellazione hanno bucket distinti, atomici e condivisi in PostgreSQL. La chiave del bucket deriva con HMAC da ristorante, azione e indirizzo client normalizzato; l'indirizzo non viene salvato in chiaro. Gli header proxy sono considerati soltanto con `AUTH_TRUST_PROXY=true` dietro un proxy fidato.
 
-### Verifica locale M7
+## Dashboard e operatività M8
+
+`/dashboard` apre sul giorno corrente nella timezone PostgreSQL del ristorante, inizialmente `Europe/Rome`. Data precedente, successiva e selezione esplicita restano valori locali `YYYY-MM-DD` e non dipendono dalla timezone del browser o del server. Le query sono sempre limitate al `restaurantId` della sessione e ordinate per servizio, orario, creazione e UUID come ultimo criterio stabile.
+
+I filtri server-side supportano servizio, stato e origine. Riepiloghi ed elenco mostrano confermate, coperti, cancellazioni, origini, richieste alimentari e logistiche e prenotazioni da assegnare. In M8 tutte le confermate sono ancora da assegnare: i coperti per sala rappresentano esclusivamente la sala preferita, mai una collocazione definitiva.
+
+La disponibilità residua è calcolata per pranzo, cena e singolo slot riusando il motore delle finestre mobili da 30 minuti e tutte le prenotazioni `CONFIRMED` persistite. Non viene prodotto alcun saldo giornaliero fittizio; le cancellate non incidono.
+
+### Inserimento telefonico
+
+Il modulo rapido acquisisce contatti, data, servizio, slot configurato, persone, sala preferita, esigenze, note e conferma esplicita del consenso verbale. Preferenze ed esigenze usano lo stesso JSON canonico del flusso pubblico; le vecchie stringhe M6 vengono lette come dati legacy senza interrompere la dashboard.
+
+Il server imposta obbligatoriamente origine `PHONE`, metodo `VERBAL`, versione informativa configurata, timestamp e utente della sessione. Il flusso usa gli stessi lock di capacità e idempotenza PostgreSQL del canale pubblico, ma ignora il cutoff delle nuove prenotazioni online. Non invia WhatsApp o email.
+
+### Modifica, cancellazione e audit
+
+STAFF e ADMIN possono modificare prenotazioni confermate `PUBLIC`, `PHONE` o `STAFF`. Il server valida sala e slot, verifica la versione, acquisisce un lock per prenotazione condiviso con il link pubblico e i lock di capacità corrente/destinazione in ordine deterministico, esclude la prenotazione corrente dal conteggio e incrementa la versione soltanto per una modifica effettiva. Un aggiornamento dei soli contatti conserva l'eventuale override di capacità già applicato. Se cambia data, servizio o orario di una prenotazione `PUBLIC`, viene aggiornata nella stessa transazione anche la scadenza del token personale senza rigenerarlo o esporlo.
+
+La cancellazione è logica e idempotente: il primo cambio a `CANCELLED` incrementa la versione, libera i coperti dopo il commit e crea audit; i tentativi successivi non duplicano effetti. Il token pubblico resta consultabile fino alla propria scadenza.
+
+Creazione telefonica, modifica, cancellazione e override salvano l'audit nella stessa transazione. Ogni evento autenticato contiene ristorante, prenotazione, azione, origine operativa, utente, ruolo, correlation ID, timestamp UTC, snapshot minimizzati prima/dopo e metadati dell'override. Per un override vengono registrati anche limite, carico precedente massimo e carico risultante. I log tecnici non includono telefono, email, allergie, note o token.
+
+### Verifica locale M8
 
 Con PostgreSQL healthy:
 
@@ -216,8 +242,11 @@ npm run db:seed
 npm run lint
 npm run typecheck
 npm run test
+npm run test:e2e
 npm run build
 ```
+
+`npm run test:e2e` usa `@playwright/test`, costruisce l'app, ripristina subito prima del browser gli utenti e la configurazione demo idempotenti e avvia `next start` su `localhost:4000` con un runner che gestisce esplicitamente il processo anche su Windows. Il seed immediatamente precedente rende il test indipendente dalle fixture PostgreSQL delle suite Vitest. Copre accesso anonimo negato, login Staff/Admin, dashboard, filtri, inserimento, modifica, cancellazione, override e viewport smartphone, tablet e desktop.
 
 Il seed resta strutturale e idempotente: non crea prenotazioni, token personali, chiavi di idempotenza, eventi audit o bucket di rate limit.
 
@@ -232,20 +261,22 @@ Queste identità non corrispondono a persone reali. Le password di `.env.example
 
 `ADMIN` accede anche alla pagina tecnica `/admin`; `STAFF` può usare l'area protetta ordinaria ma viene respinto dalle pagine e dalle mutazioni di configurazione. I controlli sono eseguiti sul server e ogni aggiornamento è limitato al `restaurantId` della sessione.
 
-## Percorsi M4–M7
+## Percorsi M4–M8
 
 - `/admin/configuration`: capacità e cut-off;
 - `/admin/rooms`: ordine e stato delle sale, modifica dei tavoli demo;
 - `/admin/schedules`: servizi e orari settimanali;
 - `/admin/special-dates`: creazione, modifica e rimozione delle eccezioni locali.
 - `/admin/availability-preview`: anteprima M5 di slot e capacità con carico persistente vuoto.
-- `/dashboard/reservations/new`: creazione tecnica M6 per STAFF e ADMIN.
+- `/dashboard`: dashboard giornaliera Staff/Admin con filtri, riepiloghi, disponibilità e gestione;
+- `/dashboard/reservations/new`: inserimento telefonico rapido `PHONE` per STAFF e ADMIN;
+- `/dashboard/reservations/<id>/edit`: modifica autenticata con versione ottimistica;
 - `/prenota`: prenotazione pubblica responsive in italiano e inglese.
 - `/p/<token>`: consultazione e gestione della singola prenotazione pubblica.
 
-La lettura availability `GET /api/admin/availability-preview?date=YYYY-MM-DD&service=LUNCH|DINNER&partySize=2&channel=PUBLIC|STAFF` resta accessibile esclusivamente ad `ADMIN`. Le API prenotazioni M6 sono invece accessibili a STAFF e ADMIN. Tutti i percorsi sono isolati sul `restaurantId` della sessione, validati sul server e restituiti con `Cache-Control: no-store`.
+La lettura tecnica `GET /api/admin/availability-preview?date=YYYY-MM-DD&service=LUNCH|DINNER&partySize=2&channel=PUBLIC|STAFF` resta accessibile esclusivamente ad `ADMIN`. Le API operative `/api/staff/*` sono accessibili a STAFF e ADMIN. Tutti i percorsi sono isolati sul `restaurantId` della sessione, validati sul server e restituiti con `Cache-Control: no-store`.
 
-Le pagine sono minimali e tecniche. Un anonimo viene reindirizzato a `/login`; STAFF non può modificare configurazioni amministrative ma può creare prenotazioni STAFF e PHONE. Le mutazioni POST same-origin validano sul server un elenco esplicito di campi e non espongono query, stack trace o dettagli interni.
+Un anonimo viene reindirizzato a `/login`; STAFF non può modificare configurazioni amministrative ma gestisce il ciclo operativo delle prenotazioni. Le mutazioni same-origin validano sul server un elenco esplicito di campi e non espongono query, stack trace o dettagli interni.
 
 ## Login locale
 
@@ -255,8 +286,8 @@ npm run dev
 
 - applicazione: [http://localhost:4000](http://localhost:4000/);
 - login: [http://localhost:4000/login](http://localhost:4000/login);
-- dashboard tecnica protetta: [http://localhost:4000/dashboard](http://localhost:4000/dashboard);
-- nuova prenotazione tecnica: [http://localhost:4000/dashboard/reservations/new](http://localhost:4000/dashboard/reservations/new);
+- dashboard operativa protetta: [http://localhost:4000/dashboard](http://localhost:4000/dashboard);
+- nuova prenotazione telefonica: [http://localhost:4000/dashboard/reservations/new](http://localhost:4000/dashboard/reservations/new);
 - verifica tecnica ADMIN: [http://localhost:4000/admin](http://localhost:4000/admin);
 - configurazione ADMIN: [http://localhost:4000/admin/configuration](http://localhost:4000/admin/configuration);
 - sale e tavoli ADMIN: [http://localhost:4000/admin/rooms](http://localhost:4000/admin/rooms);
@@ -295,11 +326,12 @@ Il percorso pubblico `/api/health` continua a restituire soltanto stato del serv
 npm run lint
 npm run typecheck
 npm run test
+npm run test:e2e
 npm run build
 ```
 
 La suite Vitest comprende test unitari e test d'integrazione con PostgreSQL reale; non usa SQLite.
 
-## Confini della Milestone M7
+## Confini della Milestone M8
 
-M7 implementa soltanto prenotazione pubblica e link personale. Restano esclusi account cliente, riattivazione autonoma, notifiche, outbox, WhatsApp, email, dashboard giornaliera completa, assegnazione tavoli, PDF, Excel, deploy, database cloud e dati reali. Il seed continua a creare soltanto ristorante, utenti, configurazioni, sale e tavoli fittizi e non inserisce prenotazioni o record tecnici M7.
+M8 implementa dashboard giornaliera, prenotazioni telefoniche e gestione Staff/Admin. Restano esclusi assegnazione definitiva di sale e tavoli, pannello amministratore M9, riattivazione, notifiche, outbox, WhatsApp, email, PDF, Excel, importazioni, deploy, staging, database cloud e dati reali. Il seed continua a creare soltanto ristorante, utenti, configurazioni, sale e tavoli fittizi e non inserisce prenotazioni operative o record tecnici M8.

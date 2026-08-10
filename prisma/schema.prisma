@@ -172,18 +172,19 @@ model SpecialDateOverride {
 }
 
 model User {
-  id                  String        @id @default(uuid()) @db.Uuid
-  restaurantId        String        @map("restaurant_id") @db.Uuid
-  username            String        @db.VarChar(64)
-  passwordHash        String        @map("password_hash") @db.VarChar(255)
-  role                UserRole
-  isActive            Boolean       @default(true) @map("is_active")
-  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
-  disabledAt          DateTime?     @map("disabled_at") @db.Timestamptz(3)
-  restaurant          Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
-  sessions            Session[]
-  createdReservations Reservation[]
+  id                     String                  @id @default(uuid()) @db.Uuid
+  restaurantId           String                  @map("restaurant_id") @db.Uuid
+  username               String                  @db.VarChar(64)
+  passwordHash           String                  @map("password_hash") @db.VarChar(255)
+  role                   UserRole
+  isActive               Boolean                 @default(true) @map("is_active")
+  createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
+  disabledAt             DateTime?               @map("disabled_at") @db.Timestamptz(3)
+  restaurant             Restaurant              @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  sessions               Session[]
+  createdReservations    Reservation[]
+  reservationAuditEvents ReservationAuditEvent[] @relation("ReservationAuditActor")
 
   @@unique([restaurantId, username], map: "users_restaurant_id_username_key")
   @@index([restaurantId, role, isActive], map: "users_restaurant_role_active_idx")
@@ -304,19 +305,25 @@ model PublicReservationRateLimit {
 }
 
 model ReservationAuditEvent {
-  id            String                 @id @default(uuid()) @db.Uuid
-  restaurantId  String                 @map("restaurant_id") @db.Uuid
-  reservationId String                 @map("reservation_id") @db.Uuid
-  action        ReservationAuditAction
-  actorOrigin   ReservationOrigin      @map("actor_origin")
-  correlationId String                 @map("correlation_id") @db.Uuid
-  previousState Json?                  @map("previous_state")
-  newState      Json                   @map("new_state")
-  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  restaurant    Restaurant             @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  reservation   Reservation            @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  id                     String                 @id @default(uuid()) @db.Uuid
+  restaurantId           String                 @map("restaurant_id") @db.Uuid
+  reservationId          String                 @map("reservation_id") @db.Uuid
+  action                 ReservationAuditAction
+  actorOrigin            ReservationOrigin      @map("actor_origin")
+  actorUserId            String?                @map("actor_user_id") @db.Uuid
+  actorRole              UserRole?              @map("actor_role")
+  correlationId          String                 @map("correlation_id") @db.Uuid
+  previousState          Json?                  @map("previous_state")
+  newState               Json                   @map("new_state")
+  capacityOverride       Boolean                @default(false) @map("capacity_override")
+  capacityOverrideReason String?                @map("capacity_override_reason") @db.VarChar(500)
+  createdAt              DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  restaurant             Restaurant             @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  reservation            Reservation            @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  actorUser              User?                  @relation("ReservationAuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
 
   @@index([reservationId, createdAt], map: "reservation_audit_events_reservation_created_idx")
   @@index([restaurantId, createdAt], map: "reservation_audit_events_restaurant_created_idx")
+  @@index([actorUserId, createdAt], map: "reservation_audit_events_actor_created_idx")
   @@map("reservation_audit_events")
 }

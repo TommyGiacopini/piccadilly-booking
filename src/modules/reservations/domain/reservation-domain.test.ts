@@ -169,9 +169,9 @@ describe("M6 reservation domain", () => {
     expect(result.origin).toBe("STAFF");
   });
 
-  it("allows no override for STAFF and an explicit override only for ADMIN", () => {
+  it("allows an explicit override to both STAFF and ADMIN", () => {
     expect(canUseCapacityOverride("STAFF", false)).toBe(true);
-    expect(canUseCapacityOverride("STAFF", true)).toBe(false);
+    expect(canUseCapacityOverride("STAFF", true)).toBe(true);
     expect(canUseCapacityOverride("ADMIN", true)).toBe(true);
   });
 

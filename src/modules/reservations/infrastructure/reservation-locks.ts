@@ -7,6 +7,7 @@ import { Prisma } from "@/generated/prisma/client";
 const CAPACITY_LOCK_NAMESPACE = "reservation-capacity-v1";
 const IDEMPOTENCY_LOCK_NAMESPACE = "reservation-idempotency-v1";
 const MANAGEMENT_LOCK_NAMESPACE = "reservation-management-v1";
+const RESERVATION_MUTATION_LOCK_NAMESPACE = "reservation-mutation-v1";
 
 export function deriveAdvisoryLockKey(
   namespace: string,
@@ -81,6 +82,20 @@ export async function acquireManagementLock(
   await acquireTransactionLock(
     client,
     deriveAdvisoryLockKey(MANAGEMENT_LOCK_NAMESPACE, [tokenHash]),
+  );
+}
+
+export async function acquireReservationMutationLock(
+  client: Prisma.TransactionClient,
+  restaurantId: string,
+  reservationId: string,
+): Promise<void> {
+  await acquireTransactionLock(
+    client,
+    deriveAdvisoryLockKey(RESERVATION_MUTATION_LOCK_NAMESPACE, [
+      restaurantId,
+      reservationId,
+    ]),
   );
 }
 

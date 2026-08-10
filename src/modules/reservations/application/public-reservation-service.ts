@@ -61,6 +61,7 @@ import {
   acquireCapacityLocks,
   acquireIdempotencyLock,
   acquireManagementLock,
+  acquireReservationMutationLock,
 } from "@/modules/reservations/infrastructure/reservation-locks";
 import { idempotencyKeySchema } from "@/modules/reservations/domain/validation";
 import {
@@ -290,23 +291,27 @@ export async function createPublicReservation(input: {
       serviceType: command.serviceType,
     });
 
-    const [configuration, arrivals, settings, room] = await Promise.all([
-      readTransactionalAvailabilityConfiguration(client, {
+    const configuration = await readTransactionalAvailabilityConfiguration(
+      client,
+      {
         restaurantId: input.restaurantId,
         localDate: command.localDate,
         serviceType: command.serviceType,
-      }),
-      readConfirmedArrivals(client, {
-        restaurantId: input.restaurantId,
-        localDate: command.localDate,
-        serviceType: command.serviceType,
-      }),
-      readPublicManagementSettings(client, input.restaurantId),
-      findActivePublicRoom(client, {
-        restaurantId: input.restaurantId,
-        roomCode: command.roomCode,
-      }),
-    ]);
+      },
+    );
+    const arrivals = await readConfirmedArrivals(client, {
+      restaurantId: input.restaurantId,
+      localDate: command.localDate,
+      serviceType: command.serviceType,
+    });
+    const settings = await readPublicManagementSettings(
+      client,
+      input.restaurantId,
+    );
+    const room = await findActivePublicRoom(client, {
+      restaurantId: input.restaurantId,
+      roomCode: command.roomCode,
+    });
 
     if (!configuration || !settings) {
       throw new PublicReservationError("CONFIGURATION_INVALID");
@@ -404,7 +409,18 @@ export async function updateManagedPublicReservation(input: {
 
   return runReservationTransaction(async (client) => {
     await acquireManagementLock(client, tokenHash);
-    const access = await findPublicReservationAccess(
+    let access = await findPublicReservationAccess(
+      tokenHash,
+      input.restaurantId,
+      client,
+    );
+    assertValidAccess(access, now);
+    await acquireReservationMutationLock(
+      client,
+      input.restaurantId,
+      access.reservation.id,
+    );
+    access = await findPublicReservationAccess(
       tokenHash,
       input.restaurantId,
       client,
@@ -434,23 +450,24 @@ export async function updateManagedPublicReservation(input: {
       },
     ]);
 
-    const [configuration, arrivals, room] = await Promise.all([
-      readTransactionalAvailabilityConfiguration(client, {
+    const configuration = await readTransactionalAvailabilityConfiguration(
+      client,
+      {
         restaurantId: input.restaurantId,
         localDate: command.localDate,
         serviceType: command.serviceType,
-      }),
-      readConfirmedArrivals(client, {
-        restaurantId: input.restaurantId,
-        localDate: command.localDate,
-        serviceType: command.serviceType,
-        excludeReservationId: access.reservation.id,
-      }),
-      findActivePublicRoom(client, {
-        restaurantId: input.restaurantId,
-        roomCode: command.roomCode,
-      }),
-    ]);
+      },
+    );
+    const arrivals = await readConfirmedArrivals(client, {
+      restaurantId: input.restaurantId,
+      localDate: command.localDate,
+      serviceType: command.serviceType,
+      excludeReservationId: access.reservation.id,
+    });
+    const room = await findActivePublicRoom(client, {
+      restaurantId: input.restaurantId,
+      roomCode: command.roomCode,
+    });
 
     if (!configuration) {
       throw new PublicReservationError("CONFIGURATION_INVALID");
@@ -505,7 +522,18 @@ export async function cancelManagedPublicReservation(input: {
 
   return runReservationTransaction(async (client) => {
     await acquireManagementLock(client, tokenHash);
-    const access = await findPublicReservationAccess(
+    let access = await findPublicReservationAccess(
+      tokenHash,
+      input.restaurantId,
+      client,
+    );
+    assertValidAccess(access, now);
+    await acquireReservationMutationLock(
+      client,
+      input.restaurantId,
+      access.reservation.id,
+    );
+    access = await findPublicReservationAccess(
       tokenHash,
       input.restaurantId,
       client,
