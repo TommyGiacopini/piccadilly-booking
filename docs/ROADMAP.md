@@ -12,7 +12,7 @@
 - WhatsApp reale non viene implementato nelle prime milestone.
 - Non si inizia una milestone bloccata da decisioni funzionali non approvate.
 - Ogni modifica architetturale viene registrata in un ADR.
-- Non si eseguono commit, push, merge o deploy senza richiesta esplicita.
+- Commit e push sono consentiti soltanto al gate finale descritto in `docs/GIT_WORKFLOW.md`; merge, Pull Request, release e deploy richiedono una richiesta esplicita separata.
 
 ## 2. Qualità comune a ogni milestone di codice
 

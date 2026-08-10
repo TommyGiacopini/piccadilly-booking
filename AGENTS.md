@@ -56,6 +56,8 @@ Prima di pianificare o modificare il codice, leggere:
 
 \- `docs/SECURITY.md`, quando disponibile.
 
+\- `docs/GIT_WORKFLOW.md`, quando disponibile.
+
 
 
 `docs/PROJECT\_SPEC.md` è la fonte ufficiale dei requisiti funzionali.
@@ -80,7 +82,7 @@ In caso di conflitto tra il codice e le specifiche, non modificare automaticamen
 
 5\. Non cambiare architettura senza documentare la decisione.
 
-6\. Non eseguire commit, push, merge o deploy senza richiesta esplicita.
+6\. Seguire `docs/GIT_WORKFLOW.md`: commit e push sono consentiti soltanto al gate finale di una milestone completa, testata e revisionata; merge e deploy richiedono sempre una richiesta esplicita.
 
 7\. Non lavorare direttamente sul branch `main`.
 
@@ -314,7 +316,15 @@ Non dichiarare completata una funzione quando i test falliscono.
 
 \- non riscrivere la cronologia;
 
-\- non eseguire commit o push senza autorizzazione.
+\- seguire il gate di pubblicazione definito in `docs/GIT_WORKFLOW.md`;
+
+\- eseguire commit e push soltanto dopo implementazione completa, test superati, review superata, diff pulito e verifica del branch;
+
+\- effettuare il push esclusivamente verso il feature branch corrente;
+
+\- non richiedere una conferma aggiuntiva per commit e push quando tutte le condizioni del gate sono dimostrate;
+
+\- non eseguire merge, Pull Request, release o deploy senza una richiesta esplicita separata.
 
 
 
@@ -396,4 +406,4 @@ Prima di implementare:
 
 
 
-Non eseguire autonomamente operazioni irreversibili.
+Non eseguire autonomamente operazioni irreversibili. L'autorizzazione condizionata di `docs/GIT_WORKFLOW.md` riguarda esclusivamente staging, commit finale e push non forzato del feature branch.
