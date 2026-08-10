@@ -1,8 +1,10 @@
 export const LOCAL_FAKE_PRIVACY_POLICY_VERSION = "local-demo-v1";
+export const LOCAL_FAKE_TERMS_VERSION = "local-demo-terms-v1";
 export const DEFAULT_RESERVATION_IDEMPOTENCY_TTL_HOURS = 24;
 
 export interface ReservationConfig {
   privacyPolicyVersion: string;
+  termsVersion: string;
   idempotencyTtlMs: number;
 }
 
@@ -12,6 +14,8 @@ export function resolveReservationConfig(
   const privacyPolicyVersion =
     environment.RESERVATION_PRIVACY_POLICY_VERSION?.trim() ||
     LOCAL_FAKE_PRIVACY_POLICY_VERSION;
+  const termsVersion =
+    environment.RESERVATION_TERMS_VERSION?.trim() || LOCAL_FAKE_TERMS_VERSION;
   const ttlHoursValue =
     environment.RESERVATION_IDEMPOTENCY_TTL_HOURS?.trim() ||
     String(DEFAULT_RESERVATION_IDEMPOTENCY_TTL_HOURS);
@@ -20,6 +24,8 @@ export function resolveReservationConfig(
   if (
     privacyPolicyVersion.length === 0 ||
     privacyPolicyVersion.length > 64 ||
+    termsVersion.length === 0 ||
+    termsVersion.length > 64 ||
     !Number.isInteger(ttlHours) ||
     ttlHours < 1 ||
     ttlHours > 168
@@ -29,6 +35,7 @@ export function resolveReservationConfig(
 
   return {
     privacyPolicyVersion,
+    termsVersion,
     idempotencyTtlMs: ttlHours * 60 * 60 * 1000,
   };
 }

@@ -4,10 +4,7 @@ import {
   isLocalDate,
   isOperationalTime,
 } from "@/modules/configuration/domain/operational-time";
-import {
-  PRIVACY_CONSENT_METHODS,
-  RESERVATION_ORIGINS,
-} from "@/modules/reservations/domain/types";
+import { PRIVACY_CONSENT_METHODS } from "@/modules/reservations/domain/types";
 
 export const RESERVATION_TEXT_LIMITS = {
   customerName: 80,
@@ -104,7 +101,7 @@ export const createReservationSchema = z
       .number({ error: "Il numero di coperti è obbligatorio." })
       .int("Il numero di coperti deve essere un intero positivo.")
       .positive("Il numero di coperti deve essere un intero positivo."),
-    origin: z.enum(RESERVATION_ORIGINS, {
+    origin: z.enum(["STAFF", "PHONE"], {
       error: "L'origine deve essere STAFF o PHONE.",
     }),
     customerFirstName: requiredNormalizedString(

@@ -41,26 +41,44 @@ enum ReservationStatus {
 enum ReservationOrigin {
   STAFF
   PHONE
+  PUBLIC
 }
 
 enum PrivacyConsentMethod {
   VERBAL
   STAFF_RECORDED
+  WEB_CHECKBOX
+}
+
+enum PublicReservationRateLimitAction {
+  AVAILABILITY
+  CREATE
+  VIEW
+  UPDATE
+  CANCEL
+}
+
+enum ReservationAuditAction {
+  CREATED
+  UPDATED
+  CANCELLED
 }
 
 model Restaurant {
-  id                         String                      @id @default(uuid()) @db.Uuid
-  name                       String
-  timezone                   String
-  createdAt                  DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt                  DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
-  users                      User[]
-  rooms                      Room[]
-  weeklySchedules            WeeklyServiceSchedule[]
-  bookingSettings            RestaurantBookingSettings?
-  specialDateOverrides       SpecialDateOverride[]
-  reservations               Reservation[]
-  reservationIdempotencyKeys ReservationIdempotencyKey[]
+  id                          String                       @id @default(uuid()) @db.Uuid
+  name                        String
+  timezone                    String
+  createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                   DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  users                       User[]
+  rooms                       Room[]
+  weeklySchedules             WeeklyServiceSchedule[]
+  bookingSettings             RestaurantBookingSettings?
+  specialDateOverrides        SpecialDateOverride[]
+  reservations                Reservation[]
+  reservationIdempotencyKeys  ReservationIdempotencyKey[]
+  publicReservationRateLimits PublicReservationRateLimit[]
+  reservationAuditEvents      ReservationAuditEvent[]
 
   @@map("restaurants")
 }
@@ -126,6 +144,7 @@ model RestaurantBookingSettings {
   dinnerModificationCutoff    DateTime   @map("dinner_modification_cutoff") @db.Time(0)
   fridayDinnerBookingCutoff   DateTime   @map("friday_dinner_booking_cutoff") @db.Time(0)
   saturdayDinnerBookingCutoff DateTime   @map("saturday_dinner_booking_cutoff") @db.Time(0)
+  managementLinkDurationHours Int        @default(24) @map("management_link_duration_hours")
   createdAt                   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
   restaurant                  Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
@@ -199,33 +218,40 @@ model LoginRateLimit {
 }
 
 model Reservation {
-  id                     String                     @id @default(uuid()) @db.Uuid
-  restaurantId           String                     @map("restaurant_id") @db.Uuid
-  localDate              DateTime                   @map("local_date") @db.Date
-  serviceType            ServiceType                @map("service_type")
-  arrivalTime            DateTime                   @map("arrival_time") @db.Time(0)
-  partySize              Int                        @map("party_size")
-  status                 ReservationStatus          @default(CONFIRMED)
+  id                     String                      @id @default(uuid()) @db.Uuid
+  restaurantId           String                      @map("restaurant_id") @db.Uuid
+  localDate              DateTime                    @map("local_date") @db.Date
+  serviceType            ServiceType                 @map("service_type")
+  arrivalTime            DateTime                    @map("arrival_time") @db.Time(0)
+  partySize              Int                         @map("party_size")
+  status                 ReservationStatus           @default(CONFIRMED)
   origin                 ReservationOrigin
-  customerFirstName      String                     @map("customer_first_name") @db.VarChar(80)
-  customerLastName       String                     @map("customer_last_name") @db.VarChar(80)
-  customerPhone          String                     @map("customer_phone") @db.VarChar(40)
-  customerEmail          String?                    @map("customer_email") @db.VarChar(254)
-  notes                  String?                    @db.VarChar(1000)
-  preferences            String?                    @db.VarChar(1000)
-  allergies              String?                    @db.VarChar(1000)
-  privacyPolicyVersion   String                     @map("privacy_policy_version") @db.VarChar(64)
-  privacyConsentAt       DateTime                   @map("privacy_consent_at") @db.Timestamptz(3)
-  privacyConsentMethod   PrivacyConsentMethod       @map("privacy_consent_method")
-  createdByUserId        String?                    @map("created_by_user_id") @db.Uuid
-  capacityOverride       Boolean                    @default(false) @map("capacity_override")
-  capacityOverrideReason String?                    @map("capacity_override_reason") @db.VarChar(500)
-  createdAt              DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt              DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(3)
-  cancelledAt            DateTime?                  @map("cancelled_at") @db.Timestamptz(3)
-  restaurant             Restaurant                 @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  createdByUser          User?                      @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  customerFirstName      String                      @map("customer_first_name") @db.VarChar(80)
+  customerLastName       String                      @map("customer_last_name") @db.VarChar(80)
+  customerPhone          String                      @map("customer_phone") @db.VarChar(40)
+  customerEmail          String?                     @map("customer_email") @db.VarChar(254)
+  notes                  String?                     @db.VarChar(1000)
+  preferences            String?                     @db.VarChar(1000)
+  allergies              String?                     @db.VarChar(1000)
+  privacyPolicyVersion   String                      @map("privacy_policy_version") @db.VarChar(64)
+  privacyConsentAt       DateTime                    @map("privacy_consent_at") @db.Timestamptz(3)
+  privacyConsentMethod   PrivacyConsentMethod        @map("privacy_consent_method")
+  termsPolicyVersion     String?                     @map("terms_policy_version") @db.VarChar(64)
+  termsConsentAt         DateTime?                   @map("terms_consent_at") @db.Timestamptz(3)
+  termsConsentMethod     PrivacyConsentMethod?       @map("terms_consent_method")
+  consentLanguage        String?                     @map("consent_language") @db.VarChar(2)
+  createdByUserId        String?                     @map("created_by_user_id") @db.Uuid
+  capacityOverride       Boolean                     @default(false) @map("capacity_override")
+  capacityOverrideReason String?                     @map("capacity_override_reason") @db.VarChar(500)
+  createdAt              DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  cancelledAt            DateTime?                   @map("cancelled_at") @db.Timestamptz(3)
+  version                Int                         @default(1)
+  restaurant             Restaurant                  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  createdByUser          User?                       @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
   idempotencyKey         ReservationIdempotencyKey?
+  managementToken        ReservationManagementToken?
+  auditEvents            ReservationAuditEvent[]
 
   @@index([restaurantId, localDate, serviceType, status, arrivalTime], map: "reservations_capacity_lookup_idx")
   @@map("reservations")
@@ -245,4 +271,52 @@ model ReservationIdempotencyKey {
   @@unique([restaurantId, keyHash], map: "reservation_idempotency_keys_restaurant_key_hash_key")
   @@index([expiresAt], map: "reservation_idempotency_keys_expires_at_idx")
   @@map("reservation_idempotency_keys")
+}
+
+model ReservationManagementToken {
+  id            String      @id @default(uuid()) @db.Uuid
+  reservationId String      @unique(map: "reservation_management_tokens_reservation_id_key") @map("reservation_id") @db.Uuid
+  tokenHash     String      @unique(map: "reservation_management_tokens_token_hash_key") @map("token_hash") @db.Char(64)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  viewExpiresAt DateTime    @map("view_expires_at") @db.Timestamptz(3)
+  revokedAt     DateTime?   @map("revoked_at") @db.Timestamptz(3)
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  @@index([viewExpiresAt, revokedAt], map: "reservation_management_tokens_expiry_idx")
+  @@map("reservation_management_tokens")
+}
+
+model PublicReservationRateLimit {
+  id              String                           @id @default(uuid()) @db.Uuid
+  restaurantId    String                           @map("restaurant_id") @db.Uuid
+  action          PublicReservationRateLimitAction
+  keyHash         String                           @map("key_hash") @db.Char(64)
+  attempts        Int                              @default(1)
+  windowStartedAt DateTime                         @map("window_started_at") @db.Timestamptz(3)
+  expiresAt       DateTime                         @map("expires_at") @db.Timestamptz(3)
+  createdAt       DateTime                         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  restaurant      Restaurant                       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, action, keyHash], map: "public_reservation_rate_limits_identity_key")
+  @@index([expiresAt], map: "public_reservation_rate_limits_expires_at_idx")
+  @@map("public_reservation_rate_limits")
+}
+
+model ReservationAuditEvent {
+  id            String                 @id @default(uuid()) @db.Uuid
+  restaurantId  String                 @map("restaurant_id") @db.Uuid
+  reservationId String                 @map("reservation_id") @db.Uuid
+  action        ReservationAuditAction
+  actorOrigin   ReservationOrigin      @map("actor_origin")
+  correlationId String                 @map("correlation_id") @db.Uuid
+  previousState Json?                  @map("previous_state")
+  newState      Json                   @map("new_state")
+  createdAt     DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  restaurant    Restaurant             @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  reservation   Reservation            @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+
+  @@index([reservationId, createdAt], map: "reservation_audit_events_reservation_created_idx")
+  @@index([restaurantId, createdAt], map: "reservation_audit_events_restaurant_created_idx")
+  @@map("reservation_audit_events")
 }

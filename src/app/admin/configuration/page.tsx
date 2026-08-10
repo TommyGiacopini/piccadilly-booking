@@ -115,6 +115,20 @@ export default async function ConfigurationPage({ searchParams }: PageProps) {
             />
           </label>
 
+          <label className="text-sm font-bold text-zinc-800">
+            Durata link personale (ore)
+            <input
+              className={fieldClassName}
+              defaultValue={settings.managementLinkDurationHours}
+              max="24"
+              min="1"
+              name="managementLinkDurationHours"
+              required
+              step="1"
+              type="number"
+            />
+          </label>
+
           <div className="sm:col-span-2">
             <button className={buttonClassName} type="submit">
               Salva impostazioni
@@ -125,4 +139,3 @@ export default async function ConfigurationPage({ searchParams }: PageProps) {
     </ConfigurationShell>
   );
 }
-

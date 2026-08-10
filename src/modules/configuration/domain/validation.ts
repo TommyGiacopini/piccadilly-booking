@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   DAY_OF_WEEK_VALUES,
+  DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
   FIXED_ROLLING_WINDOW_MINUTES,
   SERVICE_TYPE_VALUES,
   SPECIAL_DATE_SCOPE_VALUES,
@@ -90,6 +91,12 @@ export const bookingSettingsUpdateSchema = z.object({
   dinnerModificationCutoff: operationalTimeSchema,
   fridayDinnerBookingCutoff: operationalTimeSchema,
   saturdayDinnerBookingCutoff: operationalTimeSchema,
+  managementLinkDurationHours: z.coerce
+    .number()
+    .int("La durata del link deve essere un numero intero.")
+    .min(1, "La durata del link deve essere di almeno un'ora.")
+    .max(24, "La durata del link non può superare 24 ore.")
+    .default(DEFAULT_MANAGEMENT_LINK_DURATION_HOURS),
 });
 
 export const specialDateInputSchema = z

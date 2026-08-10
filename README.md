@@ -1,6 +1,6 @@
 # Piccadilly Booking
 
-Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. La Milestone M6 aggiunge il nucleo persistente server-side per prenotazioni STAFF e PHONE, con controllo concorrente della capacità; non comprende ancora il modulo pubblico definitivo, la pagina personale o la dashboard operativa completa.
+Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. La Milestone M7 completa il flusso pubblico: disponibilità persistente, creazione online idempotente e pagina personale con modifica e cancellazione sicure.
 
 ## Requisiti locali
 
@@ -19,7 +19,7 @@ npm install
 
 Copiare `.env.example` in `.env`. I valori inclusi sono esclusivamente locali e fittizi; `.env` è escluso da Git.
 
-Le variabili M3 sono:
+Le variabili locali principali sono:
 
 | Variabile | Valore locale fittizio | Scopo |
 | --- | --- | --- |
@@ -29,7 +29,13 @@ Le variabili M3 sono:
 | `AUTH_DEMO_ADMIN_PASSWORD` | password locale fittizia | Password usata dal seed per l'Admin demo. |
 | `AUTH_DEMO_STAFF_PASSWORD` | password locale fittizia | Password usata dal seed per lo Staff demo. |
 | `RESERVATION_PRIVACY_POLICY_VERSION` | `local-demo-v1` | Versione tecnica locale e fittizia registrata sulle prenotazioni; non è una policy legale definitiva. |
+| `RESERVATION_TERMS_VERSION` | `local-demo-terms-v1` | Versione tecnica locale e fittizia delle condizioni accettate via web. |
 | `RESERVATION_IDEMPOTENCY_TTL_HOURS` | `24` | Durata delle chiavi di idempotenza persistenti, limitata dal runtime a 1–168 ore. |
+| `PUBLIC_BOOKING_MANAGEMENT_SECRET` | stringa locale di almeno 32 caratteri | Deriva con HMAC i token personali. Deve rimanere stabile per mantenere validi i link e deve essere diversa fuori dallo sviluppo. |
+| `PUBLIC_BOOKING_RATE_LIMIT_SECRET` | stringa locale di almeno 32 caratteri | Anonimizza le identità tecniche dei bucket pubblici PostgreSQL. |
+| `PUBLIC_BOOKING_RATE_LIMIT_WINDOW_SECONDS` | `900` | Finestra condivisa del rate limit pubblico. |
+| `PUBLIC_BOOKING_READ_LIMIT` | `60` | Numero massimo di letture per azione e identità nella finestra. |
+| `PUBLIC_BOOKING_MUTATION_LIMIT` | `10` | Numero massimo di creazioni/modifiche/cancellazioni per azione e identità nella finestra. |
 
 L'applicazione valida le variabili di autenticazione. Il seed rifiuta sempre gli utenti demo quando `APP_ENV=production` e il runtime rifiuta in produzione il segreto locale presente nell'esempio.
 
@@ -56,6 +62,7 @@ Le migrazioni sono progressive:
 - `20260802153732_add_authentication_users_sessions_rate_limits`: autenticazione M3;
 - `20260803090743_add_operational_configuration`: configurazione operativa M4.
 - `20260803141513_add_reservation_core`: nucleo persistente delle prenotazioni M6.
+- `20260810090000_add_public_booking_management`: prenotazione pubblica, link personale, audit e rate limit M7.
 
 La migrazione M4 aggiunge:
 
@@ -67,6 +74,8 @@ La migrazione M4 aggiunge:
 - gli enum `ServiceType`, `DayOfWeek` e `SpecialDateScope`.
 
 La migrazione M6 aggiunge `Reservation`, `ReservationIdempotencyKey` e i soli enum iniziali necessari: origini `STAFF`/`PHONE`, stati `CONFIRMED`/`CANCELLED` e consenso `VERBAL`/`STAFF_RECORDED`. `localDate` usa `DATE`, `arrivalTime` usa `TIME(0)` e gli identificativi usano UUID. Vincoli SQL proteggono coperti positivi, coerenza fra stato e `cancelledAt`, consenso e origine, override e motivo, autore obbligatorio per le origini correnti e scadenza dell'idempotenza. L'indice di capacità copre ristorante, data, servizio, stato e orario.
+
+La migrazione M7 estende origine e consenso con `PUBLIC` e `WEB_CHECKBOX`, aggiunge la durata configurabile del link, il versionamento delle modifiche, condizioni e lingua del consenso, `ReservationManagementToken`, `PublicReservationRateLimit` e `ReservationAuditEvent`. I vincoli impediscono a una prenotazione pubblica di avere un autore Staff o un override e richiedono entrambi i consensi web versionati.
 
 PostgreSQL usa colonne native `TIME(0)` per gli orari del giorno e `DATE` per le date locali. Il codice converte questi valori al bordo Prisma usando esclusivamente campi UTC della rappresentazione JavaScript: non viene associata una data operativa fittizia e una data come `2026-10-25` non slitta a causa della conversione `Europe/Rome`/UTC. I vincoli SQL impediscono intervalli invertiti, slot o capacità non positivi, posti massimi inferiori ai minimi e duplicati di sale, tavoli, regole settimanali o eccezioni.
 
@@ -156,6 +165,62 @@ API tecniche protette:
 
 Le risposte usano `Cache-Control: no-store` e non espongono hash, dati auth, query, stack trace o configurazioni interne. La pagina `/dashboard/reservations/new` è un modulo tecnico responsive per STAFF/ADMIN; mostra l'override solo all'ADMIN, genera una chiave casuale per ogni tentativo logico e riusa la stessa chiave in caso di retry invariato.
 
+## Flusso pubblico M7
+
+Il cliente apre `/prenota`, sceglie lingua italiana o inglese e consulta slot calcolati con configurazione e prenotazioni `CONFIRMED` lette da PostgreSQL. Le prenotazioni `CANCELLED` sono escluse. Il form richiede dati di contatto, preferenza di sala attiva, privacy e condizioni; le esigenze facoltative restano dati della singola prenotazione e non creano un profilo cliente.
+
+La conferma pubblica riusa il protocollo di lock M6:
+
+1. rate limit PostgreSQL;
+2. validazione Zod e `Idempotency-Key` obbligatorio;
+3. lock di idempotenza;
+4. lock di capacità per ristorante, data e servizio;
+5. rilettura di configurazione e carico persistente;
+6. creazione atomica di prenotazione `PUBLIC`, consensi `WEB_CHECKBOX`, token, audit e associazione idempotente.
+
+La prima risposta usa HTTP `201`. Un retry con la stessa chiave e lo stesso payload normalizzato usa HTTP `200`, non crea duplicati e restituisce lo stesso link; la stessa chiave con payload diverso usa HTTP `409`. La retention predefinita delle chiavi è 24 ore ed è configurata da `RESERVATION_IDEMPOTENCY_TTL_HOURS`.
+
+### Token e pagina personale
+
+Il token URL-safe equivale a 32 byte e viene derivato deterministicamente con HMAC-SHA-256 dal secret server-side stabile e dall'UUID interno casuale della prenotazione. PostgreSQL conserva esclusivamente SHA-256 del token: il valore raw non è salvato, registrato nei log o restituito fuori dalla creazione e dal replay idempotente. Questa derivazione permette di ricostruire in sicurezza lo stesso link durante il replay senza cifrare o persistere il token raw.
+
+Il percorso personale è `/p/<token>`. Il link resta consultabile fino alla durata configurata in `RestaurantBookingSettings`, compresa tra 1 e 24 ore e inizialmente fissata a 24 ore dopo l'orario prenotato. Il cutoff di modifica/cancellazione è distinto: 10:30 per il pranzo e 17:30 per la cena nella configurazione demo. Dopo il cutoff la pagina resta in sola lettura; dopo la scadenza, token inesistenti, revocati e scaduti ricevono la stessa risposta generica.
+
+La modifica acquisisce il lock del token e i lock di capacità della destinazione corrente e nuova in ordine deterministico, esclude la prenotazione corrente dal conteggio, ricontrolla sala/slot/capienza e aggiorna anche la scadenza del link. La cancellazione cambia logicamente lo stato in `CANCELLED`, libera subito i coperti ed è idempotente. Creazione, modifica e cancellazione producono audit atomico con correlation ID e snapshot prima/dopo limitato ai dati operativi modificabili.
+
+Le pagine personali inviano `Cache-Control: no-store`, `Referrer-Policy: no-referrer` e `X-Robots-Tag: noindex, nofollow, noarchive`. Le API non espongono hash, secret, ID interni, stack trace o dettagli Prisma.
+
+### Route pubbliche
+
+- `GET /api/public/availability?date=YYYY-MM-DD&service=LUNCH|DINNER&partySize=N`: disponibilità reale e sale attive;
+- `POST /api/public/reservations`: creazione con JSON same-origin e `Idempotency-Key`;
+- `GET /api/public/reservations/<token>`: consultazione personale;
+- `PATCH /api/public/reservations/<token>`: modifica prima del cutoff;
+- `DELETE /api/public/reservations/<token>`: cancellazione logica prima del cutoff.
+
+Availability, creazione, visualizzazione, modifica e cancellazione hanno bucket distinti, atomici e condivisi in PostgreSQL. La chiave del bucket deriva con HMAC da ristorante, azione e indirizzo client normalizzato; l'indirizzo non viene salvato in chiaro. Gli header proxy sono considerati soltanto con `AUTH_TRUST_PROXY=true` dietro un proxy fidato.
+
+### Verifica locale M7
+
+Con PostgreSQL healthy:
+
+```bash
+docker compose ps
+npx.cmd --no-install prisma format
+npx.cmd --no-install prisma validate
+npx.cmd --no-install prisma generate
+npm run db:migrate:deploy
+npx.cmd --no-install prisma migrate status
+npm run db:seed
+npm run db:seed
+npm run lint
+npm run typecheck
+npm run test
+npm run build
+```
+
+Il seed resta strutturale e idempotente: non crea prenotazioni, token personali, chiavi di idempotenza, eventi audit o bucket di rate limit.
+
 ## Account locali fittizi
 
 | Ruolo | Username | Password |
@@ -167,7 +232,7 @@ Queste identità non corrispondono a persone reali. Le password di `.env.example
 
 `ADMIN` accede anche alla pagina tecnica `/admin`; `STAFF` può usare l'area protetta ordinaria ma viene respinto dalle pagine e dalle mutazioni di configurazione. I controlli sono eseguiti sul server e ogni aggiornamento è limitato al `restaurantId` della sessione.
 
-## Percorsi tecnici M4–M6
+## Percorsi M4–M7
 
 - `/admin/configuration`: capacità e cut-off;
 - `/admin/rooms`: ordine e stato delle sale, modifica dei tavoli demo;
@@ -175,6 +240,8 @@ Queste identità non corrispondono a persone reali. Le password di `.env.example
 - `/admin/special-dates`: creazione, modifica e rimozione delle eccezioni locali.
 - `/admin/availability-preview`: anteprima M5 di slot e capacità con carico persistente vuoto.
 - `/dashboard/reservations/new`: creazione tecnica M6 per STAFF e ADMIN.
+- `/prenota`: prenotazione pubblica responsive in italiano e inglese.
+- `/p/<token>`: consultazione e gestione della singola prenotazione pubblica.
 
 La lettura availability `GET /api/admin/availability-preview?date=YYYY-MM-DD&service=LUNCH|DINNER&partySize=2&channel=PUBLIC|STAFF` resta accessibile esclusivamente ad `ADMIN`. Le API prenotazioni M6 sono invece accessibili a STAFF e ADMIN. Tutti i percorsi sono isolati sul `restaurantId` della sessione, validati sul server e restituiti con `Cache-Control: no-store`.
 
@@ -198,6 +265,7 @@ npm run dev
 - anteprima disponibilità ADMIN: [http://localhost:4000/admin/availability-preview](http://localhost:4000/admin/availability-preview);
 - API anteprima disponibilità ADMIN: [http://localhost:4000/api/admin/availability-preview](http://localhost:4000/api/admin/availability-preview);
 - health check: [http://localhost:4000/api/health](http://localhost:4000/api/health).
+- prenotazione pubblica: [http://localhost:4000/prenota](http://localhost:4000/prenota).
 
 Il login accetta username normalizzati e password di almeno 12 caratteri. Le risposte per username inesistente, password errata e utente disabilitato non rivelano quale controllo sia fallito.
 
@@ -232,6 +300,6 @@ npm run build
 
 La suite Vitest comprende test unitari e test d'integrazione con PostgreSQL reale; non usa SQLite.
 
-## Confini della Milestone M6
+## Confini della Milestone M7
 
-Pagina e API restano strumenti tecnici interni. Non sono implementati form pubblico definitivo, origine `PUBLIC`, link o token personali, modifica, endpoint di cancellazione, lista giornaliera, assegnazione prenotazioni–tavoli, audit completo, notifiche, outbox, WhatsApp, email, PDF, Excel, deploy, database cloud o dati reali. Il seed continua a creare soltanto ristorante, utenti, configurazioni, sale e tavoli fittizi e non inserisce prenotazioni.
+M7 implementa soltanto prenotazione pubblica e link personale. Restano esclusi account cliente, riattivazione autonoma, notifiche, outbox, WhatsApp, email, dashboard giornaliera completa, assegnazione tavoli, PDF, Excel, deploy, database cloud e dati reali. Il seed continua a creare soltanto ristorante, utenti, configurazioni, sale e tavoli fittizi e non inserisce prenotazioni o record tecnici M7.
