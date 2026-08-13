@@ -525,7 +525,7 @@ M9-E implementa configurazione Admin dei contatti pubblici, URL canonico, sette 
 
 **Checkpoint M9-F — revisionato e approvato tecnicamente da Work**
 
-M9-F implementa la consultazione Admin read-only dei due registri audit tramite proiezione unificata minimizzata, tenant filter per sorgente, ordinamento globale, cursor keyset, filtri server-side e dettaglio a allow-list resistente a eventi legacy ostili. Non aggiunge schema, migrazioni, dipendenze, seed o scritture. La Milestone M9 è tecnicamente completata e approvata da Work ed è pubblicata nella PR draft #10. Dopo il presente commit documentale resta la verifica remota conclusiva; non sono avvenuti merge o deploy. M10 rimane una milestone separata e non avviata.
+M9-F implementa la consultazione Admin read-only dei due registri audit tramite proiezione unificata minimizzata, tenant filter per sorgente, ordinamento globale, cursor keyset, filtri server-side e dettaglio a allow-list resistente a eventi legacy ostili. Non aggiunge schema, migrazioni, dipendenze, seed o scritture. La Milestone M9 è tecnicamente completata e approvata da Work, ha superato la verifica remota conclusiva ed è pubblicata nella PR #10. Non sono avvenuti merge o deploy. M10 rimane una milestone separata e non avviata.
 
 ### M10 — Assegnazione manuale di sala e tavoli
 
