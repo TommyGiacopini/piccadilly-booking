@@ -1,8 +1,8 @@
 # Riepilogo canonico M9
 
-**Stato al 13 agosto 2026:** `M9 IMPLEMENTATA LOCALMENTE — REVISIONE FINALE WORK RICHIESTA`.
+**Stato al 13 agosto 2026:** `M9 COMPLETATA E APPROVATA TECNICAMENTE DA WORK — PR #10 DRAFT IN ATTESA DI FINALIZZAZIONE`.
 
-La chiusura effettiva, il commit, la pubblicazione del branch e la pull request richiedono un incarico successivo. Il lavoro resta sul branch locale `feature/admin-panel`; non sono stati eseguiti deploy né usati dati reali o provider esterni.
+Il branch remoto `feature/admin-panel` contiene il commit funzionale M9 `e602ae1b21606eba680faf11d7d2716e9f750f49`, pubblicato nella PR draft #10. Prima del presente commit documentale, il confronto con `main` comprende un solo commit funzionale e 165 file M9. La revisione tecnica indipendente Work è stata superata; resta la verifica remota conclusiva dopo questa riconciliazione. Non sono stati eseguiti merge o deploy, né usati dati reali o provider esterni.
 
 ## Checkpoint
 
@@ -48,8 +48,8 @@ M9-F non modifica `prisma/schema.prisma`, non crea migrazioni, viste, indici, tr
 
 I test M9 coprono matrice Admin/Staff/anonimo/cambio obbligatorio/disabilitato, isolamento cross-tenant, atomicità audit, concorrenza dell'ultimo Admin, preview e fingerprint, grandfathering, istanze lazy, disponibilità sale, contatti e contenuti, token prospettici, DST, proiezione audit, privacy legacy, filtri, keyset e read-only. Le integrazioni di persistenza e concorrenza usano PostgreSQL reale; gli E2E usano esclusivamente dati fittizi.
 
-La regressione finale locale è verde: Prisma ha trovato esattamente 11 migrazioni e database aggiornato; due seed consecutivi sono riusciti; lint e typecheck non hanno errori; Vitest ha superato 372 test in 41 file; Playwright ha superato 32 scenari; il build di produzione è riuscito. Lo stato Git e l'audit del diff completo rispetto a `main` restano riportati nel report finale Work senza creare commit o file staged.
+La regressione finale locale è verde: Prisma ha trovato esattamente 11 migrazioni e database aggiornato; due seed consecutivi sono riusciti; lint e typecheck non hanno errori; Vitest ha superato 372 test in 41 file; Playwright ha superato 32 scenari; il build di produzione è riuscito. Queste verifiche sono esclusivamente locali: GitHub non presenta workflow o check CI associati al commit funzionale `e602ae1b21606eba680faf11d7d2716e9f750f49`. Il commit è pubblicato nel branch remoto e nella PR draft #10; il presente commit documentale riconcilia lo stato canonico senza dichiarare la PR ready, merged o deployed.
 
 ## Funzioni escluse
 
-Restano fuori da M9: assegnazione definitiva di sala e tavoli e ogni funzione M10; PDF/Excel e M11; notifiche, outbox, provider e M12; retention o archiviazione audit; export audit/CSV/analytics/grafici; staging, deploy, backup di produzione e dati reali. `DA ASSEGNARE` resta virtuale e non è stata introdotta alcuna automazione tavoli.
+Restano fuori da M9 e non sono state avviate: assegnazione definitiva di sala e tavoli e ogni funzione M10; PDF/Excel e M11; notifiche, outbox, provider e M12. Restano inoltre esclusi retention o archiviazione audit, export audit/CSV/analytics/grafici, staging, deploy, backup di produzione e dati reali. `DA ASSEGNARE` resta virtuale e non è stata introdotta alcuna automazione tavoli.
