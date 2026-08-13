@@ -4,6 +4,7 @@ import {
   DAY_OF_WEEK_VALUES,
   DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
   FIXED_ROLLING_WINDOW_MINUTES,
+  DEFAULT_SLOT_INTERVAL_MINUTES,
   SERVICE_TYPE_VALUES,
   SPECIAL_DATE_SCOPE_VALUES,
 } from "@/modules/configuration/domain/defaults";
@@ -60,14 +61,19 @@ export const diningTableUpdateSchema = z
   });
 
 export const weeklyScheduleUpdateSchema = z
-  .object({
+  .strictObject({
     id: uuidSchema,
     dayOfWeek: z.enum(DAY_OF_WEEK_VALUES),
     serviceType: z.enum(SERVICE_TYPE_VALUES),
     isEnabled: formBooleanSchema,
     startTime: operationalTimeSchema,
     endTime: operationalTimeSchema,
-    slotIntervalMinutes: positiveIntegerSchema,
+    slotIntervalMinutes: z.coerce
+      .number()
+      .int()
+      .refine((value) => value === DEFAULT_SLOT_INTERVAL_MINUTES, {
+        message: `Gli slot restano fissi a ${DEFAULT_SLOT_INTERVAL_MINUTES} minuti nella prima versione.`,
+      }),
   })
   .refine(
     (value) =>
@@ -79,7 +85,7 @@ export const weeklyScheduleUpdateSchema = z
     },
   );
 
-export const bookingSettingsUpdateSchema = z.object({
+export const bookingSettingsUpdateSchema = z.strictObject({
   rollingCapacityCovers: positiveIntegerSchema,
   rollingWindowMinutes: z.coerce
     .number()
@@ -89,8 +95,6 @@ export const bookingSettingsUpdateSchema = z.object({
     }),
   lunchModificationCutoff: operationalTimeSchema,
   dinnerModificationCutoff: operationalTimeSchema,
-  fridayDinnerBookingCutoff: operationalTimeSchema,
-  saturdayDinnerBookingCutoff: operationalTimeSchema,
   managementLinkDurationHours: z.coerce
     .number()
     .int("La durata del link deve essere un numero intero.")

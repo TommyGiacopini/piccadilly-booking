@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { Prisma, PrismaClient } from "@/generated/prisma/client";
 import type {
   BookingSettingsUpdateInput,
   DiningTableUpdateInput,
@@ -15,8 +16,29 @@ import {
 } from "@/modules/configuration/domain/operational-time";
 import { prisma } from "@/server/db/prisma";
 
-export async function readOperationalConfiguration(restaurantId: string) {
-  const restaurant = await prisma.restaurant.findUnique({
+export type ConfigurationClient = Pick<
+  PrismaClient,
+  | "restaurant"
+  | "restaurantBookingSettings"
+  | "room"
+  | "diningTable"
+  | "weeklyServiceSchedule"
+  | "bookingCutoffRule"
+  | "specialDateOverride"
+  | "auditEvent"
+>;
+
+export function runConfigurationTransaction<T>(
+  callback: (client: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  return prisma.$transaction(callback);
+}
+
+export async function readOperationalConfigurationForRestaurant(
+  restaurantId: string,
+  client: ConfigurationClient = prisma,
+) {
+  const restaurant = await client.restaurant.findUnique({
     where: { id: restaurantId },
     select: {
       id: true,
@@ -32,6 +54,7 @@ export async function readOperationalConfiguration(restaurantId: string) {
         orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
       },
       weeklySchedules: true,
+      bookingCutoffRules: true,
       specialDateOverrides: {
         orderBy: [{ date: "asc" }, { scope: "asc" }],
       },
@@ -58,12 +81,6 @@ export async function readOperationalConfiguration(restaurantId: string) {
           dinnerModificationCutoff: operationalTimeFromDatabase(
             restaurant.bookingSettings.dinnerModificationCutoff,
           ),
-          fridayDinnerBookingCutoff: operationalTimeFromDatabase(
-            restaurant.bookingSettings.fridayDinnerBookingCutoff,
-          ),
-          saturdayDinnerBookingCutoff: operationalTimeFromDatabase(
-            restaurant.bookingSettings.saturdayDinnerBookingCutoff,
-          ),
           managementLinkDurationHours:
             restaurant.bookingSettings.managementLinkDurationHours,
         }
@@ -73,6 +90,10 @@ export async function readOperationalConfiguration(restaurantId: string) {
       ...schedule,
       startTime: operationalTimeFromDatabase(schedule.startTime),
       endTime: operationalTimeFromDatabase(schedule.endTime),
+    })),
+    bookingCutoffRules: restaurant.bookingCutoffRules.map((rule) => ({
+      ...rule,
+      cutoffTime: operationalTimeFromDatabase(rule.cutoffTime),
     })),
     specialDateOverrides: restaurant.specialDateOverrides.map((override) => ({
       ...override,
@@ -87,26 +108,87 @@ export async function readOperationalConfiguration(restaurantId: string) {
   };
 }
 
-export async function updateRoomForRestaurant(
+export async function readBookingSettingsForRestaurant(
+  client: ConfigurationClient,
+  restaurantId: string,
+) {
+  return client.restaurantBookingSettings.findUnique({
+    where: { restaurantId },
+  });
+}
+
+export async function largestSlotIntervalForRestaurant(
+  client: ConfigurationClient,
+  restaurantId: string,
+): Promise<number> {
+  const result = await client.weeklyServiceSchedule.aggregate({
+    where: { restaurantId },
+    _max: { slotIntervalMinutes: true },
+  });
+  return result._max.slotIntervalMinutes ?? 0;
+}
+
+export async function writeBookingSettingsForRestaurant(
+  client: ConfigurationClient,
+  restaurantId: string,
+  input: BookingSettingsUpdateInput,
+): Promise<boolean> {
+  const result = await client.restaurantBookingSettings.updateMany({
+    where: { restaurantId },
+    data: {
+      rollingCapacityCovers: input.rollingCapacityCovers,
+      rollingWindowMinutes: input.rollingWindowMinutes,
+      lunchModificationCutoff: operationalTimeToDatabase(
+        input.lunchModificationCutoff,
+      ),
+      dinnerModificationCutoff: operationalTimeToDatabase(
+        input.dinnerModificationCutoff,
+      ),
+      managementLinkDurationHours: input.managementLinkDurationHours,
+    },
+  });
+  return result.count === 1;
+}
+
+export async function readRoomForRestaurant(
+  client: ConfigurationClient,
+  restaurantId: string,
+  id: string,
+) {
+  return client.room.findFirst({ where: { id, restaurantId } });
+}
+
+export async function writeRoomForRestaurant(
+  client: ConfigurationClient,
   restaurantId: string,
   input: RoomUpdateInput,
 ): Promise<boolean> {
-  const result = await prisma.room.updateMany({
+  const result = await client.room.updateMany({
     where: { id: input.id, restaurantId },
     data: {
       displayOrder: input.displayOrder,
       isActive: input.isActive,
     },
   });
-
   return result.count === 1;
 }
 
-export async function updateDiningTableForRestaurant(
+export async function readDiningTableForRestaurant(
+  client: ConfigurationClient,
+  restaurantId: string,
+  id: string,
+) {
+  return client.diningTable.findFirst({
+    where: { id, room: { restaurantId } },
+  });
+}
+
+export async function writeDiningTableForRestaurant(
+  client: ConfigurationClient,
   restaurantId: string,
   input: DiningTableUpdateInput,
 ): Promise<boolean> {
-  const result = await prisma.diningTable.updateMany({
+  const result = await client.diningTable.updateMany({
     where: { id: input.id, room: { restaurantId } },
     data: {
       name: input.name,
@@ -116,83 +198,44 @@ export async function updateDiningTableForRestaurant(
       isActive: input.isActive,
     },
   });
-
   return result.count === 1;
 }
 
-export async function updateWeeklyScheduleForRestaurant(
+export async function readWeeklyScheduleForRestaurant(
+  client: ConfigurationClient,
   restaurantId: string,
-  input: WeeklyScheduleUpdateInput,
-): Promise<"UPDATED" | "NOT_FOUND" | "WINDOW_TOO_SHORT"> {
-  return prisma.$transaction(async (transaction) => {
-    const settings = await transaction.restaurantBookingSettings.findUnique({
-      where: { restaurantId },
-      select: { rollingWindowMinutes: true },
-    });
-
-    if (!settings || settings.rollingWindowMinutes < input.slotIntervalMinutes) {
-      return "WINDOW_TOO_SHORT";
-    }
-
-    const result = await transaction.weeklyServiceSchedule.updateMany({
-      where: {
-        id: input.id,
-        restaurantId,
-        dayOfWeek: input.dayOfWeek,
-        serviceType: input.serviceType,
-      },
-      data: {
-        isEnabled: input.isEnabled,
-        startTime: operationalTimeToDatabase(input.startTime),
-        endTime: operationalTimeToDatabase(input.endTime),
-        slotIntervalMinutes: input.slotIntervalMinutes,
-      },
-    });
-
-    return result.count === 1 ? "UPDATED" : "NOT_FOUND";
+  input: Pick<WeeklyScheduleUpdateInput, "id" | "dayOfWeek" | "serviceType">,
+) {
+  return client.weeklyServiceSchedule.findFirst({
+    where: {
+      id: input.id,
+      restaurantId,
+      dayOfWeek: input.dayOfWeek,
+      serviceType: input.serviceType,
+    },
   });
 }
 
-export async function updateBookingSettingsForRestaurant(
+export async function writeWeeklyScheduleForRestaurant(
+  client: ConfigurationClient,
   restaurantId: string,
-  input: BookingSettingsUpdateInput,
-): Promise<"UPDATED" | "NOT_FOUND" | "WINDOW_TOO_SHORT"> {
-  return prisma.$transaction(async (transaction) => {
-    const largestSlot = await transaction.weeklyServiceSchedule.aggregate({
-      where: { restaurantId },
-      _max: { slotIntervalMinutes: true },
-    });
-
-    if (
-      input.rollingWindowMinutes <
-      (largestSlot._max.slotIntervalMinutes ?? 0)
-    ) {
-      return "WINDOW_TOO_SHORT";
-    }
-
-    const result = await transaction.restaurantBookingSettings.updateMany({
-      where: { restaurantId },
-      data: {
-        rollingCapacityCovers: input.rollingCapacityCovers,
-        rollingWindowMinutes: input.rollingWindowMinutes,
-        lunchModificationCutoff: operationalTimeToDatabase(
-          input.lunchModificationCutoff,
-        ),
-        dinnerModificationCutoff: operationalTimeToDatabase(
-          input.dinnerModificationCutoff,
-        ),
-        fridayDinnerBookingCutoff: operationalTimeToDatabase(
-          input.fridayDinnerBookingCutoff,
-        ),
-        saturdayDinnerBookingCutoff: operationalTimeToDatabase(
-          input.saturdayDinnerBookingCutoff,
-        ),
-        managementLinkDurationHours: input.managementLinkDurationHours,
-      },
-    });
-
-    return result.count === 1 ? "UPDATED" : "NOT_FOUND";
+  input: WeeklyScheduleUpdateInput,
+): Promise<boolean> {
+  const result = await client.weeklyServiceSchedule.updateMany({
+    where: {
+      id: input.id,
+      restaurantId,
+      dayOfWeek: input.dayOfWeek,
+      serviceType: input.serviceType,
+    },
+    data: {
+      isEnabled: input.isEnabled,
+      startTime: operationalTimeToDatabase(input.startTime),
+      endTime: operationalTimeToDatabase(input.endTime),
+      slotIntervalMinutes: input.slotIntervalMinutes,
+    },
   });
+  return result.count === 1;
 }
 
 function specialDateData(input: SpecialDateInput) {
@@ -211,37 +254,67 @@ function specialDateData(input: SpecialDateInput) {
   };
 }
 
-export async function createSpecialDateForRestaurant(
+export async function readSpecialDateByIdentity(
+  client: ConfigurationClient,
   restaurantId: string,
-  input: SpecialDateInput,
+  input: Pick<SpecialDateInput, "date" | "scope">,
 ) {
-  return prisma.specialDateOverride.create({
-    data: {
-      restaurantId,
-      ...specialDateData(input),
+  return client.specialDateOverride.findUnique({
+    where: {
+      restaurantId_date_scope: {
+        restaurantId,
+        date: localDateToDatabase(input.date),
+        scope: input.scope,
+      },
     },
   });
 }
 
-export async function updateSpecialDateForRestaurant(
+export async function readSpecialDateForRestaurant(
+  client: ConfigurationClient,
+  restaurantId: string,
+  id: string,
+) {
+  return client.specialDateOverride.findFirst({
+    where: { id, restaurantId },
+  });
+}
+
+export async function createSpecialDateForRestaurant(
+  client: ConfigurationClient,
+  restaurantId: string,
+  input: SpecialDateInput,
+) {
+  return client.specialDateOverride.create({
+    data: { restaurantId, ...specialDateData(input) },
+  });
+}
+
+export async function writeSpecialDateForRestaurant(
+  client: ConfigurationClient,
   restaurantId: string,
   input: SpecialDateInput & { id: string },
+  archivedAt?: Date | null,
 ): Promise<boolean> {
-  const result = await prisma.specialDateOverride.updateMany({
+  const result = await client.specialDateOverride.updateMany({
     where: { id: input.id, restaurantId },
-    data: specialDateData(input),
+    data: {
+      ...specialDateData(input),
+      ...(archivedAt === undefined ? {} : { archivedAt }),
+    },
   });
-
   return result.count === 1;
 }
 
-export async function deleteSpecialDateForRestaurant(
+export async function setSpecialDateArchivedState(
+  client: ConfigurationClient,
   restaurantId: string,
   id: string,
+  archivedAt: Date | null,
 ): Promise<boolean> {
-  const result = await prisma.specialDateOverride.deleteMany({
+  const result = await client.specialDateOverride.updateMany({
     where: { id, restaurantId },
+    data: { archivedAt },
   });
-
   return result.count === 1;
 }

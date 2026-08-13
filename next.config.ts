@@ -11,6 +11,20 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        source: "/admin/:path*",
+        headers: [
+          { key: "Cache-Control", value: "no-store, max-age=0" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+        ],
+      },
+      {
+        source: "/api/admin/audit/:path*",
+        headers: [
+          { key: "Cache-Control", value: "no-store, max-age=0" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+        ],
+      },
+      {
         source: "/p/:path*",
         headers: [
           { key: "Cache-Control", value: "no-store, max-age=0" },

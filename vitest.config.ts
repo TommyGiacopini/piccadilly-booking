@@ -12,7 +12,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "scripts/**/*.test.mjs"],
+    fileParallelism: false,
+    include: ["src/**/*.test.ts", "scripts/**/*.test.ts", "scripts/**/*.test.mjs"],
     setupFiles: ["./src/test/setup.ts"],
   },
 });

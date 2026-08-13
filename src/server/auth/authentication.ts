@@ -59,5 +59,6 @@ export async function authenticateCredentials(
     restaurantId: user.restaurantId,
     username: user.username,
     role: user.role,
+    mustChangePassword: user.mustChangePassword,
   };
 }

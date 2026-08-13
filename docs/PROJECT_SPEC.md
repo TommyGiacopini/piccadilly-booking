@@ -168,13 +168,19 @@ L'amministratore deve poter modificare:
 
 \- orari prenotabili;
 
-\- intervallo degli slot;
+\- orari prenotabili, con intervallo degli slot V1 fisso a 15 minuti;
 
 \- sale disponibili;
 
 \- limite di coperti;
 
 \- orario di chiusura delle prenotazioni.
+
+Servizi, sale, tavoli ed eccezioni vengono disattivati o archiviati, non eliminati fisicamente. In particolare la rimozione di una data straordinaria è un'archiviazione reversibile e le query operative la ignorano finché non viene ripristinata.
+
+M9-C rende configurabili per ogni giorno e servizio l'abilitazione, il primo e l'ultimo slot, la capacità generale e il cutoff delle nuove prenotazioni pubbliche. Il cutoff pubblico è una regola generica per giorno e servizio e non si applica agli inserimenti Staff o telefonici.
+
+M9-D introduce istanze servizio minimali, create solo al primo bisogno operativo. Lo stato virtuale deriva dalla configurazione M9-C: Sala 1–3 sono disponibili per default, Galleria e Terrazzo solo dopo abilitazione esplicita per data e servizio. Il servizio chiuso e la disattivazione globale prevalgono. Le cinque sale canoniche non possono essere create, rinominate, ricodificate o eliminate; `DA ASSEGNARE` non è persistita.
 
 
 
@@ -218,7 +224,9 @@ Valore iniziale:
 
 
 
-Il valore deve essere modificabile dall'amministratore.
+Soltanto il limite di coperti deve essere modificabile dall'amministratore. Nella V1 l'intervallo degli slot resta fisso a 15 minuti e la finestra mobile resta fissa a 30 minuti; la UI amministrativa li mostra come valori informativi e server e database devono rifiutare valori differenti.
+
+Una riduzione del limite, una disabilitazione del servizio, una restrizione degli orari o una modifica dei cutoff con prenotazioni future confermate richiede anteprima server-side minimizzata e conferma esplicita. La conferma modifica soltanto la configurazione: nessuna prenotazione esistente viene modificata o cancellata automaticamente.
 
 
 
@@ -360,6 +368,8 @@ La pagina:
 
 \- registra tutte le operazioni.
 
+Ogni token conserva la durata applicata quando viene creato. Le modifiche alla configurazione valgono soltanto per token successivi; se la prenotazione viene spostata, la scadenza viene ricalcolata rispetto al nuovo servizio usando la durata originaria, senza rigenerare il token.
+
 
 
 Il token non deve contenere l'ID progressivo del database.
@@ -420,6 +430,10 @@ Ogni modifica deve conservare:
 
 \- origine dell'operazione.
 
+Una configurazione successiva non invalida retroattivamente prenotazioni confermate e non le modifica o cancella automaticamente. Contatti, note e richieste possono essere aggiornati conservando dati operativi invariati; nuova data, servizio, ora o sala e gli aumenti di coperti rispettano la configurazione corrente. Una riduzione dei coperti sullo stesso servizio resta consentita.
+
+Le modifiche amministrative con prenotazioni coinvolte richiedono anteprima server-side senza PII, conferma esplicita, ricalcolo transazionale, rifiuto `IMPACT_CHANGED` in caso di divergenza e audit. M9-C applica questo protocollo a impostazioni, servizi e cutoff; M9-D alla disponibilità e disattivazione delle sale.
+
 
 
 ## 10. WhatsApp
@@ -449,6 +463,8 @@ Se la prenotazione viene effettuata quando mancano meno di tre ore, non deve ess
 
 
 Durante lo sviluppo utilizzare un provider WhatsApp simulato.
+
+Strategie di canale principale, fallback e invio parallelo, outbox e provider simulati appartengono alla milestone M12; M9 gestisce soltanto i dati di contatto.
 
 
 
@@ -534,6 +550,18 @@ Ruoli:
 
 Può modificare configurazioni, utenti, orari, sale, limiti e prenotazioni.
 
+Per orari settimanali, capacità e cutoff M9-C ricalcola l'impatto dentro la transazione e rifiuta una conferma obsoleta con `IMPACT_CHANGED`. Il riepilogo espone soltanto conteggi, coperti e classificazioni operative, senza PII o identificativi di prenotazione.
+
+Non esiste registrazione pubblica. M9-B implementa la gestione utenti riservata all'Admin: account individuali Admin/Staff, username normalizzato e immutabile, password temporanee casuali da 24 caratteri mostrate una sola volta, cambio obbligatorio al primo accesso e revoca di tutte le sessioni dopo reset, cambio password, variazione ruolo o disabilitazione. Deve rimanere sempre almeno un Admin attivo per ristorante; nessun utente viene eliminato fisicamente.
+
+Le password scelte dall'utente contengono da 15 a 128 code point Unicode, possono includere spazi e caratteri Unicode stampabili e non subiscono trim, troncamento o regole di composizione. Sono rifiutati caratteri di controllo, password comuni/demo, username equivalente senza distinzione tra maiuscole e minuscole e riuso della password corrente.
+
+M9-E rende amministrabili telefono pubblico, URL canonico HTTPS, email facoltativa, numero WhatsApp facoltativo e sette contenuti editoriali completi per `IT` ed `EN`: titolo e introduzione della prenotazione, indisponibilità, invito al contatto, conferma, titolo e introduzione della pagina personale. Etichette, validazioni ed errori tecnici restano nel codice; non esiste un archivio libero di HTML, URL editoriali o chiavi arbitrarie. La lingua usa `lang=it|en`, con fallback italiano e senza cookie.
+
+La durata del link personale è un intero da 1 a 24 ore e una modifica vale soltanto per i nuovi token. Token e hash esistenti non vengono aggiornati o rigenerati. Se una prenotazione pubblica viene spostata dal cliente o dallo Staff, la scadenza viene ricalcolata con la durata originaria esatta del token; uno stato legacy incoerente causa rollback.
+
+M9-F riserva all'Admin la consultazione read-only unificata dell'audit prenotazioni e amministrativo. Periodo locale, sorgente, categoria, azione, esito, attore, tipo/ID entità e correlation ID sono filtri server-side; ordinamento e paginazione sono deterministici e cursor-based. Il dettaglio mostra solo campi operativi allow-listed, mai raw JSON, PII, contatti, contenuti editoriali, HMAC, credenziali, token o hash. Ogni sorgente è filtrata sul ristorante della sessione prima dell'unione e la consultazione non genera audit.
+
 
 
 ### Staff
@@ -575,6 +603,10 @@ La dashboard deve aprirsi sul giorno corrente e mostrare:
 
 
 Nella prima versione il sistema non deve calcolare automaticamente tavoli e combinazioni.
+
+Le sale canoniche sono Sala 1, Sala 2, Sala 3, Galleria e Terrazzo e il loro codice non cambia. I tavoli possono essere creati, aggiornati e disattivati, ma non eliminati fisicamente; per spostare un tavolo si disattiva quello precedente e se ne crea uno nuovo nella sala di destinazione.
+
+M9-D non assegna tavoli alle prenotazioni e non deriva la capacità mobile dalla somma dei posti. Le righe storiche e le preferenze sala restano conservate; una modifica non relativa a data, servizio o sala non deve essere respinta solo perché la preferenza precedente non è più selezionabile.
 
 
 
@@ -806,28 +838,36 @@ Il progetto deve poter continuare a funzionare senza dipendere dagli account per
 
 
 
-1\. documentazione e architettura;
+La numerazione ufficiale è quella di `docs/ROADMAP.md`:
 
-2\. fondamenta Next.js;
+0\. documentazione e decisioni architetturali;
 
-3\. database;
+1\. fondamenta Next.js;
 
-4\. autenticazione;
+2\. PostgreSQL e Prisma;
 
-5\. configurazione ristorante;
+3\. autenticazione e autorizzazione;
+
+4\. configurazione del ristorante e calendario;
+
+5\. motore prenotazioni e concorrenza;
 
 6\. prenotazione pubblica;
 
 7\. pagina personale;
 
-8\. dashboard;
+8\. dashboard e prenotazioni telefoniche;
 
-9\. PDF ed Excel;
+9\. pannello amministratore;
 
-10\. WhatsApp;
+10\. assegnazione manuale di sala e tavoli;
 
-11\. staging;
+11\. esportazioni PDF ed Excel;
 
-12\. test;
+12\. outbox e provider simulati;
 
-13\. produzione e consegna.
+13\. staging personale;
+
+14\. provider reali;
+
+15\. produzione, backup e consegna.

@@ -17,6 +17,7 @@ export interface AuthenticatedUser {
   restaurantId: string;
   username: string;
   role: UserRole;
+  mustChangePassword: boolean;
 }
 
 export interface CreatedSession {
@@ -76,6 +77,7 @@ export async function validateSessionToken(
           restaurantId: true,
           username: true,
           role: true,
+          mustChangePassword: true,
           isActive: true,
           disabledAt: true,
         },
@@ -108,6 +110,7 @@ export async function validateSessionToken(
     restaurantId: session.user.restaurantId,
     username: session.user.username,
     role: session.user.role,
+    mustChangePassword: session.user.mustChangePassword,
   };
 }
 

@@ -27,8 +27,7 @@ function validSettingsInput() {
     rollingWindowMinutes: "30",
     lunchModificationCutoff: "10:30",
     dinnerModificationCutoff: "17:30",
-    fridayDinnerBookingCutoff: "17:30",
-    saturdayDinnerBookingCutoff: "17:30",
+    managementLinkDurationHours: "24",
   };
 }
 
@@ -70,6 +69,15 @@ describe("operational configuration validation", () => {
     ).toBe(false);
   });
 
+  it("rejects every slot interval other than the fixed 15 minutes", () => {
+    expect(
+      weeklyScheduleUpdateSchema.safeParse({
+        ...validScheduleInput(),
+        slotIntervalMinutes: "30",
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires a positive rolling capacity and the fixed V1 window", () => {
     expect(
       bookingSettingsUpdateSchema.safeParse({
@@ -90,6 +98,15 @@ describe("operational configuration validation", () => {
       bookingSettingsUpdateSchema.safeParse({
         ...validSettingsInput(),
         lunchModificationCutoff: "25:30",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects legacy cutoff fields and arbitrary client fields", () => {
+    expect(
+      bookingSettingsUpdateSchema.safeParse({
+        ...validSettingsInput(),
+        fridayDinnerBookingCutoff: "17:30",
       }).success,
     ).toBe(false);
   });
@@ -164,4 +181,3 @@ describe("operational configuration validation", () => {
     ).toBe(false);
   });
 });
-

@@ -2,6 +2,12 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { PublicContactLinks } from "@/app/_components/public-contact-links";
+import type {
+  PublicContacts,
+  PublicContentSet,
+} from "@/modules/configuration/domain/public-settings";
+
 interface AvailabilitySlot {
   time: string;
   available: boolean;
@@ -23,9 +29,6 @@ interface AvailabilityResponse {
 const text = {
   it: {
     eyebrow: "Prenotazione online",
-    title: "Il tuo tavolo al Piccadilly",
-    intro:
-      "Verifica gli orari disponibili e conferma subito. La preferenza di sala non è garantita.",
     language: "Language",
     date: "Data",
     service: "Servizio",
@@ -54,19 +57,14 @@ const text = {
     disclaimer:
       "La sala indicata rappresenta una preferenza. Il Piccadilly si riserva il diritto di modificare la collocazione del tavolo per esigenze organizzative, disponibilità o condizioni atmosferiche.",
     loading: "Verifica disponibilità…",
-    unavailable: "Nessun orario disponibile per questi dati.",
     submit: "Conferma prenotazione",
     submitting: "Conferma in corso…",
-    success: "Prenotazione confermata",
     link: "Apri il tuo link personale",
     keepLink: "Conserva questo link: serve per consultare, modificare o annullare.",
     genericError: "Non è stato possibile completare la richiesta.",
   },
   en: {
     eyebrow: "Online booking",
-    title: "Your table at Piccadilly",
-    intro:
-      "Check available times and confirm immediately. Room preference is not guaranteed.",
     language: "Lingua",
     date: "Date",
     service: "Service",
@@ -95,10 +93,8 @@ const text = {
     disclaimer:
       "The selected room is a preference. Piccadilly may change the table location for operational, availability or weather reasons.",
     loading: "Checking availability…",
-    unavailable: "No times are available for this selection.",
     submit: "Confirm booking",
     submitting: "Confirming…",
-    success: "Booking confirmed",
     link: "Open your personal link",
     keepLink: "Keep this link to view, change or cancel your booking.",
     genericError: "The request could not be completed.",
@@ -117,8 +113,16 @@ function checked(formData: FormData, name: string): boolean {
   return formData.get(name) === "on";
 }
 
-export function PublicBookingForm() {
-  const [language, setLanguage] = useState<"it" | "en">("it");
+export function PublicBookingForm({
+  contacts,
+  contents,
+  initialLanguage,
+}: {
+  contacts: PublicContacts;
+  contents: PublicContentSet;
+  initialLanguage: "it" | "en";
+}) {
+  const [language, setLanguage] = useState<"it" | "en">(initialLanguage);
   const [date, setDate] = useState("");
   const [service, setService] = useState<"LUNCH" | "DINNER">("DINNER");
   const [partySize, setPartySize] = useState(2);
@@ -129,6 +133,14 @@ export function PublicBookingForm() {
   const [managementPath, setManagementPath] = useState<string | null>(null);
   const submission = useRef<{ signature: string; key: string } | null>(null);
   const copy = text[language];
+  const editorial = contents[language === "it" ? "IT" : "EN"];
+
+  function selectLanguage(nextLanguage: "it" | "en") {
+    setLanguage(nextLanguage);
+    const url = new URL(window.location.href);
+    url.searchParams.set("lang", nextLanguage);
+    window.history.replaceState(null, "", url);
+  }
 
   useEffect(() => {
     if (!date || !Number.isInteger(partySize) || partySize < 1) {
@@ -236,15 +248,19 @@ export function PublicBookingForm() {
           <p className="text-sm font-black tracking-[0.2em] text-orange-600 uppercase">
             Piccadilly
           </p>
-          <h1 className="mt-3 text-4xl font-black">{copy.success}</h1>
+          <h1 className="mt-3 text-4xl font-black whitespace-pre-line">{editorial.CONFIRMATION_MESSAGE}</h1>
           <p className="mt-5 leading-7 text-zinc-600">{copy.keepLink}</p>
           <a
             className="mt-8 inline-flex rounded-2xl bg-orange-500 px-6 py-4 font-black text-white transition hover:bg-orange-600 focus:ring-4 focus:ring-orange-200 focus:outline-none"
-            href={managementPath}
+            href={`${managementPath}?lang=${language}`}
             rel="noreferrer"
           >
             {copy.link}
           </a>
+          <div className="mt-8 border-t border-zinc-200 pt-6">
+            <p className="whitespace-pre-line text-sm text-zinc-600">{editorial.CONTACT_PROMPT}</p>
+            <PublicContactLinks contacts={contacts} language={language} />
+          </div>
         </section>
       </main>
     );
@@ -262,10 +278,10 @@ export function PublicBookingForm() {
               {copy.eyebrow}
             </p>
             <h1 className="mt-3 max-w-3xl text-4xl font-black tracking-tight sm:text-5xl">
-              {copy.title}
+              {editorial.BOOKING_PAGE_TITLE}
             </h1>
             <p className="mt-5 max-w-2xl text-lg leading-8 text-zinc-300">
-              {copy.intro}
+              {editorial.BOOKING_PAGE_INTRO}
             </p>
           </div>
           <div className="flex rounded-2xl border border-zinc-700 p-1" aria-label={copy.language}>
@@ -274,7 +290,7 @@ export function PublicBookingForm() {
                 aria-pressed={language === option}
                 className={`rounded-xl px-4 py-2 text-sm font-black ${language === option ? "bg-orange-500 text-white" : "text-zinc-300"}`}
                 key={option}
-                onClick={() => setLanguage(option)}
+                onClick={() => selectLanguage(option)}
                 type="button"
               >
                 {option.toUpperCase()}
@@ -358,8 +374,23 @@ export function PublicBookingForm() {
             <label className="flex items-start gap-3 text-sm font-bold"><input className="mt-1 size-4 accent-orange-500" name="termsAccepted" required type="checkbox" />{copy.terms}</label>
           </div>
 
-          {date && availableSlots.length === 0 ? <p className="mt-5 text-sm font-bold text-orange-700" role="status">{availabilityPending ? copy.loading : availability.error ?? copy.unavailable}</p> : null}
+          {date && availableSlots.length === 0 ? (
+            <div className="mt-5 rounded-2xl bg-orange-50 p-5 text-orange-900" role="status">
+              <p className="font-bold whitespace-pre-line">{availabilityPending ? copy.loading : availability.error ?? editorial.UNAVAILABLE_MESSAGE}</p>
+              {!availabilityPending ? (
+                <>
+                  <p className="mt-3 whitespace-pre-line text-sm">{editorial.CONTACT_PROMPT}</p>
+                  <PublicContactLinks contacts={contacts} language={language} />
+                </>
+              ) : null}
+            </div>
+          ) : null}
           {message ? <p className="mt-5 rounded-2xl bg-red-50 p-4 text-sm font-bold text-red-800" role="alert">{message}</p> : null}
+
+          <section className="mt-7 rounded-2xl bg-zinc-100 p-5">
+            <p className="whitespace-pre-line text-sm text-zinc-700">{editorial.CONTACT_PROMPT}</p>
+            <PublicContactLinks contacts={contacts} language={language} />
+          </section>
 
           <button className="mt-8 rounded-2xl bg-zinc-950 px-7 py-4 font-black text-white transition hover:bg-orange-600 focus:ring-4 focus:ring-orange-200 focus:outline-none disabled:cursor-wait disabled:opacity-60" disabled={submitting || availableSlots.length === 0} type="submit">
             {submitting ? copy.submitting : copy.submit}

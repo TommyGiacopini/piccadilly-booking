@@ -72,6 +72,35 @@ export function managementViewExpiry(input: {
   );
 }
 
+export function originalManagementLinkDurationHours(input: {
+  localDate: string;
+  arrivalTime: string;
+  timezone: string;
+  viewExpiresAt: Date;
+}): number {
+  if (
+    !(input.viewExpiresAt instanceof Date) ||
+    !Number.isFinite(input.viewExpiresAt.getTime())
+  ) {
+    throw new Error("Invalid management-link expiry.");
+  }
+
+  const reservationInstant = localReservationInstant(
+    input.localDate,
+    input.arrivalTime,
+    input.timezone,
+  );
+  const exactHours =
+    (input.viewExpiresAt.getTime() - reservationInstant.getTime()) /
+    (60 * 60 * 1_000);
+
+  if (!Number.isInteger(exactHours) || exactHours < 1 || exactHours > 24) {
+    throw new Error("Incoherent legacy management-link duration.");
+  }
+
+  return exactHours;
+}
+
 export function isBeforeModificationCutoff(input: {
   now: Date;
   localDate: string;

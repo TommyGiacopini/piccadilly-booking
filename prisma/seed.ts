@@ -5,8 +5,9 @@ import { pathToFileURL } from "node:url";
 
 import {
   DayOfWeek,
-  Prisma,
   PrismaClient,
+  PublicContentKey,
+  PublicContentLocale,
   ServiceType,
   UserRole,
 } from "../src/generated/prisma/client";
@@ -41,11 +42,20 @@ type RestaurantSeedClient = Pick<PrismaClient, "restaurant">;
 type AuthenticationSeedClient = Pick<PrismaClient, "user">;
 type OperationalConfigurationSeedClient = Pick<
   PrismaClient,
-  "restaurantBookingSettings" | "room" | "weeklyServiceSchedule" | "diningTable"
+  | "restaurantBookingSettings"
+  | "bookingCutoffRule"
+  | "room"
+  | "weeklyServiceSchedule"
+  | "diningTable"
+>;
+type PublicConfigurationSeedClient = Pick<
+  PrismaClient,
+  "restaurantPublicSettings" | "publicContent"
 >;
 type SeedClient = RestaurantSeedClient &
   AuthenticationSeedClient &
-  OperationalConfigurationSeedClient;
+  OperationalConfigurationSeedClient &
+  PublicConfigurationSeedClient;
 
 export interface DemoUserPasswords {
   admin: string;
@@ -75,28 +85,82 @@ const DEMO_TABLES = [
   { roomCode: "terrazzo", name: "DEMO-T-01", minimumSeats: 2, maximumSeats: 4 },
 ] as const;
 
+export const DEMO_PUBLIC_CONTACTS = {
+  publicPhone: "+390000000000",
+  publicBookingBaseUrl: "https://prenota.example.test/",
+  publicEmail: "demo@example.test",
+  whatsappNumber: "+390000000001",
+} as const;
+
+export const DEMO_PUBLIC_CONTENTS = {
+  IT: {
+    BOOKING_PAGE_TITLE: "Prenotazione dimostrativa Piccadilly",
+    BOOKING_PAGE_INTRO:
+      "Contenuto dimostrativo: scegli data, servizio e orario disponibili.",
+    UNAVAILABLE_MESSAGE:
+      "Nessuna disponibilità dimostrativa per la selezione corrente.",
+    CONTACT_PROMPT:
+      "Per assistenza sulla dimostrazione puoi usare uno dei contatti indicati.",
+    CONFIRMATION_MESSAGE:
+      "La prenotazione dimostrativa è stata registrata correttamente.",
+    MANAGEMENT_PAGE_TITLE: "Gestisci la prenotazione dimostrativa",
+    MANAGEMENT_PAGE_INTRO:
+      "Consulta, modifica o annulla la prenotazione entro i termini disponibili.",
+  },
+  EN: {
+    BOOKING_PAGE_TITLE: "Piccadilly demonstration booking",
+    BOOKING_PAGE_INTRO:
+      "Demonstration content: choose an available date, service and time.",
+    UNAVAILABLE_MESSAGE:
+      "No demonstration availability exists for the current selection.",
+    CONTACT_PROMPT:
+      "For help with this demonstration, use one of the listed contacts.",
+    CONFIRMATION_MESSAGE:
+      "The demonstration booking has been recorded successfully.",
+    MANAGEMENT_PAGE_TITLE: "Manage the demonstration booking",
+    MANAGEMENT_PAGE_INTRO:
+      "View, change or cancel the booking within the available time limits.",
+  },
+} as const;
+
+export async function seedDemoPublicConfiguration(
+  client: PublicConfigurationSeedClient,
+) {
+  await client.restaurantPublicSettings.createMany({
+    data: [{ restaurantId: DEMO_RESTAURANT_ID, ...DEMO_PUBLIC_CONTACTS }],
+    skipDuplicates: true,
+  });
+
+  await client.publicContent.createMany({
+    data: Object.entries(DEMO_PUBLIC_CONTENTS).flatMap(
+      ([locale, contents]) =>
+        Object.entries(contents).map(([contentKey, contentText]) => ({
+          restaurantId: DEMO_RESTAURANT_ID,
+          locale: locale as PublicContentLocale,
+          contentKey: contentKey as PublicContentKey,
+          contentText,
+        })),
+    ),
+    skipDuplicates: true,
+  });
+
+  return {
+    publicSettings: await client.restaurantPublicSettings.findUnique({
+      where: { restaurantId: DEMO_RESTAURANT_ID },
+    }),
+    publicContents: await client.publicContent.findMany({
+      where: { restaurantId: DEMO_RESTAURANT_ID },
+      orderBy: [{ locale: "asc" }, { contentKey: "asc" }],
+    }),
+  };
+}
+
 export async function seedDemoOperationalConfiguration(
   client: OperationalConfigurationSeedClient,
 ) {
   const settings = await client.restaurantBookingSettings.upsert({
     where: { restaurantId: DEMO_RESTAURANT_ID },
-    update: {
-      rollingCapacityCovers: DEFAULT_ROLLING_CAPACITY_COVERS,
-      rollingWindowMinutes: FIXED_ROLLING_WINDOW_MINUTES,
-      lunchModificationCutoff: operationalTimeToDatabase(
-        DEFAULT_BOOKING_CUTOFFS.lunchModificationCutoff,
-      ),
-      dinnerModificationCutoff: operationalTimeToDatabase(
-        DEFAULT_BOOKING_CUTOFFS.dinnerModificationCutoff,
-      ),
-      fridayDinnerBookingCutoff: operationalTimeToDatabase(
-        DEFAULT_BOOKING_CUTOFFS.fridayDinnerBookingCutoff,
-      ),
-      saturdayDinnerBookingCutoff: operationalTimeToDatabase(
-        DEFAULT_BOOKING_CUTOFFS.saturdayDinnerBookingCutoff,
-      ),
-      managementLinkDurationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
-    },
+    update: {},
     create: {
       restaurantId: DEMO_RESTAURANT_ID,
       rollingCapacityCovers: DEFAULT_ROLLING_CAPACITY_COVERS,
@@ -107,68 +171,43 @@ export async function seedDemoOperationalConfiguration(
       dinnerModificationCutoff: operationalTimeToDatabase(
         DEFAULT_BOOKING_CUTOFFS.dinnerModificationCutoff,
       ),
-      fridayDinnerBookingCutoff: operationalTimeToDatabase(
-        DEFAULT_BOOKING_CUTOFFS.fridayDinnerBookingCutoff,
-      ),
-      saturdayDinnerBookingCutoff: operationalTimeToDatabase(
-        DEFAULT_BOOKING_CUTOFFS.saturdayDinnerBookingCutoff,
-      ),
       managementLinkDurationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
     },
+  });
+
+  await client.bookingCutoffRule.createMany({
+    data: DAY_OF_WEEK_VALUES.flatMap((dayOfWeekValue) =>
+      SERVICE_TYPE_VALUES.map((serviceTypeValue) => ({
+        restaurantId: DEMO_RESTAURANT_ID,
+        dayOfWeek: DayOfWeek[dayOfWeekValue],
+        serviceType: ServiceType[serviceTypeValue],
+        isEnabled:
+          serviceTypeValue === "DINNER" &&
+          (dayOfWeekValue === "FRIDAY" || dayOfWeekValue === "SATURDAY"),
+        cutoffTime: operationalTimeToDatabase(
+          DEFAULT_BOOKING_CUTOFFS.publicBookingCutoffTime,
+        ),
+      })),
+    ),
+    skipDuplicates: true,
   });
 
   const rooms = [];
 
   for (const roomSeed of DEMO_ROOMS) {
-    let room: { id: string; code: string };
-
-    try {
-      room = await client.room.upsert({
+    const room = await client.room.upsert({
         where: {
           restaurantId_code: {
             restaurantId: DEMO_RESTAURANT_ID,
             code: roomSeed.code,
           },
         },
-        update: {
-          name: roomSeed.name,
-          displayOrder: roomSeed.displayOrder,
-          isActive: true,
-        },
+        update: {},
         create: {
           restaurantId: DEMO_RESTAURANT_ID,
           ...roomSeed,
         },
       });
-    } catch (error) {
-      if (
-        !(error instanceof Prisma.PrismaClientKnownRequestError) ||
-        error.code !== "P2002"
-      ) {
-        throw error;
-      }
-
-      const existingRoom = await client.room.findFirst({
-        where: {
-          restaurantId: DEMO_RESTAURANT_ID,
-          OR: [{ code: roomSeed.code }, { name: roomSeed.name }],
-        },
-      });
-
-      if (!existingRoom) {
-        throw error;
-      }
-
-      room = await client.room.update({
-        where: { id: existingRoom.id },
-        data: {
-          name: roomSeed.name,
-          code: roomSeed.code,
-          displayOrder: roomSeed.displayOrder,
-          isActive: true,
-        },
-      });
-    }
 
     rooms.push(room);
   }
@@ -191,12 +230,7 @@ export async function seedDemoOperationalConfiguration(
             name: tableSeed.name,
           },
         },
-        update: {
-          minimumSeats: tableSeed.minimumSeats,
-          maximumSeats: tableSeed.maximumSeats,
-          displayOrder: index + 1,
-          isActive: true,
-        },
+        update: {},
         create: {
           roomId: room.id,
           name: tableSeed.name,
@@ -224,12 +258,7 @@ export async function seedDemoOperationalConfiguration(
               serviceType,
             },
           },
-          update: {
-            isEnabled: true,
-            startTime: operationalTimeToDatabase(serviceTimes.startTime),
-            endTime: operationalTimeToDatabase(serviceTimes.endTime),
-            slotIntervalMinutes: DEFAULT_SLOT_INTERVAL_MINUTES,
-          },
+          update: {},
           create: {
             restaurantId: DEMO_RESTAURANT_ID,
             dayOfWeek: DayOfWeek[dayOfWeekValue],
@@ -244,7 +273,12 @@ export async function seedDemoOperationalConfiguration(
     }
   }
 
-  return { settings, rooms, diningTables, weeklySchedules };
+  const bookingCutoffRules = await client.bookingCutoffRule.findMany({
+    where: { restaurantId: DEMO_RESTAURANT_ID },
+    orderBy: [{ dayOfWeek: "asc" }, { serviceType: "asc" }],
+  });
+
+  return { settings, rooms, diningTables, weeklySchedules, bookingCutoffRules };
 }
 
 export function resolveDemoUserPasswords(
@@ -276,18 +310,14 @@ export async function seedDemoUsers(
         username: normalizeUsername(DEMO_ADMIN_USERNAME),
       },
     },
-    update: {
-      passwordHash: adminPasswordHash,
-      role: UserRole.ADMIN,
-      isActive: true,
-      disabledAt: null,
-    },
+    update: {},
     create: {
       id: DEMO_ADMIN_ID,
       restaurantId: DEMO_RESTAURANT_ID,
       username: normalizeUsername(DEMO_ADMIN_USERNAME),
       passwordHash: adminPasswordHash,
       role: UserRole.ADMIN,
+      mustChangePassword: false,
     },
   });
   const staff = await client.user.upsert({
@@ -297,18 +327,14 @@ export async function seedDemoUsers(
         username: normalizeUsername(DEMO_STAFF_USERNAME),
       },
     },
-    update: {
-      passwordHash: staffPasswordHash,
-      role: UserRole.STAFF,
-      isActive: true,
-      disabledAt: null,
-    },
+    update: {},
     create: {
       id: DEMO_STAFF_ID,
       restaurantId: DEMO_RESTAURANT_ID,
       username: normalizeUsername(DEMO_STAFF_USERNAME),
       passwordHash: staffPasswordHash,
       role: UserRole.STAFF,
+      mustChangePassword: false,
     },
   });
 
@@ -322,8 +348,9 @@ export async function seedDemoData(
   const restaurant = await seedDemoRestaurant(client);
   const users = await seedDemoUsers(client, passwords);
   const configuration = await seedDemoOperationalConfiguration(client);
+  const publicConfiguration = await seedDemoPublicConfiguration(client);
 
-  return { restaurant, ...users, ...configuration };
+  return { restaurant, ...users, ...configuration, ...publicConfiguration };
 }
 
 async function main(): Promise<void> {
@@ -335,7 +362,7 @@ async function main(): Promise<void> {
 
   try {
     await seedDemoData(client, resolveDemoUserPasswords());
-    console.info("Demo restaurant, users and operational configuration seed completed.");
+    console.info("Demo restaurant seed completed.");
   } finally {
     await client.$disconnect();
   }
@@ -346,8 +373,10 @@ const entryPoint = process.argv[1]
   : undefined;
 
 if (entryPoint === import.meta.url) {
-  main().catch(() => {
-    console.error("Demo restaurant seed failed.");
+  main().catch((error: unknown) => {
+    const detail =
+      error instanceof Error ? `${error.name}: ${error.message}` : "Unknown error";
+    console.error(`Demo restaurant seed failed: ${detail}`);
     process.exit(1);
   });
 }

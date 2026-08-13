@@ -25,6 +25,12 @@ export default async function AdminTechnicalPage() {
         >
           Apri configurazione
         </Link>
+        <Link
+          className="mt-3 ml-3 inline-flex rounded-xl border border-orange-600 px-6 py-3 font-bold text-orange-700"
+          href="/admin/users"
+        >
+          Gestisci utenti
+        </Link>
         <form action="/api/auth/logout" className="mt-8" method="post">
           <button
             className="rounded-xl bg-zinc-950 px-6 py-3 font-bold text-white"

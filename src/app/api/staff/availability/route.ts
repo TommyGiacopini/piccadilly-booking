@@ -3,8 +3,12 @@ import { NextResponse } from "next/server";
 import { AvailabilityApplicationError } from "@/modules/availability/application/availability-errors";
 import { availabilityPreviewQuerySchema } from "@/modules/availability/application/availability-preview-query";
 import { getAvailabilityPreview } from "@/modules/availability/application/availability-service";
-import { listActivePublicRooms } from "@/modules/reservations/infrastructure/public-reservation-repository";
-import { getRequestUser } from "@/server/auth/authorization";
+import { listAvailableRoomsForService } from "@/modules/rooms/infrastructure/service-instance-repository";
+import {
+  getRequestUser,
+  passwordChangeRequiredResponse,
+} from "@/server/auth/authorization";
+import { prisma } from "@/server/db/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,6 +27,8 @@ export async function GET(request: Request): Promise<Response> {
   const user = await getRequestUser(request);
 
   if (!user) return noStoreJson({ error: "Unauthorized" }, 401);
+  const passwordGuard = passwordChangeRequiredResponse(user);
+  if (passwordGuard) return passwordGuard;
 
   try {
     const url = new URL(request.url);
@@ -46,16 +52,22 @@ export async function GET(request: Request): Promise<Response> {
       return noStoreJson({ error: "I parametri non sono validi." }, 400);
     }
 
+    const now = new Date();
     const availability = await getAvailabilityPreview({
       restaurantId: user.restaurantId,
       date: parsed.data.date,
       serviceType: parsed.data.service,
       partySize: parsed.data.partySize,
       channel: "STAFF",
-      now: new Date(),
+      now,
       includePersistentLoad: true,
     });
-    const rooms = await listActivePublicRooms(user.restaurantId);
+    const rooms = await listAvailableRoomsForService(prisma, {
+      restaurantId: user.restaurantId,
+      localDate: parsed.data.date,
+      serviceType: parsed.data.service,
+      now,
+    });
 
     return noStoreJson({ ...availability, rooms }, 200);
   } catch (error) {

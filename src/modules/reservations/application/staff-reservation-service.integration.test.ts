@@ -75,12 +75,6 @@ function bookingSettingsData(capacity = 4) {
     dinnerModificationCutoff: operationalTimeToDatabase(
       DEFAULT_BOOKING_CUTOFFS.dinnerModificationCutoff,
     ),
-    fridayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.fridayDinnerBookingCutoff,
-    ),
-    saturdayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.saturdayDinnerBookingCutoff,
-    ),
     managementLinkDurationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
   };
 }
@@ -286,6 +280,18 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
     await prisma.reservation.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
+    await prisma.serviceRoomAvailability.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.serviceInstance.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.restaurantBookingSettings.update({
+      where: { restaurantId },
+      data: {
+        managementLinkDurationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
+      },
+    });
   });
 
   afterAll(async () => {
@@ -293,6 +299,12 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
     await prisma.reservation.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.serviceRoomAvailability.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.serviceInstance.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
     await prisma.session.deleteMany({
@@ -369,6 +381,54 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
     expect(auditState).not.toContain("Dato fittizio");
     expect(auditState).not.toContain("Nota esclusivamente fittizia M8");
     expect(await prisma.reservation.count({ where: { restaurantId } })).toBe(1);
+  });
+
+  it("rolls back PHONE materialization, reservation, idempotency and audit when the final audit fails", async () => {
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION m9d_test_reject_phone_audit() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.restaurant_id = '${restaurantId}'::uuid AND NEW.action = 'CREATED' THEN
+          RAISE EXCEPTION 'synthetic M9-D phone audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER m9d_test_reject_phone_audit_trigger
+      BEFORE INSERT ON reservation_audit_events
+      FOR EACH ROW EXECUTE FUNCTION m9d_test_reject_phone_audit();
+    `);
+
+    try {
+      await expect(createPhone(staffActor)).rejects.toThrow(
+        "synthetic M9-D phone audit failure",
+      );
+    } finally {
+      await prisma.$executeRawUnsafe(
+        "DROP TRIGGER IF EXISTS m9d_test_reject_phone_audit_trigger ON reservation_audit_events",
+      );
+      await prisma.$executeRawUnsafe(
+        "DROP FUNCTION IF EXISTS m9d_test_reject_phone_audit()",
+      );
+    }
+
+    await expect(
+      prisma.serviceInstance.count({ where: { restaurantId } }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.serviceRoomAvailability.count({ where: { restaurantId } }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.reservation.count({ where: { restaurantId } }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.reservationIdempotencyKey.count({ where: { restaurantId } }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.reservationAuditEvent.count({ where: { restaurantId } }),
+    ).resolves.toBe(0);
   });
 
   it("requires verbal consent and rolls the idempotency record back on failure", async () => {
@@ -587,6 +647,51 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
     });
   });
 
+  it("grandfathers an unavailable room for unrelated edits and cancellation", async () => {
+    const created = await createPhone(staffActor);
+    await prisma.room.update({ where: { id: roomId }, data: { isActive: false } });
+
+    try {
+      const updated = await updateStaffReservation({
+        actor: staffActor,
+        reservationId: created.reservation.id,
+        rawPayload: updatePayload(created.reservation, {
+          customerPhone: "+39 000 000 0877",
+        }),
+        now,
+      });
+
+      expect(updated.reservation).toMatchObject({
+        roomCode: "sala-m8",
+        status: "CONFIRMED",
+        version: 2,
+      });
+      await expect(
+        updateStaffReservation({
+          actor: staffActor,
+          reservationId: created.reservation.id,
+          rawPayload: updatePayload(updated.reservation, {
+            localDate: movedDate,
+          }),
+          now,
+        }),
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      await expect(
+        cancelStaffReservation({
+          actor: staffActor,
+          reservationId: created.reservation.id,
+          rawPayload: { version: updated.reservation.version },
+          now,
+        }),
+      ).resolves.toMatchObject({
+        changed: true,
+        reservation: { roomCode: "sala-m8", status: "CANCELLED" },
+      });
+    } finally {
+      await prisma.room.update({ where: { id: roomId }, data: { isActive: true } });
+    }
+  });
+
   it("serializes concurrent PHONE creation without exceeding capacity", async () => {
     const attempts = await Promise.allSettled([
       createPhone(staffActor, {
@@ -666,7 +771,7 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
     ).toBe(keysBefore);
   });
 
-  it("updates the public token expiry when Staff moves a PUBLIC reservation", async () => {
+  it("preserves the original public token duration when Staff moves a PUBLIC reservation", async () => {
     const publicReservation = await createPublicReservation({
       restaurantId,
       managementSecret,
@@ -684,6 +789,10 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
     });
     const tokenBefore = await prisma.reservationManagementToken.findUniqueOrThrow({
       where: { reservationId: storedBefore.id },
+    });
+    await prisma.restaurantBookingSettings.update({
+      where: { restaurantId },
+      data: { managementLinkDurationHours: 6 },
     });
     const updated = await updateStaffReservation({
       actor: staffActor,

@@ -9,6 +9,7 @@ interface LoginPageProps {
   searchParams: Promise<{
     error?: string | string[];
     returnTo?: string | string[];
+    passwordChanged?: string | string[];
   }>;
 }
 
@@ -18,7 +19,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const currentUser = await getCurrentUser();
 
   if (currentUser) {
-    redirect(returnTo);
+    redirect(currentUser.mustChangePassword ? "/cambia-password" : returnTo);
   }
 
   const error = Array.isArray(parameters.error)
@@ -45,6 +46,12 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           <p className="mt-3 leading-6 text-zinc-600">
             Accedi con il tuo account individuale di servizio.
           </p>
+
+          {parameters.passwordChanged === "1" ? (
+            <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800" role="status">
+              Password aggiornata. Accedi di nuovo con la nuova password.
+            </div>
+          ) : null}
 
           {errorMessage ? (
             <div

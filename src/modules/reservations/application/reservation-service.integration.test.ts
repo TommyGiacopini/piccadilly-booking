@@ -80,12 +80,6 @@ function bookingSettingsData(capacity: number) {
     dinnerModificationCutoff: operationalTimeToDatabase(
       DEFAULT_BOOKING_CUTOFFS.dinnerModificationCutoff,
     ),
-    fridayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.fridayDinnerBookingCutoff,
-    ),
-    saturdayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.saturdayDinnerBookingCutoff,
-    ),
   };
 }
 
@@ -351,6 +345,12 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
     await prisma.reservation.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
+    await prisma.serviceRoomAvailability.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.serviceInstance.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
   });
 
   afterAll(async () => {
@@ -361,6 +361,12 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
     await prisma.reservation.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.serviceRoomAvailability.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.serviceInstance.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
     await prisma.user.deleteMany({

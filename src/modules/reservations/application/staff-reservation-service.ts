@@ -5,21 +5,25 @@ import { randomUUID } from "node:crypto";
 import { calculateAvailability } from "@/modules/availability/domain/availability-engine";
 import type { AvailabilityReason } from "@/modules/availability/domain/types";
 import { operationalTimeToMinutes } from "@/modules/configuration/domain/operational-time";
-import { managementViewExpiry } from "@/modules/reservations/domain/management-time";
+import {
+  managementViewExpiry,
+  originalManagementLinkDurationHours,
+} from "@/modules/reservations/domain/management-time";
 import {
   classifyIdempotencyRequest,
   hashIdempotencyKey,
   hashReservationRequest,
 } from "@/modules/reservations/domain/idempotency";
 import {
+  parsePublicPreferences,
   serializePublicAllergies,
   serializePublicPreferences,
 } from "@/modules/reservations/domain/public-validation";
 import {
-  staffAuditSnapshot,
   toStaffReservationDto,
   type StaffReservationDto,
 } from "@/modules/reservations/domain/staff-dto";
+import { reservationAuditSnapshot } from "@/modules/reservations/domain/reservation-audit-snapshot";
 import {
   phoneReservationSchema,
   staffCancelReservationSchema,
@@ -34,7 +38,7 @@ import type {
 import { idempotencyKeySchema } from "@/modules/reservations/domain/validation";
 import { ReservationApplicationError } from "@/modules/reservations/application/reservation-errors";
 import {
-  findActivePublicRoom,
+  findManagementTokenByReservationId,
   readPublicManagementSettings,
 } from "@/modules/reservations/infrastructure/public-reservation-repository";
 import {
@@ -60,6 +64,10 @@ import {
   updatePublicManagementExpiry,
   updateReservationForStaff,
 } from "@/modules/reservations/infrastructure/staff-reservation-repository";
+import {
+  findAvailableRoomForService,
+  materializeServiceInstance,
+} from "@/modules/rooms/infrastructure/service-instance-repository";
 import {
   resolveReservationConfig,
   type ReservationConfig,
@@ -254,10 +262,10 @@ function assertStaffSlot(input: {
 }
 
 function staffAuditState(
-  reservation: Parameters<typeof staffAuditSnapshot>[0],
+  reservation: Parameters<typeof reservationAuditSnapshot>[0],
   overrideResult: CapacityOverrideAuditResult | null,
 ) {
-  const snapshot = staffAuditSnapshot(reservation);
+  const snapshot = reservationAuditSnapshot(reservation);
 
   return overrideResult
     ? { ...snapshot, capacityOverrideResult: overrideResult }
@@ -265,7 +273,7 @@ function staffAuditState(
 }
 
 function isSameStaffReservationState(input: {
-  current: Parameters<typeof staffAuditSnapshot>[0];
+  current: Parameters<typeof reservationAuditSnapshot>[0];
   command: StaffUpdateReservationInput;
   preferences: string;
   allergies: string;
@@ -385,9 +393,12 @@ export async function createPhoneReservation(input: {
       localDate: command.localDate,
       serviceType: command.serviceType,
     });
-    const room = await findActivePublicRoom(client, {
+    const room = await findAvailableRoomForService(client, {
       restaurantId: input.actor.restaurantId,
       roomCode: parsed.command.roomCode,
+      localDate: command.localDate,
+      serviceType: command.serviceType,
+      now,
     });
 
     if (!configuration) {
@@ -414,6 +425,11 @@ export async function createPhoneReservation(input: {
       command,
       privacyPolicyVersion: config.privacyPolicyVersion,
       privacyConsentAt: now,
+    });
+    await materializeServiceInstance(client, {
+      restaurantId: input.actor.restaurantId,
+      localDate: command.localDate,
+      serviceType: command.serviceType,
     });
     await attachReservationToIdempotencyKey(
       client,
@@ -537,10 +553,20 @@ export async function updateStaffReservation(input: {
           excludeReservationId: current.id,
         })
       : [];
-    const room = await findActivePublicRoom(client, {
-      restaurantId: input.actor.restaurantId,
-      roomCode: command.roomCode,
-    });
+    const currentRoomCode = parsePublicPreferences(current.preferences).roomCode;
+    const roomSelectionChanged =
+      current.localDate !== command.localDate ||
+      current.serviceType !== command.serviceType ||
+      currentRoomCode !== command.roomCode;
+    const room = roomSelectionChanged
+      ? await findAvailableRoomForService(client, {
+          restaurantId: input.actor.restaurantId,
+          roomCode: command.roomCode,
+          localDate: command.localDate,
+          serviceType: command.serviceType,
+          now,
+        })
+      : true;
 
     if (capacityChanged && !configuration) {
       throw new ReservationApplicationError(
@@ -584,6 +610,44 @@ export async function updateStaffReservation(input: {
       return { reservation: toStaffReservationDto(current), changed: false };
     }
 
+    const publicScheduleChanged =
+      current.origin === "PUBLIC" &&
+      (current.localDate !== command.localDate ||
+        current.serviceType !== command.serviceType ||
+        current.arrivalTime !== command.arrivalTime);
+    let publicLinkContext:
+      | { timezone: string; originalDurationHours: number }
+      | null = null;
+
+    if (publicScheduleChanged) {
+      const [settings, token] = await Promise.all([
+        readPublicManagementSettings(client, input.actor.restaurantId),
+        findManagementTokenByReservationId(client, current.id),
+      ]);
+      if (!settings || !token) {
+        throw new ReservationApplicationError(
+          "CONFIGURATION_INVALID",
+          "Il link personale della prenotazione non è disponibile.",
+        );
+      }
+      try {
+        publicLinkContext = {
+          timezone: settings.timezone,
+          originalDurationHours: originalManagementLinkDurationHours({
+            localDate: current.localDate,
+            arrivalTime: current.arrivalTime,
+            timezone: settings.timezone,
+            viewExpiresAt: token.viewExpiresAt,
+          }),
+        };
+      } catch {
+        throw new ReservationApplicationError(
+          "CONFIGURATION_INVALID",
+          "La durata originaria del link personale non è coerente.",
+        );
+      }
+    }
+
     const updated = await updateReservationForStaff(client, {
       reservationId: current.id,
       restaurantId: input.actor.restaurantId,
@@ -601,28 +665,22 @@ export async function updateStaffReservation(input: {
     }
 
     if (
-      current.origin === "PUBLIC" &&
-      (current.localDate !== updated.localDate ||
-        current.serviceType !== updated.serviceType ||
-        current.arrivalTime !== updated.arrivalTime)
+      current.localDate !== command.localDate ||
+      current.serviceType !== command.serviceType
     ) {
-      const settings = await readPublicManagementSettings(
-        client,
-        input.actor.restaurantId,
-      );
+      await materializeServiceInstance(client, {
+        restaurantId: input.actor.restaurantId,
+        localDate: command.localDate,
+        serviceType: command.serviceType,
+      });
+    }
 
-      if (!settings) {
-        throw new ReservationApplicationError(
-          "CONFIGURATION_INVALID",
-          "La configurazione del link personale non è disponibile.",
-        );
-      }
-
+    if (publicLinkContext) {
       const expiry = managementViewExpiry({
         localDate: updated.localDate,
         arrivalTime: updated.arrivalTime,
-        timezone: settings.timezone,
-        durationHours: settings.managementLinkDurationHours,
+        timezone: publicLinkContext.timezone,
+        durationHours: publicLinkContext.originalDurationHours,
       });
       const tokenUpdated = await updatePublicManagementExpiry(
         client,
@@ -644,7 +702,7 @@ export async function updateStaffReservation(input: {
       action: "UPDATED",
       actorOrigin: "STAFF",
       correlationId: randomUUID(),
-      previousState: staffAuditSnapshot(current),
+      previousState: reservationAuditSnapshot(current),
       newState: staffAuditState(updated, overrideResult),
       capacityOverride: overrideResult !== null,
       capacityOverrideReason: overrideResult
@@ -723,8 +781,8 @@ export async function cancelStaffReservation(input: {
       action: "CANCELLED",
       actorOrigin: "STAFF",
       correlationId: randomUUID(),
-      previousState: staffAuditSnapshot(current),
-      newState: staffAuditSnapshot(cancelled),
+      previousState: reservationAuditSnapshot(current),
+      newState: reservationAuditSnapshot(cancelled),
       capacityOverride: false,
       capacityOverrideReason: null,
       createdAt: now,

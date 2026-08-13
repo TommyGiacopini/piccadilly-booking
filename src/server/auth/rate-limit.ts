@@ -15,6 +15,47 @@ export interface LoginRateLimitStatus {
   retryAt: Date | null;
 }
 
+export async function recordFailedLoginAttemptInTransaction(
+  keyHash: string,
+  config: AuthConfig,
+  now: Date,
+  client: RateLimitClient,
+): Promise<LoginRateLimitStatus> {
+  const entry = await client.loginRateLimit.findUnique({
+    where: { keyHash },
+  });
+  const windowExpired =
+    !entry ||
+    entry.expiresAt.getTime() <= now.getTime() ||
+    entry.windowStartedAt.getTime() + config.rateLimitWindowMs <= now.getTime();
+  const windowStartedAt = windowExpired ? now : entry.windowStartedAt;
+  const attempts = windowExpired ? 1 : entry.attempts + 1;
+  const blockedUntil =
+    attempts >= config.rateLimitMaxAttempts
+      ? new Date(now.getTime() + config.rateLimitBlockMs)
+      : null;
+  const expiresAt =
+    blockedUntil ??
+    new Date(windowStartedAt.getTime() + config.rateLimitWindowMs);
+
+  await client.loginRateLimit.upsert({
+    where: { keyHash },
+    update: { attempts, windowStartedAt, blockedUntil, expiresAt },
+    create: {
+      keyHash,
+      attempts,
+      windowStartedAt,
+      blockedUntil,
+      expiresAt,
+    },
+  });
+
+  return {
+    allowed: blockedUntil === null,
+    retryAt: blockedUntil,
+  };
+}
+
 export async function cleanupExpiredLoginRateLimits(
   now: Date = new Date(),
   client: RateLimitClient = prisma,
@@ -55,42 +96,13 @@ export async function recordFailedLoginAttempt(
   for (let transactionAttempt = 1; transactionAttempt <= 3; transactionAttempt += 1) {
     try {
       return await client.$transaction(
-        async (transaction) => {
-          const entry = await transaction.loginRateLimit.findUnique({
-            where: { keyHash },
-          });
-          const windowExpired =
-            !entry ||
-            entry.expiresAt.getTime() <= now.getTime() ||
-            entry.windowStartedAt.getTime() + config.rateLimitWindowMs <=
-              now.getTime();
-          const windowStartedAt = windowExpired ? now : entry.windowStartedAt;
-          const attempts = windowExpired ? 1 : entry.attempts + 1;
-          const blockedUntil =
-            attempts >= config.rateLimitMaxAttempts
-              ? new Date(now.getTime() + config.rateLimitBlockMs)
-              : null;
-          const expiresAt =
-            blockedUntil ??
-            new Date(windowStartedAt.getTime() + config.rateLimitWindowMs);
-
-          await transaction.loginRateLimit.upsert({
-            where: { keyHash },
-            update: { attempts, windowStartedAt, blockedUntil, expiresAt },
-            create: {
-              keyHash,
-              attempts,
-              windowStartedAt,
-              blockedUntil,
-              expiresAt,
-            },
-          });
-
-          return {
-            allowed: blockedUntil === null,
-            retryAt: blockedUntil,
-          };
-        },
+        (transaction) =>
+          recordFailedLoginAttemptInTransaction(
+            keyHash,
+            config,
+            now,
+            transaction,
+          ),
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
     } catch (error) {

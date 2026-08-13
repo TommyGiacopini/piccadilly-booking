@@ -43,13 +43,17 @@ export interface SpecialDateAvailabilityRule {
 export interface RestaurantAvailabilitySettings {
   rollingCapacityCovers: number;
   rollingWindowMinutes: number;
-  fridayDinnerBookingCutoff: string;
-  saturdayDinnerBookingCutoff: string;
+}
+
+export interface PublicBookingCutoffRule {
+  isEnabled: boolean;
+  cutoffTime: string;
 }
 
 export interface AvailabilityConfigurationInput {
   timezone: string;
   settings: RestaurantAvailabilitySettings | null;
+  bookingCutoffRule: PublicBookingCutoffRule | null;
   weeklyRule: WeeklyAvailabilityRule | null;
   allDateOverride: SpecialDateAvailabilityRule | null;
   serviceDateOverride: SpecialDateAvailabilityRule | null;

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { resolveAuthConfig } from "@/server/auth/auth-config";
+import { revokeSessionWithAudit } from "@/server/auth/authentication-audit";
 import { isSameOriginRequest } from "@/server/auth/request-security";
-import { revokeSessionToken } from "@/server/auth/session";
 import {
   getSessionCookieName,
   getSessionCookieOptions,
@@ -28,7 +28,10 @@ export async function POST(request: Request): Promise<Response> {
     .find((cookie) => cookie.startsWith(`${cookieName}=`))
     ?.slice(cookieName.length + 1);
 
-  await revokeSessionToken(sessionToken);
+  await revokeSessionWithAudit({
+    restaurantId: config.restaurantId,
+    rawToken: sessionToken,
+  });
 
   const response = NextResponse.redirect(new URL("/login", request.url), {
     status: 303,

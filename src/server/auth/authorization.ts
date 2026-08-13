@@ -2,6 +2,7 @@ import "server-only";
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { NextResponse } from "next/server";
 
 import { UserRole } from "@/generated/prisma/client";
 import { getSessionCookieName } from "@/server/auth/session-token";
@@ -29,6 +30,18 @@ export async function getCurrentUser(): Promise<AuthenticatedUser | null> {
 export async function requireAuthenticatedUser(
   returnTo = "/dashboard",
 ): Promise<AuthenticatedUser> {
+  const user = await requireSessionUser(returnTo);
+
+  if (user.mustChangePassword) {
+    redirect("/cambia-password");
+  }
+
+  return user;
+}
+
+export async function requireSessionUser(
+  returnTo = "/cambia-password",
+): Promise<AuthenticatedUser> {
   const user = await getCurrentUser();
 
   if (!user || !canAccessStaffArea(user.role)) {
@@ -36,6 +49,20 @@ export async function requireAuthenticatedUser(
   }
 
   return user;
+}
+
+export function passwordChangeRequiredResponse(
+  user: AuthenticatedUser,
+): NextResponse | null {
+  if (!user.mustChangePassword) return null;
+
+  return NextResponse.json(
+    { error: "PASSWORD_CHANGE_REQUIRED" },
+    {
+      status: 403,
+      headers: { "Cache-Control": "no-store, max-age=0" },
+    },
+  );
 }
 
 export async function requireAdmin(

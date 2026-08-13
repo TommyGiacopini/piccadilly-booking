@@ -4,14 +4,14 @@ import { NextResponse } from "next/server";
 import { ConfigurationError } from "@/modules/configuration/application/configuration-errors";
 import {
   createSpecialDate,
-  deleteSpecialDate,
-  updateBookingSettings,
-  updateDiningTable,
-  updateRoom,
+  archiveSpecialDate,
+  reactivateSpecialDate,
   updateSpecialDate,
-  updateWeeklySchedule,
 } from "@/modules/configuration/application/configuration-service";
-import { getRequestUser } from "@/server/auth/authorization";
+import {
+  getRequestUser,
+  passwordChangeRequiredResponse,
+} from "@/server/auth/authorization";
 import { resolveAuthConfig } from "@/server/auth/auth-config";
 import { isSameOriginRequest } from "@/server/auth/request-security";
 
@@ -19,13 +19,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ACTION_DESTINATIONS: Record<string, string> = {
-  "update-settings": "/admin/configuration",
-  "update-room": "/admin/rooms",
-  "update-table": "/admin/rooms",
-  "update-schedule": "/admin/schedules",
   "create-special-date": "/admin/special-dates",
   "update-special-date": "/admin/special-dates",
-  "delete-special-date": "/admin/special-dates",
+  "archive-special-date": "/admin/special-dates",
+  "reactivate-special-date": "/admin/special-dates",
 };
 
 function formValue(formData: FormData, name: string): string | undefined {
@@ -54,7 +51,7 @@ function prefersJson(request: Request): boolean {
 function controlledResponse(
   request: Request,
   destination: string,
-  status: "saved" | "deleted" | "error",
+  status: "saved" | "archived" | "reactivated" | "error",
   message?: string,
 ): Response {
   if (prefersJson(request)) {
@@ -86,6 +83,8 @@ export async function POST(request: Request): Promise<Response> {
   if (!user) {
     return new Response("Unauthorized", { status: 401 });
   }
+  const passwordGuard = passwordChangeRequiredResponse(user);
+  if (passwordGuard) return passwordGuard;
 
   if (user.role !== "ADMIN") {
     return new Response("Forbidden", { status: 403 });
@@ -107,77 +106,24 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const actor = {
+    id: user.id,
     restaurantId: user.restaurantId,
     role: user.role,
   } as const;
 
   try {
     switch (action) {
-      case "update-settings":
-        await updateBookingSettings(actor, {
-          rollingCapacityCovers: formValue(
-            formData,
-            "rollingCapacityCovers",
-          ),
-          rollingWindowMinutes: formValue(formData, "rollingWindowMinutes"),
-          lunchModificationCutoff: formValue(
-            formData,
-            "lunchModificationCutoff",
-          ),
-          dinnerModificationCutoff: formValue(
-            formData,
-            "dinnerModificationCutoff",
-          ),
-          fridayDinnerBookingCutoff: formValue(
-            formData,
-            "fridayDinnerBookingCutoff",
-          ),
-          saturdayDinnerBookingCutoff: formValue(
-            formData,
-            "saturdayDinnerBookingCutoff",
-          ),
-          managementLinkDurationHours: formValue(
-            formData,
-            "managementLinkDurationHours",
-          ),
-        });
-        break;
-      case "update-room":
-        await updateRoom(actor, {
-          id: formValue(formData, "id"),
-          displayOrder: formValue(formData, "displayOrder"),
-          isActive: formValue(formData, "isActive"),
-        });
-        break;
-      case "update-table":
-        await updateDiningTable(actor, {
-          id: formValue(formData, "id"),
-          name: formValue(formData, "name"),
-          minimumSeats: formValue(formData, "minimumSeats"),
-          maximumSeats: formValue(formData, "maximumSeats"),
-          displayOrder: formValue(formData, "displayOrder"),
-          isActive: formValue(formData, "isActive"),
-        });
-        break;
-      case "update-schedule":
-        await updateWeeklySchedule(actor, {
-          id: formValue(formData, "id"),
-          dayOfWeek: formValue(formData, "dayOfWeek"),
-          serviceType: formValue(formData, "serviceType"),
-          isEnabled: formValue(formData, "isEnabled"),
-          startTime: formValue(formData, "startTime"),
-          endTime: formValue(formData, "endTime"),
-          slotIntervalMinutes: formValue(formData, "slotIntervalMinutes"),
-        });
-        break;
       case "create-special-date":
         await createSpecialDate(actor, specialDateInput(formData));
         break;
       case "update-special-date":
         await updateSpecialDate(actor, specialDateInput(formData));
         break;
-      case "delete-special-date":
-        await deleteSpecialDate(actor, { id: formValue(formData, "id") });
+      case "archive-special-date":
+        await archiveSpecialDate(actor, { id: formValue(formData, "id") });
+        break;
+      case "reactivate-special-date":
+        await reactivateSpecialDate(actor, { id: formValue(formData, "id") });
         break;
     }
   } catch (error) {
@@ -203,6 +149,10 @@ export async function POST(request: Request): Promise<Response> {
   return controlledResponse(
     request,
     destination,
-    action === "delete-special-date" ? "deleted" : "saved",
+    action === "archive-special-date"
+      ? "archived"
+      : action === "reactivate-special-date"
+        ? "reactivated"
+        : "saved",
   );
 }

@@ -2,6 +2,7 @@
 
 **Stato:** accettato
 **Data:** 31 luglio 2026
+**Aggiornamento:** 12 agosto 2026 — D-021, M9-C
 
 ## Contesto
 
@@ -33,16 +34,18 @@ Esempio:
 - 19:15 include arrivi alle 19:15 e 19:30;
 - 19:30 include arrivi alle 19:30 e 19:45.
 
-Il limite iniziale è 30 ed è configurabile dall'Admin. Tipo e durata della finestra non sono configurabili nella prima versione.
+Il limite iniziale è 30 ed è l'unico valore configurabile dall'Admin. L'intervallo degli slot è fisso a 15 minuti e la finestra mobile è fissa a 30 minuti nella prima versione. La UI amministrativa M9-C li mostra come valori informativi non editabili; validazione server e vincoli PostgreSQL rifiutano ogni valore differente.
+
+Quando l'Admin riduce il limite, M9-C calcola l'impatto sulle finestre mobili reali usando soltanto prenotazioni future confermate. Le prenotazioni annullate non contano, le eccezioni attive di capacità conservano la precedenza e la conferma non modifica le prenotazioni esistenti.
 
 ### Serializzazione delle scritture
 
-Ogni servizio concreto di una data dispone di una riga `service_instances`.
+Un servizio può restare virtuale senza riga `service_instances`. Il lock advisory PostgreSQL deriva sempre da `restaurantId + localDate + serviceType` e quindi non dipende dall'esistenza preventiva dell'istanza.
 
 Tutte le operazioni che cambiano i coperti:
 
 1. aprono una transazione breve;
-2. acquisiscono un lock sulla riga del servizio;
+2. acquisiscono il lock advisory del servizio;
 3. rileggono configurazione e prenotazioni confermate;
 4. controllano tutte le finestre influenzate;
 5. inseriscono, modificano o cancellano logicamente;
@@ -50,6 +53,8 @@ Tutte le operazioni che cambiano i coperti:
 7. eseguono il commit.
 
 Per uno spostamento fra servizi, le due righe vengono bloccate in ordine deterministico. Gli errori di serializzazione o deadlock sono ritentati un numero limitato di volte.
+
+M9-D riutilizza lo stesso lock per la materializzazione lazy: dopo il lock rilegge l'identità, crea al massimo una `ServiceInstance` e inizializza tutte le righe sala in ordine deterministico. Prenotazione, materializzazione e audit esistente condividono la transazione `SERIALIZABLE` e il commit.
 
 Nessuna chiamata di rete, notifica o generazione di file viene eseguita dentro la transazione.
 

@@ -12,8 +12,7 @@ export const DEFAULT_SERVICE_TIMES = {
 export const DEFAULT_BOOKING_CUTOFFS = {
   lunchModificationCutoff: "10:30",
   dinnerModificationCutoff: "17:30",
-  fridayDinnerBookingCutoff: "17:30",
-  saturdayDinnerBookingCutoff: "17:30",
+  publicBookingCutoffTime: "17:30",
 } as const;
 
 export const DAY_OF_WEEK_VALUES = [
@@ -54,9 +53,9 @@ export const SPECIAL_DATE_SCOPE_LABELS: Record<
 };
 
 export const DEMO_ROOMS = [
-  { name: "Sala 1", code: "sala-1", displayOrder: 1 },
-  { name: "Sala 2", code: "sala-2", displayOrder: 2 },
-  { name: "Sala 3", code: "sala-3", displayOrder: 3 },
-  { name: "Galleria", code: "galleria", displayOrder: 4 },
-  { name: "Terrazzo", code: "terrazzo", displayOrder: 5 },
+  { name: "Sala 1", code: "sala-1", displayOrder: 1, serviceAvailabilityPolicy: "DEFAULT_AVAILABLE" },
+  { name: "Sala 2", code: "sala-2", displayOrder: 2, serviceAvailabilityPolicy: "DEFAULT_AVAILABLE" },
+  { name: "Sala 3", code: "sala-3", displayOrder: 3, serviceAvailabilityPolicy: "DEFAULT_AVAILABLE" },
+  { name: "Galleria", code: "galleria", displayOrder: 4, serviceAvailabilityPolicy: "EXPLICIT_ONLY" },
+  { name: "Terrazzo", code: "terrazzo", displayOrder: 5, serviceAvailabilityPolicy: "EXPLICIT_ONLY" },
 ] as const;

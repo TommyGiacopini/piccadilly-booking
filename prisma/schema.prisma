@@ -17,6 +17,11 @@ enum ServiceType {
   DINNER
 }
 
+enum RoomServiceAvailabilityPolicy {
+  DEFAULT_AVAILABLE
+  EXPLICIT_ONLY
+}
+
 enum DayOfWeek {
   MONDAY
   TUESDAY
@@ -64,6 +69,21 @@ enum ReservationAuditAction {
   CANCELLED
 }
 
+enum PublicContentLocale {
+  IT
+  EN
+}
+
+enum PublicContentKey {
+  BOOKING_PAGE_TITLE
+  BOOKING_PAGE_INTRO
+  UNAVAILABLE_MESSAGE
+  CONTACT_PROMPT
+  CONFIRMATION_MESSAGE
+  MANAGEMENT_PAGE_TITLE
+  MANAGEMENT_PAGE_INTRO
+}
+
 model Restaurant {
   id                          String                       @id @default(uuid()) @db.Uuid
   name                        String
@@ -74,31 +94,102 @@ model Restaurant {
   rooms                       Room[]
   weeklySchedules             WeeklyServiceSchedule[]
   bookingSettings             RestaurantBookingSettings?
+  bookingCutoffRules          BookingCutoffRule[]
   specialDateOverrides        SpecialDateOverride[]
   reservations                Reservation[]
   reservationIdempotencyKeys  ReservationIdempotencyKey[]
   publicReservationRateLimits PublicReservationRateLimit[]
   reservationAuditEvents      ReservationAuditEvent[]
+  auditEvents                 AuditEvent[]
+  serviceInstances            ServiceInstance[]
+  publicSettings              RestaurantPublicSettings?
+  publicContents              PublicContent[]
 
   @@map("restaurants")
 }
 
+model RestaurantPublicSettings {
+  restaurantId         String     @id @map("restaurant_id") @db.Uuid
+  publicPhone          String     @map("public_phone") @db.VarChar(16)
+  publicBookingBaseUrl String     @map("public_booking_base_url") @db.VarChar(255)
+  publicEmail          String?    @map("public_email") @db.VarChar(254)
+  whatsappNumber       String?    @map("whatsapp_number") @db.VarChar(16)
+  createdAt            DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  restaurant           Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+
+  @@index([restaurantId], map: "restaurant_public_settings_restaurant_idx")
+  @@map("restaurant_public_settings")
+}
+
+model PublicContent {
+  id           String              @id @default(uuid()) @db.Uuid
+  restaurantId String              @map("restaurant_id") @db.Uuid
+  locale       PublicContentLocale
+  contentKey   PublicContentKey    @map("content_key")
+  contentText  String              @map("content_text") @db.Text
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  restaurant   Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+
+  @@unique([restaurantId, locale, contentKey], map: "public_contents_restaurant_locale_key_key")
+  @@index([restaurantId, locale, contentKey], map: "public_contents_restaurant_locale_key_idx")
+  @@map("public_contents")
+}
+
 model Room {
-  id           String        @id @default(uuid()) @db.Uuid
-  restaurantId String        @map("restaurant_id") @db.Uuid
-  name         String        @db.VarChar(80)
-  code         String        @db.VarChar(80)
-  displayOrder Int           @default(0) @map("display_order")
-  isActive     Boolean       @default(true) @map("is_active")
-  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
-  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  diningTables DiningTable[]
+  id                        String                        @id @default(uuid()) @db.Uuid
+  restaurantId              String                        @map("restaurant_id") @db.Uuid
+  name                      String                        @db.VarChar(80)
+  code                      String                        @db.VarChar(80)
+  serviceAvailabilityPolicy RoomServiceAvailabilityPolicy @default(DEFAULT_AVAILABLE) @map("service_availability_policy")
+  displayOrder              Int                           @default(0) @map("display_order")
+  isActive                  Boolean                       @default(true) @map("is_active")
+  createdAt                 DateTime                      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  restaurant                Restaurant                    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  diningTables              DiningTable[]
+  serviceAvailabilities     ServiceRoomAvailability[]
 
   @@unique([restaurantId, code], map: "rooms_restaurant_id_code_key")
   @@unique([restaurantId, name], map: "rooms_restaurant_id_name_key")
+  @@unique([restaurantId, id], map: "rooms_restaurant_id_id_key")
   @@index([restaurantId, isActive, displayOrder], map: "rooms_restaurant_active_order_idx")
   @@map("rooms")
+}
+
+model ServiceInstance {
+  id                 String                    @id @default(uuid()) @db.Uuid
+  restaurantId       String                    @map("restaurant_id") @db.Uuid
+  localDate          DateTime                  @map("local_date") @db.Date
+  serviceType        ServiceType               @map("service_type")
+  version            Int                       @default(1)
+  createdAt          DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  restaurant         Restaurant                @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  roomAvailabilities ServiceRoomAvailability[]
+
+  @@unique([restaurantId, localDate, serviceType], map: "service_instances_restaurant_date_service_key")
+  @@unique([restaurantId, id], map: "service_instances_restaurant_id_id_key")
+  @@index([restaurantId, localDate, serviceType], map: "service_instances_restaurant_date_service_idx")
+  @@map("service_instances")
+}
+
+model ServiceRoomAvailability {
+  id                String          @id @default(uuid()) @db.Uuid
+  restaurantId      String          @map("restaurant_id") @db.Uuid
+  serviceInstanceId String          @map("service_instance_id") @db.Uuid
+  roomId            String          @map("room_id") @db.Uuid
+  isAvailable       Boolean         @map("is_available")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  serviceInstance   ServiceInstance @relation(fields: [restaurantId, serviceInstanceId], references: [restaurantId, id], onDelete: Restrict, map: "service_room_availability_restaurant_instance_fkey")
+  room              Room            @relation(fields: [restaurantId, roomId], references: [restaurantId, id], onDelete: Restrict, map: "service_room_availability_restaurant_room_fkey")
+
+  @@unique([serviceInstanceId, roomId], map: "service_room_availability_instance_room_key")
+  @@index([restaurantId, serviceInstanceId], map: "service_room_availability_restaurant_instance_idx")
+  @@index([restaurantId, roomId], map: "service_room_availability_restaurant_room_idx")
+  @@map("service_room_availability")
 }
 
 model DiningTable {
@@ -142,14 +233,28 @@ model RestaurantBookingSettings {
   rollingWindowMinutes        Int        @map("rolling_window_minutes")
   lunchModificationCutoff     DateTime   @map("lunch_modification_cutoff") @db.Time(0)
   dinnerModificationCutoff    DateTime   @map("dinner_modification_cutoff") @db.Time(0)
-  fridayDinnerBookingCutoff   DateTime   @map("friday_dinner_booking_cutoff") @db.Time(0)
-  saturdayDinnerBookingCutoff DateTime   @map("saturday_dinner_booking_cutoff") @db.Time(0)
   managementLinkDurationHours Int        @default(24) @map("management_link_duration_hours")
   createdAt                   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
   restaurant                  Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
   @@map("restaurant_booking_settings")
+}
+
+model BookingCutoffRule {
+  id           String      @id @default(uuid()) @db.Uuid
+  restaurantId String      @map("restaurant_id") @db.Uuid
+  dayOfWeek    DayOfWeek   @map("day_of_week")
+  serviceType  ServiceType @map("service_type")
+  isEnabled    Boolean     @default(false) @map("is_enabled")
+  cutoffTime   DateTime    @map("cutoff_time") @db.Time(0)
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  restaurant   Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, dayOfWeek, serviceType], map: "booking_cutoff_rules_restaurant_day_service_key")
+  @@index([restaurantId, isEnabled, dayOfWeek, serviceType], map: "booking_cutoff_rules_restaurant_enabled_idx")
+  @@map("booking_cutoff_rules")
 }
 
 model SpecialDateOverride {
@@ -164,10 +269,11 @@ model SpecialDateOverride {
   operationalNotes      String?          @map("operational_notes") @db.VarChar(500)
   createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  archivedAt            DateTime?        @map("archived_at") @db.Timestamptz(3)
   restaurant            Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
   @@unique([restaurantId, date, scope], map: "special_dates_restaurant_date_scope_key")
-  @@index([restaurantId, date], map: "special_dates_restaurant_date_idx")
+  @@index([restaurantId, date, archivedAt], map: "special_dates_restaurant_date_archived_idx")
   @@map("special_date_overrides")
 }
 
@@ -178,6 +284,7 @@ model User {
   passwordHash           String                  @map("password_hash") @db.VarChar(255)
   role                   UserRole
   isActive               Boolean                 @default(true) @map("is_active")
+  mustChangePassword     Boolean                 @default(false) @map("must_change_password")
   createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
   disabledAt             DateTime?               @map("disabled_at") @db.Timestamptz(3)
@@ -185,6 +292,7 @@ model User {
   sessions               Session[]
   createdReservations    Reservation[]
   reservationAuditEvents ReservationAuditEvent[] @relation("ReservationAuditActor")
+  auditEvents            AuditEvent[]            @relation("AuditEventActor")
 
   @@unique([restaurantId, username], map: "users_restaurant_id_username_key")
   @@index([restaurantId, role, isActive], map: "users_restaurant_role_active_idx")
@@ -326,4 +434,28 @@ model ReservationAuditEvent {
   @@index([restaurantId, createdAt], map: "reservation_audit_events_restaurant_created_idx")
   @@index([actorUserId, createdAt], map: "reservation_audit_events_actor_created_idx")
   @@map("reservation_audit_events")
+}
+
+model AuditEvent {
+  id            String     @id @default(uuid()) @db.Uuid
+  restaurantId  String     @map("restaurant_id") @db.Uuid
+  category      String     @db.VarChar(32)
+  action        String     @db.VarChar(64)
+  outcome       String     @db.VarChar(16)
+  actorUserId   String?    @map("actor_user_id") @db.Uuid
+  actorRole     UserRole?  @map("actor_role")
+  entityType    String?    @map("entity_type") @db.VarChar(64)
+  entityId      String?    @map("entity_id") @db.Uuid
+  correlationId String     @map("correlation_id") @db.Uuid
+  previousState Json?      @map("previous_state")
+  newState      Json?      @map("new_state")
+  metadata      Json?
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  actorUser     User?      @relation("AuditEventActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([restaurantId, createdAt], map: "audit_events_restaurant_created_idx")
+  @@index([restaurantId, category, action, createdAt], map: "audit_events_category_action_idx")
+  @@index([actorUserId, createdAt], map: "audit_events_actor_created_idx")
+  @@map("audit_events")
 }

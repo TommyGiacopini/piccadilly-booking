@@ -8,10 +8,10 @@ import {
   PublicReservationError,
 } from "@/modules/reservations/application/public-reservation-errors";
 import {
-  publicAuditSnapshot,
   toPublicReservationDto,
   type PublicReservationDto,
 } from "@/modules/reservations/domain/public-dto";
+import { reservationAuditSnapshot } from "@/modules/reservations/domain/reservation-audit-snapshot";
 import { hashPublicReservationRequest } from "@/modules/reservations/domain/public-idempotency";
 import {
   deriveManagementToken,
@@ -22,10 +22,12 @@ import {
 import {
   isBeforeModificationCutoff,
   managementViewExpiry,
+  originalManagementLinkDurationHours,
 } from "@/modules/reservations/domain/management-time";
 import {
   publicCreateReservationSchema,
   publicUpdateReservationSchema,
+  parsePublicPreferences,
   type PublicCreateReservationInput,
   type PublicUpdateReservationInput,
 } from "@/modules/reservations/domain/public-validation";
@@ -45,7 +47,6 @@ import {
 } from "@/modules/reservations/infrastructure/reservation-repository";
 import {
   cancelPublicReservation,
-  findActivePublicRoom,
   findManagementTokenByReservationId,
   findPublicReservationAccess,
   insertManagementToken,
@@ -56,6 +57,10 @@ import {
   type PublicManagementSettings,
   type PublicReservationAccess,
 } from "@/modules/reservations/infrastructure/public-reservation-repository";
+import {
+  findAvailableRoomForService,
+  materializeServiceInstance,
+} from "@/modules/rooms/infrastructure/service-instance-repository";
 import {
   acquireCapacityLock,
   acquireCapacityLocks,
@@ -308,9 +313,12 @@ export async function createPublicReservation(input: {
       client,
       input.restaurantId,
     );
-    const room = await findActivePublicRoom(client, {
+    const room = await findAvailableRoomForService(client, {
       restaurantId: input.restaurantId,
       roomCode: command.roomCode,
+      localDate: command.localDate,
+      serviceType: command.serviceType,
+      now,
     });
 
     if (!configuration || !settings) {
@@ -334,6 +342,11 @@ export async function createPublicReservation(input: {
       privacyPolicyVersion: config.privacyPolicyVersion,
       termsVersion: config.termsVersion,
       consentAt: now,
+    });
+    await materializeServiceInstance(client, {
+      restaurantId: input.restaurantId,
+      localDate: command.localDate,
+      serviceType: command.serviceType,
     });
     const rawToken = deriveManagementToken(
       reservation.id,
@@ -363,7 +376,7 @@ export async function createPublicReservation(input: {
       action: "CREATED",
       correlationId: randomUUID(),
       previousState: null,
-      newState: publicAuditSnapshot(reservation),
+      newState: reservationAuditSnapshot(reservation),
     });
 
     return publicResult({
@@ -464,10 +477,22 @@ export async function updateManagedPublicReservation(input: {
       serviceType: command.serviceType,
       excludeReservationId: access.reservation.id,
     });
-    const room = await findActivePublicRoom(client, {
-      restaurantId: input.restaurantId,
-      roomCode: command.roomCode,
-    });
+    const currentRoomCode = parsePublicPreferences(
+      access.reservation.preferences,
+    ).roomCode;
+    const roomSelectionChanged =
+      access.reservation.localDate !== command.localDate ||
+      access.reservation.serviceType !== command.serviceType ||
+      currentRoomCode !== command.roomCode;
+    const room = roomSelectionChanged
+      ? await findAvailableRoomForService(client, {
+          restaurantId: input.restaurantId,
+          roomCode: command.roomCode,
+          localDate: command.localDate,
+          serviceType: command.serviceType,
+          now,
+        })
+      : true;
 
     if (!configuration) {
       throw new PublicReservationError("CONFIGURATION_INVALID");
@@ -484,24 +509,45 @@ export async function updateManagedPublicReservation(input: {
       arrivals,
     });
 
+    let originalDurationHours: number;
+    try {
+      originalDurationHours = originalManagementLinkDurationHours({
+        localDate: access.reservation.localDate,
+        arrivalTime: access.reservation.arrivalTime,
+        timezone: access.settings.timezone,
+        viewExpiresAt: access.viewExpiresAt,
+      });
+    } catch {
+      throw new PublicReservationError("CONFIGURATION_INVALID");
+    }
     const viewExpiresAt = managementViewExpiry({
       localDate: command.localDate,
       arrivalTime: command.arrivalTime,
       timezone: access.settings.timezone,
-      durationHours: access.settings.managementLinkDurationHours,
+      durationHours: originalDurationHours,
     });
     const updated = await updatePublicReservation(client, {
       reservationId: access.reservation.id,
       command,
       viewExpiresAt,
     });
+    if (
+      access.reservation.localDate !== command.localDate ||
+      access.reservation.serviceType !== command.serviceType
+    ) {
+      await materializeServiceInstance(client, {
+        restaurantId: input.restaurantId,
+        localDate: command.localDate,
+        serviceType: command.serviceType,
+      });
+    }
     await insertPublicAuditEvent(client, {
       restaurantId: input.restaurantId,
       reservationId: updated.id,
       action: "UPDATED",
       correlationId: randomUUID(),
-      previousState: publicAuditSnapshot(access.reservation),
-      newState: publicAuditSnapshot(updated),
+      previousState: reservationAuditSnapshot(access.reservation),
+      newState: reservationAuditSnapshot(updated),
     });
 
     return toPublicReservationDto({
@@ -566,8 +612,8 @@ export async function cancelManagedPublicReservation(input: {
       reservationId: cancelled.id,
       action: "CANCELLED",
       correlationId: randomUUID(),
-      previousState: publicAuditSnapshot(access.reservation),
-      newState: publicAuditSnapshot(cancelled),
+      previousState: reservationAuditSnapshot(access.reservation),
+      newState: reservationAuditSnapshot(cancelled),
     });
 
     return toPublicReservationDto({

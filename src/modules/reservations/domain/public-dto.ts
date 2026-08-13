@@ -69,16 +69,3 @@ export function toPublicReservationDto(input: {
     viewExpiresAt: input.viewExpiresAt.toISOString(),
   };
 }
-
-export function publicAuditSnapshot(reservation: StoredReservation) {
-  return {
-    localDate: reservation.localDate,
-    serviceType: reservation.serviceType,
-    arrivalTime: reservation.arrivalTime,
-    partySize: reservation.partySize,
-    status: reservation.status,
-    preferences: reservation.preferences,
-    allergies: reservation.allergies,
-    notes: reservation.notes,
-  };
-}

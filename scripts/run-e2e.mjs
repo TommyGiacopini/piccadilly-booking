@@ -1,6 +1,19 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { config as loadEnvironment } from "dotenv";
 import { fileURLToPath } from "node:url";
+
+loadEnvironment({
+  path: fileURLToPath(new URL("../.env", import.meta.url)),
+  override: false,
+  quiet: true,
+});
+loadEnvironment({
+  path: fileURLToPath(new URL("../.env.example", import.meta.url)),
+  override: false,
+  quiet: true,
+});
 
 const nextCliPath = fileURLToPath(
   new URL("../node_modules/next/dist/bin/next", import.meta.url),
@@ -8,7 +21,24 @@ const nextCliPath = fileURLToPath(
 const playwrightCliPath = fileURLToPath(
   new URL("../node_modules/@playwright/test/cli.js", import.meta.url),
 );
+const tsxCliPath = fileURLToPath(
+  new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url),
+);
+const e2eUserPreparationPath = fileURLToPath(
+  new URL("./prepare-e2e-users.ts", import.meta.url),
+);
+const e2eReservationCleanupPath = fileURLToPath(
+  new URL("./cleanup-e2e-reservations.ts", import.meta.url),
+);
 const healthUrl = "http://127.0.0.1:4000/api/health";
+const e2eRunIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const e2eRunId = process.env.E2E_RUN_ID?.trim() || randomUUID();
+
+if (!e2eRunIdPattern.test(e2eRunId)) {
+  throw new Error("E2E_RUN_ID must be a valid UUID.");
+}
+process.env.E2E_RUN_ID = e2eRunId.toLowerCase();
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -39,12 +69,9 @@ async function terminateProcessTree(child) {
   if (!child.pid || child.exitCode !== null) return;
 
   if (process.platform === "win32") {
-    const terminator = spawn(
-      "taskkill",
-      ["/pid", String(child.pid), "/T", "/F"],
-      { stdio: "ignore", windowsHide: true },
-    );
-    await once(terminator, "exit");
+    child.kill();
+    await Promise.race([once(child, "exit"), delay(5_000)]);
+    if (child.exitCode === null) child.kill("SIGKILL");
     return;
   }
 
@@ -57,6 +84,42 @@ async function terminateProcessTree(child) {
   ]);
 }
 
+async function prepareDedicatedE2eUsers() {
+  const preparation = spawn(
+    process.execPath,
+    [tsxCliPath, e2eUserPreparationPath],
+    {
+      env: process.env,
+      stdio: "inherit",
+      windowsHide: true,
+    },
+  );
+  const [exitCode] = await once(preparation, "exit");
+
+  if (exitCode !== 0) {
+    throw new Error("Dedicated E2E user preparation failed.");
+  }
+}
+
+async function cleanupDedicatedE2eReservations() {
+  const cleanup = spawn(
+    process.execPath,
+    [tsxCliPath, e2eReservationCleanupPath],
+    {
+      env: process.env,
+      stdio: "inherit",
+      windowsHide: true,
+    },
+  );
+  const [exitCode] = await once(cleanup, "exit");
+
+  if (exitCode !== 0) {
+    throw new Error("Dedicated E2E reservation cleanup failed.");
+  }
+}
+
+await prepareDedicatedE2eUsers();
+
 const server = spawn(process.execPath, [nextCliPath, "start", "-p", "4000"], {
   env: process.env,
   stdio: "inherit",
@@ -64,9 +127,12 @@ const server = spawn(process.execPath, [nextCliPath, "start", "-p", "4000"], {
 });
 
 let testExitCode = 1;
+let serverReady = false;
 
 try {
   await waitForServer(server, 120_000);
+  serverReady = true;
+  await cleanupDedicatedE2eReservations();
   const tests = spawn(
     process.execPath,
     [playwrightCliPath, "test", ...process.argv.slice(2)],
@@ -79,6 +145,13 @@ try {
   const [exitCode] = await once(tests, "exit");
   testExitCode = typeof exitCode === "number" ? exitCode : 1;
 } finally {
+  if (serverReady) {
+    try {
+      await cleanupDedicatedE2eReservations();
+    } catch {
+      testExitCode = 1;
+    }
+  }
   await terminateProcessTree(server);
 }
 

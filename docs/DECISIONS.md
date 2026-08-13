@@ -42,7 +42,7 @@ Entrambi sono configurabili dall'Admin.
 
 ### D-005 — Cutoff nuove prenotazioni del weekend
 
-Il venerdì e il sabato le nuove prenotazioni online per la cena chiudono inizialmente alle 17:30. Giorni, servizio e orario della regola sono configurabili. Il cutoff non impedisce inserimenti telefonici Staff/Admin.
+Il venerdì e il sabato le nuove prenotazioni online per la cena chiudono inizialmente alle 17:30. Giorni, servizio e orario della regola sono configurabili tramite una `BookingCutoffRule` generica per ristorante, giorno e servizio. Il cutoff non impedisce inserimenti Staff o telefonici. Decisione implementata da M9-C.
 
 ### D-006 — Link personale
 
@@ -145,6 +145,106 @@ Le notifiche vengono richieste tramite transactional outbox e inviate dopo il co
 
 Riferimento: `docs/adr/005-notification-outbox.md`.
 
+### D-021 — Slot e finestra di capacità V1
+
+Nella prima versione l'intervallo degli slot è fisso a 15 minuti e la finestra mobile è fissa a 30 minuti. Soltanto il limite di coperti è modificabile dall'Admin. La UI mostra 15 e 30 minuti come dati informativi; validazione server e vincoli PostgreSQL rifiutano valori diversi. Decisione implementata da M9-C.
+
+Riferimento: `docs/adr/003-reservation-capacity-concurrency.md`.
+
+### D-022 — Creazione e reset degli utenti
+
+Non esiste registrazione pubblica. Creazione e reset generano sul server una password temporanea CSPRNG URL-safe di 24 caratteri, mostrata all'Admin una sola volta e mai inviata da email o WhatsApp; PostgreSQL conserva soltanto l'hash Argon2id e `mustChangePassword`. Finché la password non viene cambiata, le funzioni operative sono bloccate. Reset e cambio password revocano tutte le sessioni; dopo il cambio è richiesta una nuova autenticazione. La password esistente non è leggibile. Decisione implementata da M9-B.
+
+Riferimento: `docs/adr/008-identity-temporary-password-last-admin.md`.
+
+### D-023 — Protezione degli Admin
+
+Per ogni ristorante deve esistere almeno un Admin attivo. Un Admin non può disabilitare il proprio account né retrocedere se stesso a Staff; l'ultimo Admin attivo non può essere disabilitato o retrocesso. Gli utenti non vengono eliminati fisicamente. M9-B implementa il controllo con lock advisory transazionale PostgreSQL stabile per ristorante, rilettura e conteggio nello stesso commit serializzabile.
+
+Riferimento: `docs/adr/008-identity-temporary-password-last-admin.md`.
+
+### D-024 — Durata originaria del link personale
+
+Una modifica della durata vale soltanto per i token creati successivamente. Ogni token conserva la durata applicata alla creazione. Se una prenotazione viene spostata, la scadenza viene ricalcolata rispetto al nuovo servizio usando la durata originaria, senza consultare la configurazione corrente e senza rigenerare il token. La modifica non è implementata in M9-A.
+
+### D-025 — Anteprima e conferma dell'impatto
+
+Una modifica di configurazione che coinvolge prenotazioni future richiede: anteprima server-side senza PII; conteggio e classificazione; conferma esplicita dell'Admin; ricalcolo dentro la transazione; errore `IMPACT_CHANGED` se lo stato è mutato; applicazione senza modificare o cancellare prenotazioni; audit di impatto e conferma. L'impatto è un avviso confermabile, non un blocco definitivo. M9-C implementa il protocollo per impostazioni di prenotazione, servizi settimanali e cutoff pubblici; sale, tavoli e `ServiceInstance` restano successivi.
+
+Riferimento: `docs/adr/007-configuration-lifecycle-impact.md`.
+
+### D-026 — Grandfathering delle prenotazioni
+
+Una configurazione successiva non invalida retroattivamente prenotazioni confermate e non le modifica o cancella automaticamente. Valori invariati possono essere conservati anche se sala o servizio diventano inattivi; modifiche a contatti, note o richieste restano consentite. Nuova data, servizio, ora o sala devono rispettare la configurazione corrente. Una riduzione dei coperti sullo stesso servizio resta consentita; un aumento ricontrolla capacità e regole correnti.
+
+Riferimento: `docs/adr/007-configuration-lifecycle-impact.md`.
+
+### D-027 — Lifecycle di sale, tavoli, servizi ed eccezioni
+
+Le sale canoniche V1 sono Sala 1, Sala 2, Sala 3, Galleria e Terrazzo; il codice è immutabile e non si creano o eliminano sale arbitrarie. L'Admin ne modifica soltanto stato e ordine. I tavoli possono essere creati, aggiornati e disattivati, mai eliminati fisicamente; il cambio sala richiede disattivazione e nuova creazione. Servizi, eccezioni, sale e tavoli sono disattivati o archiviati. In M9-A la rimozione già esistente delle date straordinarie diventa archiviazione reversibile.
+
+Riferimento: `docs/adr/007-configuration-lifecycle-impact.md`.
+
+### D-028 — ServiceInstance e disponibilità sale
+
+La fase successiva userà `ServiceInstance`, unica per ristorante, data e servizio, e `ServiceRoomAvailability`, collegata al servizio e alla sala, con materializzazione progressiva. Galleria e Terrazzo saranno configurabili per data e servizio. Non verrà introdotta una tabella parallela `RoomAvailabilityOverride`. Il ricalcolo delle istanze future richiederà anteprima, conferma e audit; le prenotazioni esistenti resteranno confermate. Questi modelli non sono implementati in M9-A.
+
+Riferimento: `docs/adr/009-service-instance-room-availability.md`.
+
+### D-029 — Contatti e testi pubblici configurabili
+
+La configurazione futura comprende telefono, email pubblica facoltativa, dominio, numero WhatsApp e i testi pubblici IT/EN approvati per introduzione, preferenza sala, cutoff, indisponibilità, conferma e sola lettura del link. Etichette, errori tecnici e validazioni restano nel codice i18n; non esiste un archivio libero di HTML o chiavi arbitrarie. I modelli non sono implementati in M9-A.
+
+### D-030 — Confine delle notifiche
+
+Canale principale, fallback, invio parallelo, outbox e provider simulati appartengono interamente a M12. M9 gestirà soltanto i dati di contatto e non strategie o invii.
+
+### D-031 — Architettura dell'audit
+
+`ReservationAuditEvent` resta il registro specializzato delle prenotazioni; `AuditEvent` registra autenticazione, identità e configurazione. I flussi saranno uniti soltanto da una proiezione applicativa di lettura, senza unificazione distruttiva. L'audit è append-only nell'applicazione, scritto nella stessa transazione della mutazione e costruito con snapshot a whitelist, mai serializzando interi modelli Prisma. La consultazione futura è riservata esclusivamente agli Admin.
+
+Riferimento: `docs/adr/006-audit-architecture-minimization.md`.
+
+### D-032 — ServiceInstance e materializzazione lazy
+
+Il modello approvato è `ServiceInstance`, unica per ristorante, data locale e servizio, con `ServiceRoomAvailability` come sola fonte persistente della disponibilità delle sale per l'istanza. Non esistono snapshot di orari, capacità, cutoff o stato aperto/chiuso e non viene introdotta `RoomAvailabilityOverride`. Gli stati `VIRTUAL`, `MATERIALIZED` e `HISTORICAL` sono derivati e non persistiti.
+
+La materializzazione è esclusivamente lazy, idempotente e concorrente-safe: avviene nella stessa transazione della prima prenotazione creata con successo oppure della prima modifica amministrativa effettiva alla disponibilità delle sale. GET, preview, no-op e job non materializzano; non esistono backfill indiscriminati o orizzonti futuri. Le prenotazioni restano collegate soltanto a data e servizio. Le istanze storiche sono conservate e read-only.
+
+Riferimento: `docs/adr/009-service-instance-room-availability.md`.
+
+### D-033 — Catalogo fisso e policy di disponibilità delle sale
+
+Il catalogo V1 contiene esclusivamente Sala 1, Sala 2, Sala 3, Galleria e Terrazzo. `DA ASSEGNARE` è una categoria virtuale e non una sala persistita. L'Admin può modificare soltanto stato e ordine; non può creare, rinominare, eliminare o cambiare il codice delle sale.
+
+Ogni sala possiede una policy persistita e non modificabile dall'Admin: Sala 1, Sala 2 e Sala 3 sono `DEFAULT_AVAILABLE`; Galleria e Terrazzo sono `EXPLICIT_ONLY`. In assenza di istanza le prime sono disponibili e le seconde indisponibili. Con un'istanza, `ServiceRoomAvailability` determina il valore locale; una sala globalmente inattiva resta sempre indisponibile. Il runtime usa la policy, mai confronti su nome o codice.
+
+Riferimenti: `docs/adr/007-configuration-lifecycle-impact.md` e `docs/adr/009-service-instance-room-availability.md`.
+
+### D-034 — Durata originaria del link personale
+
+La durata iniziale del link personale è 24 ore dopo l'orario prenotato ed è configurabile dall'Admin come numero intero da 1 a 24 ore. La modifica è esclusivamente prospettica: non aggiorna, rigenera o revoca token esistenti e non modifica hash, prenotazioni o audit storici.
+
+Ogni token conserva implicitamente la durata applicata alla creazione. Se la prenotazione viene spostata, il sistema ricava tale durata come differenza esatta tra la scadenza di consultazione e il precedente istante del servizio nella timezone del ristorante, la valida come numero intero da 1 a 24 ore e la applica al nuovo istante. Uno stato legacy incoerente causa rollback sicuro. La semantica vale anche nei passaggi di ora legale `Europe/Rome`; token e hash non entrano nell'audit.
+
+Riferimento: `docs/adr/010-public-settings-content-management-link-duration.md`.
+
+### D-035 — Configurazione e contenuti pubblici
+
+L'Admin configura telefono pubblico, URL HTTPS canonico di prenotazione, email pubblica facoltativa, numero WhatsApp facoltativo e un set completo di contenuti editoriali italiani e inglesi. Le sole chiavi ammesse sono `BOOKING_PAGE_TITLE`, `BOOKING_PAGE_INTRO`, `UNAVAILABLE_MESSAGE`, `CONTACT_PROMPT`, `CONFIRMATION_MESSAGE`, `MANAGEMENT_PAGE_TITLE` e `MANAGEMENT_PAGE_INTRO`; etichette, pulsanti, errori e testi tecnici restano traduzioni applicative versionate nel codice.
+
+I contenuti sono testo semplice, non HTML o Markdown eseguibile. Telefono e WhatsApp sono soltanto contatti: M9-E non introduce provider, API Meta, template, analytics, email, messaggi o invii automatici. Configurazione, contenuti e durata sono salvati con mutazioni Admin separate, transazionali e auditate tramite snapshot minimizzati.
+
+Riferimento: `docs/adr/010-public-settings-content-management-link-duration.md`.
+
+### D-036 — Proiezione unificata dell'audit
+
+`ReservationAuditEvent` e `AuditEvent` restano tabelle distinte e non vengono copiati, duplicati o riscritti. M9-F li unisce esclusivamente in lettura con un contratto applicativo comune minimizzato; ogni ramo della query filtra il `restaurantId` prima della `UNION ALL`.
+
+L'ordinamento globale è `createdAt DESC`, ranking stabile della sorgente (`ADMINISTRATIVE` prima di `RESERVATION`) e `id DESC`. La paginazione è keyset con cursore opaco, versionato e legato tramite fingerprint ai filtri correnti. Lista e dettaglio sono riservati all'Admin, applicano allow-list positive anche a eventi legacy o corrotti e non generano nuovi eventi audit. La retention resta una decisione futura separata.
+
+Riferimento: `docs/adr/006-audit-architecture-minimization.md`.
+
 ## 3. Decisioni reversibili
 
 Le seguenti scelte possono cambiare senza alterare il dominio, purché il cambiamento venga testato e documentato:
@@ -161,7 +261,6 @@ Le seguenti scelte possono cambiare senza alterare il dominio, purché il cambia
 - libreria dei componenti UI;
 - strategia di osservabilità;
 - durata e politica di retry delle notifiche;
-- orizzonte temporale con cui vengono materializzati i servizi futuri.
 
 Le scelte reversibili non autorizzano l'aggiunta anticipata di dipendenze.
 

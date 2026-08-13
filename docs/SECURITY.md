@@ -39,6 +39,8 @@ Minacce principali:
 - Gli account sono creati e gestiti dall'Admin.
 - Ogni account ha identità individuale; sono vietati account Staff condivisi.
 - Gli account possono essere disabilitati senza eliminare l'audit storico.
+- Gli account non vengono eliminati fisicamente.
+- Deve esistere sempre almeno un Admin attivo per ristorante: sono vietate auto-disabilitazione, auto-retrocessione e disabilitazione o retrocessione dell'ultimo Admin; il controllo è transazionale e sicuro rispetto alla concorrenza.
 - Login, logout, fallimenti rilevanti e modifiche account sono registrati.
 
 ### 3.2 Password
@@ -48,7 +50,14 @@ Minacce principali:
 - I parametri vengono calibrati sull'ambiente di produzione e documentati.
 - La verifica usa la libreria scelta nella milestone autenticazione.
 - È previsto l'aggiornamento dei parametri al login quando diventano obsoleti.
-- Password temporanee richiedono cambio al primo accesso, se adottate.
+- Creazione e reset generano sul server una password temporanea casuale, mostrata all'Admin una sola volta e comunicata esternamente, mai tramite email o WhatsApp.
+- Nel database resta soltanto l'hash Argon2id e `mustChangePassword`; le funzioni operative sono bloccate fino al cambio.
+- Reset e cambio password revocano tutte le sessioni e richiedono una nuova autenticazione; la password esistente non è leggibile.
+- Le password scelte dall'utente hanno lunghezza da 15 a 128 code point Unicode. Non vengono troncate, sottoposte a trim o vincoli di composizione; spazi e Unicode stampabile sono ammessi, mentre caratteri di controllo, password comuni/demo, username equivalente e password corrente sono rifiutati.
+- La password temporanea contiene 24 caratteri URL-safe derivati da 18 byte CSPRNG. Compare soltanto nella risposta one-shot `no-store`: mai in database, audit, log, URL o cookie.
+- Il blocco `mustChangePassword` è verificato server-side per pagine e API operative; le sole eccezioni autenticate sono cambio password e logout. Le API rispondono uniformemente `PASSWORD_CHANGE_REQUIRED`.
+- Il runner browser usa account `e2e.*` dedicati e palesemente fittizi, ripristinati solo dalla preparazione E2E; il seed ordinario non sovrascrive mai password, ruolo, stato o flag degli account esistenti.
+- Riferimenti di policy: [NIST SP 800-63B](https://pages.nist.gov/800-63-4/sp800-63b.html), [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html) e [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html). Il progetto conserva esattamente la sequenza inserita e non applica la normalizzazione NFC raccomandata da NIST, perché la decisione vincolante M9-B vieta modifiche silenziose della password; la normalizzazione è usata soltanto per confronti anti-username/blocklist.
 
 ### 3.3 Sessioni
 
@@ -111,6 +120,7 @@ Non può modificare utenti o configurazioni amministrative.
   - cena inizialmente 17:30.
 - Dopo il cutoff la pagina resta consultabile in sola lettura.
 - Il link scade inizialmente 24 ore dopo l'orario prenotato; la durata è configurabile.
+- Ogni token conserva la durata applicata alla creazione. Se la prenotazione viene spostata, la scadenza usa la durata originaria rispetto al nuovo servizio, senza rigenerare il token.
 - Token scaduti, revocati o inesistenti non devono rivelare quale condizione si è verificata.
 - La pagina usa `noindex`, `Cache-Control: no-store` e una Referrer Policy restrittiva.
 - Token e URL personali vengono esclusi da log, analytics e sistemi di tracciamento.
@@ -207,6 +217,22 @@ L'audit è append-only a livello applicativo e registra almeno:
 Ogni evento include timestamp UTC, tipo entità, identificativo, azione e correlation ID. L'accesso alla consultazione dell'audit è riservato all'Admin.
 
 L'audit non deve duplicare indiscriminatamente dati sensibili. La necessità di conservare prima/dopo va bilanciata con minimizzazione e retention; i campi più delicati richiedono accesso ristretto.
+
+`ReservationAuditEvent` resta separato da `AuditEvent`, che copre autenticazione, identità e configurazione. M9-F li unisce soltanto mediante una proiezione applicativa di lettura Admin, senza duplicare o riscrivere eventi. Gli snapshot sono costruiti a whitelist e non contengono nomi, contatti, token, credenziali, sessioni né testi completi di allergie, intolleranze, note o ricorrenze; la motivazione dell'override resta ammessa quando richiesta da D-007. Ogni audit è scritto nella stessa transazione dell'operazione e l'applicazione non espone update o delete del registro.
+
+I fallimenti di login possono essere correlati soltanto con l'impronta HMAC del rate limiter, senza username, indirizzo IP, password, cookie o secret di sessione. Logout, revoca e audit sono atomici.
+
+## 9.1 Sicurezza delle modifiche di configurazione
+
+Le letture e le mutazioni amministrative ricevono l'attore server-side, derivano il ristorante dalla sessione, rileggono ruolo, stato e cambio password obbligatorio e richiedono `ADMIN`; l'interfaccia non è un controllo autorizzativo. Le route JSON M9-C/M9-D/M9-E validano payload Zod strict, stessa origine e risposte `no-store`; `restaurantId`, ruolo e correlation ID non arrivano dal client.
+
+Per impostazioni di prenotazione, servizi settimanali e cutoff pubblici M9-C usa anteprima senza PII o identificativi, conferma esplicita e ricalcolo in una transazione `SERIALIZABLE` protetta da lock advisory stabile per ristorante. Il fingerprint è derivato soltanto dal server e comprende configurazione e prenotazioni future operative rilevanti; una divergenza restituisce `IMPACT_CHANGED` con una nuova anteprima, senza mutazione né audit. Mutazione e audit minimizzato condividono la transazione, mentre un no-op non genera eventi. Nessuna configurazione modifica o cancella automaticamente prenotazioni confermate. Date straordinarie, servizi, sale e tavoli seguono disattivazione o archiviazione reversibile, non cancellazione fisica.
+
+M9-D applica lo stesso confine a disponibilità e lifecycle sale. Il lock per istanza usa ristorante, data e servizio; l'integrità tenant è rinforzata da chiavi esterne composte. Preview obsoleta, letture e no-op non creano istanze. Audit e DTO espongono solo codice sala, stato, data/servizio e conteggi aggregati: mai PII, preferenze complete, note, credenziali, token, IP o user agent.
+
+M9-E usa route distinte per contatti, contenuti e durata. Telefono e WhatsApp richiedono E.164; l'URL è HTTPS canonico senza credenziali, percorso, query o fragment. I contenuti accettano soltanto locale e chiavi in allow-list, rifiutano controlli e URL arbitrari e vengono renderizzati esclusivamente come testo React, senza HTML o Markdown eseguibile. Il tenant deriva sempre dalla sessione o dalla configurazione server-side. L'audit non contiene contatti, URL, testi, token o hash. Una modifica della durata non tocca token esistenti; un reschedule con durata legacy incoerente fallisce atomicamente.
+
+M9-F espone soltanto GET Admin `no-store` e `noindex`. Ruolo, stato, cambio password obbligatorio e tenant vengono riletti dal database; il `restaurantId` è dentro ogni ramo della query unificata. Il cursore keyset è opaco e legato ai filtri, non contiene tenant o dati personali. Il dettaglio applica allow-list positive per azione anche a JSON legacy ostile e non restituisce raw JSON, HMAC, contatti, contenuti, note, token o hash. La consultazione non scrive e non genera audit ricorsivo.
 
 ## 10. Segreti e configurazione
 

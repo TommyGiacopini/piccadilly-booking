@@ -2,6 +2,8 @@ import "dotenv/config";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { e2eReservationFirstName } from "./e2e-run";
+
 function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Variabile E2E ${name} non configurata.`);
@@ -13,7 +15,7 @@ const adminPassword = requiredEnvironment("AUTH_DEMO_ADMIN_PASSWORD");
 
 async function login(page: Page, role: "STAFF" | "ADMIN") {
   await page.goto("/login");
-  await page.getByLabel("Username").fill(role === "STAFF" ? "demo.staff" : "demo.admin");
+  await page.getByLabel("Username").fill(role === "STAFF" ? "e2e.staff" : "e2e.admin");
   await page
     .getByLabel("Password")
     .fill(role === "STAFF" ? staffPassword : adminPassword);
@@ -22,7 +24,7 @@ async function login(page: Page, role: "STAFF" | "ADMIN") {
   await expect(page.getByRole("heading", { name: /agosto|settembre|ottobre|novembre|dicembre|gennaio|febbraio|marzo|aprile|maggio|giugno|luglio/i })).toBeVisible();
   await expect(
     page.getByText(
-      `sessione ${role === "STAFF" ? "demo.staff" : "demo.admin"} (${role})`,
+      `sessione ${role === "STAFF" ? "e2e.staff" : "e2e.admin"} (${role})`,
       { exact: false },
     ),
   ).toBeVisible();
@@ -127,7 +129,7 @@ test.describe("M8 dashboard Staff/Admin", () => {
     page,
   }) => {
     const suffix = String(Date.now());
-    const firstName = "E2E";
+    const firstName = e2eReservationFirstName;
     const lastName = `Staff ${suffix}`;
     const date = "2099-11-18";
 
@@ -187,14 +189,14 @@ test.describe("M8 dashboard Staff/Admin", () => {
     await login(page, "STAFF");
     await openPhoneForm(page, "2099-11-19");
     await fillPhoneReservation(page, {
-      firstName: "E2E",
+      firstName: e2eReservationFirstName,
       lastName,
       partySize: 31,
       overrideReason: "Override E2E Staff fittizio",
     });
     await cancelCreatedReservation(
       page,
-      `E2E ${lastName}`,
+      `${e2eReservationFirstName} ${lastName}`,
       "Override E2E Staff fittizio",
     );
   });
@@ -204,14 +206,14 @@ test.describe("M8 dashboard Staff/Admin", () => {
     await login(page, "ADMIN");
     await openPhoneForm(page, "2099-11-20");
     await fillPhoneReservation(page, {
-      firstName: "E2E",
+      firstName: e2eReservationFirstName,
       lastName,
       partySize: 31,
       overrideReason: "Override E2E Admin fittizio",
     });
     await cancelCreatedReservation(
       page,
-      `E2E ${lastName}`,
+      `${e2eReservationFirstName} ${lastName}`,
       "Override E2E Admin fittizio",
     );
   });

@@ -1,0 +1,320 @@
+import "dotenv/config";
+
+import { expect, test, type APIRequestContext, type BrowserContext, type Page } from "@playwright/test";
+import { Pool } from "pg";
+
+import { e2eReservationFirstName, e2eRunId } from "./e2e-run";
+
+const origin = "http://localhost:4000";
+const adminPassword = process.env.AUTH_DEMO_ADMIN_PASSWORD ?? "";
+const staffPassword = process.env.AUTH_DEMO_STAFF_PASSWORD ?? "";
+const databaseUrl = process.env.DATABASE_URL;
+const foreignEventId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+const sensitivePhone = "+390000009876";
+const sensitiveEmail = "M9F.Audit+Secret@example.test";
+
+if (!databaseUrl) throw new Error("DATABASE_URL is required for M9-F E2E checks.");
+
+const database = new Pool({ connectionString: databaseUrl });
+
+interface AuditItem {
+  source: "RESERVATION" | "ADMINISTRATIVE";
+  eventId: string;
+  category: string;
+  action: string;
+  outcome: string;
+  actorKind: string;
+  actorUserId?: string;
+  correlationId: string;
+}
+
+interface AuditPage {
+  items: AuditItem[];
+  nextCursor: string | null;
+}
+
+interface PublicConfiguration {
+  contacts: {
+    publicPhone: string;
+    publicBookingBaseUrl: string;
+    publicEmail: string | null;
+    whatsappNumber: string | null;
+  };
+  fingerprints: { contacts: string };
+}
+
+let reservationEvent: AuditItem;
+let administrativeEvent: AuditItem;
+
+async function login(page: Page, username: string, password: string, destination = /\/dashboard/) {
+  await page.goto("/login");
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Accedi" }).click();
+  await expect(page).toHaveURL(destination);
+}
+
+async function readAudit(request: APIRequestContext, query = "limit=100"): Promise<AuditPage> {
+  const response = await request.get(`/api/admin/audit?${query}`);
+  expect(response.ok(), await response.text()).toBe(true);
+  expect(response.headers()["cache-control"]).toContain("no-store");
+  expect(response.headers()["x-robots-tag"]).toBe("noindex, nofollow, noarchive");
+  return response.json() as Promise<AuditPage>;
+}
+
+async function readConfiguration(request: APIRequestContext): Promise<PublicConfiguration> {
+  const response = await request.get("/api/admin/public-settings");
+  expect(response.ok(), await response.text()).toBe(true);
+  return (await response.json()).configuration as PublicConfiguration;
+}
+
+async function collectAuditIds(request: APIRequestContext, limit: number): Promise<string[]> {
+  const collected: string[] = [];
+  let cursor: string | null = null;
+  do {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (cursor) params.set("cursor", cursor);
+    const result = await readAudit(request, params.toString());
+    collected.push(...result.items.map((item) => item.eventId));
+    cursor = result.nextCursor;
+  } while (cursor);
+  return collected;
+}
+
+async function changeContacts(request: APIRequestContext, configuration: PublicConfiguration, contacts: PublicConfiguration["contacts"]) {
+  const response = await request.post("/api/admin/public-settings/contacts", {
+    headers: { origin },
+    data: { fingerprint: configuration.fingerprints.contacts, contacts },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+}
+
+async function createPublicReservation(request: APIRequestContext) {
+  const response = await request.post("/api/public/reservations", {
+    headers: { origin, "Idempotency-Key": crypto.randomUUID() },
+    data: {
+      localDate: "2099-12-20",
+      serviceType: "DINNER",
+      arrivalTime: "19:00",
+      partySize: 2,
+      roomCode: "sala-1",
+      customerFirstName: e2eReservationFirstName,
+      customerLastName: "M9-F Fixture",
+      customerPhone: "+390000000002",
+      customerEmail: null,
+      highChair: false,
+      stroller: false,
+      accessibility: false,
+      children: false,
+      celiac: false,
+      allergies: null,
+      intolerances: null,
+      celebration: null,
+      animals: false,
+      notes: "Fixture fittizia M9-F",
+      language: "it",
+      privacyAccepted: true,
+      termsAccepted: true,
+    },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+}
+
+async function auditDatabaseSnapshot() {
+  const result = await database.query<{
+    reservation_audit_count: string;
+    audit_count: string;
+    audit_fingerprint: string | null;
+    reservation_count: string;
+    user_count: string;
+    room_count: string;
+  }>(`
+    SELECT
+      (SELECT count(*)::text FROM reservation_audit_events) AS reservation_audit_count,
+      (SELECT count(*)::text FROM audit_events) AS audit_count,
+      (SELECT md5(string_agg(id::text || created_at::text, ',' ORDER BY id)) FROM audit_events) AS audit_fingerprint,
+      (SELECT count(*)::text FROM reservations) AS reservation_count,
+      (SELECT count(*)::text FROM users) AS user_count,
+      (SELECT count(*)::text FROM rooms) AS room_count
+  `);
+  return result.rows[0];
+}
+
+async function newPage(context: BrowserContext) {
+  return context.newPage();
+}
+
+test.describe.serial("M9-F consultazione audit Admin", () => {
+  test.afterAll(async () => {
+    await database.end();
+  });
+
+  test("Admin vede nello stesso elenco eventi prenotazione e amministrativi", async ({ page }) => {
+    await login(page, "e2e.admin", adminPassword);
+    await createPublicReservation(page.request);
+    const original = await readConfiguration(page.request);
+    await changeContacts(page.request, original, {
+      ...original.contacts,
+      publicPhone: sensitivePhone,
+      publicEmail: sensitiveEmail,
+    });
+    try {
+      reservationEvent = (await readAudit(page.request, "source=RESERVATION&action=CREATED&limit=100")).items[0];
+      administrativeEvent = (await readAudit(page.request, "source=ADMINISTRATIVE&action=PUBLIC_CONTACTS_UPDATED&limit=100")).items[0];
+      expect(reservationEvent?.source).toBe("RESERVATION");
+      expect(administrativeEvent?.source).toBe("ADMINISTRATIVE");
+
+      const response = await page.goto("/admin/audit");
+      expect(response?.headers()["cache-control"]).toContain("no-store");
+      expect(response?.headers()["x-robots-tag"]).toBe("noindex, nofollow, noarchive");
+      await expect(page.getByText("Prenotazione creata").first()).toBeVisible();
+      await expect(page.getByText("Contatti pubblici aggiornati").first()).toBeVisible();
+    } finally {
+      await changeContacts(page.request, await readConfiguration(page.request), original.contacts);
+    }
+  });
+
+  test("ordinamento e paginazione keyset non producono duplicati o omissioni", async ({ page }) => {
+    await login(page, "e2e.admin", adminPassword);
+    const expected = await collectAuditIds(page.request, 100);
+    const collected = await collectAuditIds(page.request, 2);
+    expect(collected).toEqual(expected);
+    expect(new Set(collected).size).toBe(collected.length);
+  });
+
+  test("filtri per periodo, categoria, azione e attore sono applicati dal server e dalla UI", async ({ page }) => {
+    await login(page, "e2e.admin", adminPassword);
+    const actorId = administrativeEvent.actorUserId;
+    expect(actorId).toBeTruthy();
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Rome",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const result = await readAudit(
+      page.request,
+      new URLSearchParams({
+        from: today,
+        to: today,
+        source: "ADMINISTRATIVE",
+        category: "CONFIGURATION",
+        action: "PUBLIC_CONTACTS_UPDATED",
+        actor: actorId!,
+        limit: "100",
+      }).toString(),
+    );
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(result.items.every((item) => item.category === "CONFIGURATION" && item.action === "PUBLIC_CONTACTS_UPDATED" && item.actorUserId === actorId)).toBe(true);
+
+    await page.goto("/admin/audit");
+    await page.getByLabel("Categoria", { exact: true }).selectOption("CONFIGURATION");
+    await page.getByLabel("Azione", { exact: true }).selectOption("PUBLIC_CONTACTS_UPDATED");
+    await page.getByLabel("Attore", { exact: true }).fill(actorId!);
+    await page.getByRole("button", { name: "Applica filtri" }).click();
+    await expect(page.getByText("Contatti pubblici aggiornati").first()).toBeVisible();
+    await expect(page.locator("li[data-event-id]").first()).toContainText("CONFIGURATION");
+  });
+
+  test("dettaglio mostra prima/dopo minimizzati e non espone contatti sensibili", async ({ page }) => {
+    await login(page, "e2e.admin", adminPassword);
+    const response = await page.request.get(`/api/admin/audit/ADMINISTRATIVE/${administrativeEvent.eventId}`);
+    const body = await response.text();
+    expect(response.ok(), body).toBe(true);
+    expect(body).not.toContain(sensitivePhone);
+    expect(body).not.toContain(sensitiveEmail);
+
+    await page.goto("/admin/audit");
+    await page.getByLabel("Azione", { exact: true }).selectOption("PUBLIC_CONTACTS_UPDATED");
+    await page.getByRole("button", { name: "Applica filtri" }).click();
+    await page.locator(`li[data-event-id="${administrativeEvent.eventId}"]`).getByRole("button", { name: "Dettaglio" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Stato precedente");
+    await expect(dialog).toContainText("Telefono configurato");
+    await expect(dialog).not.toContainText(sensitivePhone);
+    await expect(dialog).not.toContainText(sensitiveEmail);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test("Staff, anonimo e utente con cambio obbligatorio sono respinti", async ({ page, browser }) => {
+    await login(page, "e2e.admin", adminPassword);
+    const username = `e2e.audit.must.${e2eRunId.slice(0, 8)}`;
+    const creation = await page.request.post("/api/admin/users", {
+      headers: { origin },
+      data: { username, role: "STAFF" },
+    });
+    expect(creation.status()).toBe(201);
+    const temporaryPassword = (await creation.json()).temporaryPassword as string;
+
+    const anonymousContext = await browser.newContext();
+    const staffContext = await browser.newContext();
+    const mustChangeContext = await browser.newContext();
+    try {
+      const anonymous = await newPage(anonymousContext);
+      expect((await anonymous.request.get("/api/admin/audit")).status()).toBe(401);
+      await anonymous.goto("/admin/audit");
+      await expect(anonymous).toHaveURL(/\/login\?returnTo=/);
+
+      const staff = await newPage(staffContext);
+      await login(staff, "e2e.staff", staffPassword);
+      expect((await staff.request.get("/api/admin/audit")).status()).toBe(403);
+      await staff.goto("/admin/audit");
+      await expect(staff).toHaveURL(/\/dashboard\?access=denied/);
+
+      const mustChange = await newPage(mustChangeContext);
+      await login(mustChange, username, temporaryPassword, /\/cambia-password/);
+      const blocked = await mustChange.request.get("/api/admin/audit");
+      expect(blocked.status()).toBe(403);
+      await expect(blocked.json()).resolves.toEqual({ error: "PASSWORD_CHANGE_REQUIRED" });
+      await mustChange.goto("/admin/audit");
+      await expect(mustChange).toHaveURL(/\/cambia-password/);
+    } finally {
+      await anonymousContext.close();
+      await staffContext.close();
+      await mustChangeContext.close();
+    }
+  });
+
+  test("un ID evento non appartenente al tenant non è leggibile direttamente", async ({ page }) => {
+    await login(page, "e2e.admin", adminPassword);
+    const response = await page.request.get(`/api/admin/audit/ADMINISTRATIVE/${foreignEventId}`);
+    expect(response.status()).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  test("lista, filtri, paginazione, dettaglio e errori restano read-only", async ({ page }) => {
+    await login(page, "e2e.admin", adminPassword);
+    const before = await auditDatabaseSnapshot();
+    await page.goto("/admin/audit");
+    await expect(page.getByRole("heading", { name: "Eventi cronologici" })).toBeVisible();
+    await page.getByLabel("Sorgente", { exact: true }).selectOption("RESERVATION");
+    await page.getByRole("button", { name: "Applica filtri" }).click();
+    await expect(page.getByText("Prenotazione creata").first()).toBeVisible();
+    const pageOne = await readAudit(page.request, "limit=1");
+    expect(pageOne.nextCursor).not.toBeNull();
+    await readAudit(page.request, `limit=1&cursor=${encodeURIComponent(pageOne.nextCursor!)}`);
+    await page.request.get(`/api/admin/audit/RESERVATION/${reservationEvent.eventId}`);
+    expect((await page.request.get("/api/admin/audit?cursor=invalid***")).status()).toBe(400);
+    expect(await auditDatabaseSnapshot()).toEqual(before);
+  });
+
+  test("interfaccia e dettaglio non hanno overflow a 390, 820 e 1440 px", async ({ page }) => {
+    await login(page, "e2e.admin", adminPassword);
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 820, height: 1_180 },
+      { width: 1_440, height: 900 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/admin/audit");
+      await expect(page.getByText("Prenotazione creata").first()).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.locator(`li[data-event-id="${reservationEvent.eventId}"]`).getByRole("button", { name: "Dettaglio" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.getByRole("button", { name: "Chiudi" }).click();
+    }
+  });
+});

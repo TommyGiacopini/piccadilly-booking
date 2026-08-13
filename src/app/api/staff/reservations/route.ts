@@ -5,7 +5,10 @@ import {
   reservationErrorStatus,
 } from "@/modules/reservations/application/reservation-errors";
 import { createPhoneReservation } from "@/modules/reservations/application/staff-reservation-service";
-import { getRequestUser } from "@/server/auth/authorization";
+import {
+  getRequestUser,
+  passwordChangeRequiredResponse,
+} from "@/server/auth/authorization";
 import { resolveAuthConfig } from "@/server/auth/auth-config";
 import { isSameOriginRequest } from "@/server/auth/request-security";
 
@@ -26,6 +29,8 @@ export async function POST(request: Request): Promise<Response> {
   if (!user) {
     return noStoreJson({ error: "Unauthorized" }, 401);
   }
+  const passwordGuard = passwordChangeRequiredResponse(user);
+  if (passwordGuard) return passwordGuard;
 
   const authConfig = resolveAuthConfig();
 
