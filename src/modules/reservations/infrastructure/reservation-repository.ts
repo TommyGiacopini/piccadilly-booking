@@ -25,6 +25,10 @@ import type {
   StoredReservation,
 } from "@/modules/reservations/domain/types";
 import { prisma } from "@/server/db/prisma";
+import {
+  isRetryableTransactionConflict,
+  waitForTransactionRetry,
+} from "@/server/db/transaction-retry";
 
 type ReservationLookupClient = Pick<PrismaClient, "reservation">;
 type IdempotencyCleanupClient = Pick<
@@ -97,13 +101,25 @@ export function mapReservation(row: PrismaReservation): StoredReservation {
   };
 }
 
-export function runReservationTransaction<T>(
+export async function runReservationTransaction<T>(
   operation: (client: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
-  return prisma.$transaction(operation, {
-    maxWait: 10_000,
-    timeout: 15_000,
-  });
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      return await prisma.$transaction(operation, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 10_000,
+        timeout: 20_000,
+      });
+    } catch (error) {
+      if (!isRetryableTransactionConflict(error) || attempt === 5) {
+        throw error;
+      }
+      await waitForTransactionRetry(attempt);
+    }
+  }
+
+  throw new Error("Reservation transaction retry exhausted.");
 }
 
 export async function findIdempotencyKey(
@@ -190,9 +206,17 @@ export async function readTransactionalAvailabilityConfiguration(
     select: {
       rollingCapacityCovers: true,
       rollingWindowMinutes: true,
-      fridayDinnerBookingCutoff: true,
-      saturdayDinnerBookingCutoff: true,
     },
+  });
+  const bookingCutoffRule = await client.bookingCutoffRule.findUnique({
+    where: {
+      restaurantId_dayOfWeek_serviceType: {
+        restaurantId: input.restaurantId,
+        dayOfWeek: DayOfWeek[getLocalDayOfWeek(input.localDate)],
+        serviceType,
+      },
+    },
+    select: { isEnabled: true, cutoffTime: true },
   });
   const weeklyRules = await client.weeklyServiceSchedule.findMany({
     where: {
@@ -213,6 +237,7 @@ export async function readTransactionalAvailabilityConfiguration(
     where: {
       restaurantId: input.restaurantId,
       date: localDateToDatabase(input.localDate),
+      archivedAt: null,
       scope: {
         in: [SpecialDateScope.ALL, SpecialDateScope[input.serviceType]],
       },
@@ -239,12 +264,12 @@ export async function readTransactionalAvailabilityConfiguration(
       ? {
           rollingCapacityCovers: bookingSettings.rollingCapacityCovers,
           rollingWindowMinutes: bookingSettings.rollingWindowMinutes,
-          fridayDinnerBookingCutoff: operationalTimeFromDatabase(
-            bookingSettings.fridayDinnerBookingCutoff,
-          ),
-          saturdayDinnerBookingCutoff: operationalTimeFromDatabase(
-            bookingSettings.saturdayDinnerBookingCutoff,
-          ),
+        }
+      : null,
+    bookingCutoffRule: bookingCutoffRule
+      ? {
+          isEnabled: bookingCutoffRule.isEnabled,
+          cutoffTime: operationalTimeFromDatabase(bookingCutoffRule.cutoffTime),
         }
       : null,
     weeklyRule: weeklyRule

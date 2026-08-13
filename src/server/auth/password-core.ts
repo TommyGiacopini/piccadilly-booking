@@ -4,6 +4,10 @@ import { z } from "zod";
 export const MINIMUM_PASSWORD_LENGTH = 12;
 export const MAXIMUM_PASSWORD_LENGTH = 128;
 
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
 const ARGON2ID_OPTIONS = {
   type: argon2.argon2id,
   memoryCost: 19_456,
@@ -32,8 +36,8 @@ export const usernameSchema = z
 
 export const passwordSchema = z
   .string()
-  .min(MINIMUM_PASSWORD_LENGTH)
-  .max(MAXIMUM_PASSWORD_LENGTH);
+  .refine((value) => codePointLength(value) >= MINIMUM_PASSWORD_LENGTH)
+  .refine((value) => codePointLength(value) <= MAXIMUM_PASSWORD_LENGTH);
 
 export const credentialsSchema = z.object({
   username: usernameSchema,

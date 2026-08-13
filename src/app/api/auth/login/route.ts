@@ -1,21 +1,15 @@
 import { NextResponse } from "next/server";
 
-import { authenticateCredentials } from "@/server/auth/authentication";
+import { processLoginWithAudit } from "@/server/auth/authentication-audit";
 import { resolveAuthConfig } from "@/server/auth/auth-config";
 import { normalizeUsername } from "@/server/auth/password";
-import {
-  cleanupExpiredLoginRateLimits,
-  clearLoginRateLimit,
-  getLoginRateLimitStatus,
-  recordFailedLoginAttempt,
-} from "@/server/auth/rate-limit";
+import { cleanupExpiredLoginRateLimits } from "@/server/auth/rate-limit";
 import {
   createRateLimitKeyHash,
   isSameOriginRequest,
   resolveClientAddress,
   resolveSafePostLoginPath,
 } from "@/server/auth/request-security";
-import { createSessionForUser } from "@/server/auth/session";
 import {
   getSessionCookieName,
   getSessionCookieOptions,
@@ -67,39 +61,32 @@ export async function POST(request: Request): Promise<Response> {
 
   await cleanupExpiredLoginRateLimits();
 
-  const currentLimit = await getLoginRateLimitStatus(rateLimitKey);
-
-  if (!currentLimit.allowed) {
-    return loginErrorResponse(request, returnTo, "rate-limited");
-  }
-
-  const user = await authenticateCredentials(config.restaurantId, {
-    username,
-    password: passwordValue,
+  const result = await processLoginWithAudit({
+    restaurantId: config.restaurantId,
+    credentials: { username, password: passwordValue },
+    credentialFingerprint: rateLimitKey,
+    config,
   });
 
-  if (!user) {
-    const updatedLimit = await recordFailedLoginAttempt(rateLimitKey, config);
+  if (result.status !== "SUCCESS") {
     return loginErrorResponse(
       request,
       returnTo,
-      updatedLimit.allowed ? "invalid" : "rate-limited",
+      result.status === "INVALID" ? "invalid" : "rate-limited",
     );
   }
 
-  await clearLoginRateLimit(rateLimitKey);
-
-  const session = await createSessionForUser(user.id, {
-    ttlMs: config.sessionTtlMs,
-  });
-  const destination = new URL(returnTo, request.url);
+  const destination = new URL(
+    result.user.mustChangePassword ? "/cambia-password" : returnTo,
+    request.url,
+  );
   const response = NextResponse.redirect(destination, { status: 303 });
   const appEnvironment = getAppEnvironment();
 
   response.cookies.set(
     getSessionCookieName(appEnvironment),
-    session.token,
-    getSessionCookieOptions(appEnvironment, session.expiresAt),
+    result.session.token,
+    getSessionCookieOptions(appEnvironment, result.session.expiresAt),
   );
   response.headers.set("Cache-Control", "no-store");
 

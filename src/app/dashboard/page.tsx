@@ -159,6 +159,14 @@ export default async function DashboardPage({
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
+              {user.role === "ADMIN" ? (
+                <Link className="rounded-xl border border-zinc-700 px-5 py-3 font-bold text-white hover:border-zinc-500" href="/admin/users">
+                  Utenti
+                </Link>
+              ) : null}
+              <Link className="rounded-xl border border-zinc-700 px-5 py-3 font-bold text-white hover:border-zinc-500" href="/cambia-password">
+                Password
+              </Link>
               <Link
                 className="rounded-xl bg-orange-500 px-5 py-3 font-black text-white transition hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-300"
                 href={`/dashboard/reservations/new?date=${dashboard.localDate}`}

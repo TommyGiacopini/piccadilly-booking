@@ -503,6 +503,30 @@ M3, M4 e M8.
 
 Le configurazioni approvate non richiedono modifiche al codice.
 
+**Checkpoint M9-A — revisionato e approvato da Work**
+
+M9-A registra le decisioni vincolanti, introduce l'audit generico per autenticazione e configurazioni M4, minimizza e sanifica gli snapshot prenotazione, rende atomiche le scritture audit, rafforza la lettura Admin e sostituisce la cancellazione delle date straordinarie con archiviazione reversibile. Non completa M9: utenti, `ServiceInstance`, motore d'impatto, nuove regole di cutoff, funzioni sale/tavoli, contatti/testi, durata link e consultazione audit restano checkpoint successivi.
+
+**Checkpoint M9-B — revisionato e approvato da Work**
+
+M9-B implementa account individuali Admin/Staff, password temporanee one-shot, cambio obbligatorio e volontario, revoca completa delle sessioni, protezione concorrente dell'ultimo Admin e audit atomico delle identità. Non completa M9: `ServiceInstance`, motore d'impatto, nuove regole di cutoff, funzioni sale/tavoli, contatti/testi pubblici, durata link e consultazione audit restano checkpoint successivi.
+
+**Checkpoint M9-C — revisionato e approvato da Work**
+
+M9-C implementa gestione Admin di servizi e orari settimanali, limite di capacità, cutoff di modifica/cancellazione e regole generiche di cutoff pubblico per giorno e servizio. Il motore d'impatto minimizzato copre questo perimetro con conferma esplicita, fingerprint, ricalcolo `SERIALIZABLE`, lock advisory per ristorante e audit atomico; le prenotazioni esistenti non vengono mutate. Slot e finestra V1 sono vincolati a 15 e 30 minuti. Non completa M9: `ServiceInstance`, disponibilità sale per servizio, funzioni sale/tavoli, contatti/testi pubblici, durata link e consultazione audit restano checkpoint successivi.
+
+**Checkpoint M9-D — revisionato e approvato da Work; note chiuse in M9-E**
+
+M9-D implementa `ServiceInstance` minimale e lazy, disponibilità delle cinque sale per data/servizio, policy `EXPLICIT_ONLY` per Galleria/Terrazzo, lifecycle globale reversibile delle sale e catalogo tavoli senza assegnazioni. Letture, preview e no-op non materializzano; mutazioni effettive usano fingerprint, lock, transazioni `SERIALIZABLE` e audit minimizzato. Le note residue su contatti, testi e durata link sono state chiuse in M9-E; la consultazione audit è stata completata in M9-F. L'assegnazione di sale e tavoli resta separata in M10.
+
+**Checkpoint M9-E — revisionato e approvato da Work; note chiuse in M9-F**
+
+M9-E implementa configurazione Admin dei contatti pubblici, URL canonico, sette contenuti editoriali completi IT/EN e durata da 1 a 24 ore per i nuovi link. Le pagine pubbliche preservano `lang`; mutazioni e audit minimizzato sono atomici e concorrenti; token e hash esistenti restano invariati e il reschedule conserva la durata originaria anche con DST. M9-F aggiunge le verifiche esplicite su email, completezza esatta delle 14 righe, rollback e lettura concorrente old/new.
+
+**Checkpoint M9-F — revisionato e approvato tecnicamente da Work**
+
+M9-F implementa la consultazione Admin read-only dei due registri audit tramite proiezione unificata minimizzata, tenant filter per sorgente, ordinamento globale, cursor keyset, filtri server-side e dettaglio a allow-list resistente a eventi legacy ostili. Non aggiunge schema, migrazioni, dipendenze, seed o scritture. La Milestone M9 è tecnicamente completata e approvata da Work. Il relativo change set è tracciato nella PR #10. Al momento di questo checkpoint, deploy e M10 non rientravano nella chiusura M9.
+
 ### M10 — Assegnazione manuale di sala e tavoli
 
 **Obiettivo**

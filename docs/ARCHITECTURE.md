@@ -179,7 +179,7 @@ Non effettua assegnazione automatica o combinazione automatica dei tavoli.
 
 ### Identity
 
-Gestisce autenticazione, sessioni, ruoli Admin e Staff e autorizzazioni applicative.
+Gestisce autenticazione, sessioni, ruoli Admin e Staff, cambio password e autorizzazioni applicative. M9-B separa policy password pura, servizio applicativo transazionale e route/UI: il client non invia `restaurantId`, ruolo dell'attore o dati di audit.
 
 ### Audit
 
@@ -253,14 +253,19 @@ Questa è una destinazione architetturale. Le cartelle saranno create solo nelle
 
 | Tabella logica | Responsabilità |
 |---|---|
-| `restaurants` | Timezone, telefono, dominio, email, numero WhatsApp, testi pubblici, durata link e impostazioni generali |
+| `restaurants` | Identità e timezone del ristorante |
+| `restaurant_public_settings` | Telefono, URL canonico HTTPS, email e WhatsApp facoltativi |
+| `public_contents` | Sette chiavi editoriali localizzate `IT`/`EN`, uniche per tenant |
 | `weekly_service_rules` | Regola ricorrente per giorno della settimana e pranzo/cena |
+| `booking_cutoff_rules` | Cutoff delle nuove prenotazioni pubbliche per giorno della settimana e servizio |
 | `service_instances` | Configurazione effettiva di uno specifico servizio in una data; riga usata anche per la serializzazione concorrente |
 | `rooms` | Sale del ristorante e caratteristiche |
 | `service_room_availability` | Sale abilitate per uno specifico servizio, inclusi Galleria e Terrazzo |
 | `dining_tables` | Tavoli fisici e sala di appartenenza |
 
-`service_instances` contiene lo snapshot operativo effettivo: primo e ultimo slot, intervallo di 15 minuti nella prima versione, finestra fissa di 30 minuti, limite di coperti e cutoff applicabili.
+`service_instances` contiene soltanto identità `(restaurantId, localDate, serviceType)`, versione e timestamp. Non è uno snapshot di orari, slot, capacità o cutoff: tali valori sono sempre ricalcolati dalle fonti M9-C secondo le precedenze vigenti.
+
+`BookingCutoffRule` è unica per ristorante, giorno e servizio. M9-D rende `ServiceInstance` unica per ristorante, data e servizio e `ServiceRoomAvailability` unica per istanza e sala, con chiavi tenant composte. Gli stati `VIRTUAL`, `MATERIALIZED` e `HISTORICAL` sono derivati e non persistiti. Letture, preview e no-op non scrivono; la prima prenotazione riuscita o una modifica Admin effettiva materializzano atomicamente tutte le sale. Non esiste `RoomAvailabilityOverride`.
 
 ### 8.2 Prenotazioni
 
@@ -281,15 +286,18 @@ Per una prenotazione telefonica il consenso registra almeno origine `PHONE`, ver
 
 | Tabella logica | Responsabilità |
 |---|---|
-| `users` | Account Staff/Admin, ruolo, stato e hash password |
+| `users` | Account Staff/Admin, ruolo, stato, hash password e flag di cambio obbligatorio |
 | `sessions` | Sessioni revocabili |
-| `audit_events` | Registro append-only delle operazioni |
+| `reservation_audit_events` | Registro specializzato e minimizzato del ciclo prenotazione |
+| `audit_events` | Registro generico append-only per autenticazione, identità e configurazione |
 | `idempotency_keys` | Protezione dai doppi invii |
 | `rate_limit_buckets` | Contatori atomici per il rate limiting pubblico |
 | `notification_outbox` | Intenzioni di notifica salvate in modo affidabile |
 | `notification_attempts` | Tentativi, errori e identificativi dei provider |
 
 Il modello completo è documentato ora; ogni tabella sarà creata nella milestone in cui diventa necessaria.
+
+I due registri audit restano separati. M9-F li unisce mediante una proiezione applicativa di sola lettura: `UNION ALL` parametrizzata, tenant filter in ciascun ramo, ordinamento globale deterministico e paginazione keyset. Il dettaglio trasforma gli stati con allow-list positive e non espone raw JSON. Ogni evento è scritto nella stessa transazione della mutazione, usa campi a whitelist e non serializza indiscriminatamente modelli Prisma. Riferimenti: ADR 006 e D-036.
 
 ### 8.4 Dati da non inserire direttamente in `reservations`
 
@@ -318,7 +326,7 @@ Esempio:
 - la finestra 19:15 comprende gli arrivi 19:15 e 19:30;
 - una prenotazione alle 19:15 incide su entrambe.
 
-Il limite è configurabile dall'Admin. Il tipo e la durata della finestra non sono configurabili nella prima versione.
+Soltanto il limite è configurabile dall'Admin. Nella prima versione intervallo slot e finestra sono invarianti rispettivamente di 15 e 30 minuti: la UI M9-C li mostra come informazioni non editabili e validazione server e vincoli PostgreSQL impediscono valori differenti.
 
 ### Protocollo transazionale
 
@@ -350,7 +358,7 @@ Valori iniziali:
 
 I cutoff di modifica e cancellazione sono configurabili.
 
-Il venerdì e sabato le nuove prenotazioni online per la cena chiudono inizialmente alle 17:30. Giorni, servizio e orario della regola sono configurabili. Il cutoff pubblico non impedisce inserimenti telefonici da parte dello staff.
+Le nuove prenotazioni online dello stesso giorno rispettano la `BookingCutoffRule` attiva per giorno e servizio. Il seed abilita inizialmente venerdì e sabato a cena alle 17:30; l'Admin può configurare qualsiasi combinazione giorno/servizio. Il cutoff pubblico non impedisce inserimenti Staff o telefonici.
 
 La precedenza delle configurazioni è:
 
@@ -368,8 +376,32 @@ Tutti i calcoli operativi usano la timezone configurata del ristorante, inizialm
 - Dopo il cutoff resta consultabile ma non permette azioni.
 - Scade definitivamente 24 ore dopo l'orario prenotato.
 - La durata di 24 ore è un valore iniziale configurabile.
+- Ogni token conserva la durata applicata alla creazione; una modifica della configurazione vale soltanto per token successivi.
+- Se la prenotazione viene spostata, la scadenza viene ricalcolata dal nuovo servizio con la durata originaria, senza rigenerare il token.
 - Il token può essere revocato o ruotato.
 - La pagina non viene indicizzata e non deve essere memorizzata in cache.
+
+## 11.1 Lifecycle e impatto delle configurazioni
+
+Sale, tavoli, servizi ed eccezioni non vengono eliminati fisicamente: sono disattivati o archiviati. Le sale V1 sono le cinque canoniche, con codice immutabile; i tavoli possono essere creati, aggiornati e disattivati e un cambio sala richiede disattivazione e nuova creazione. Le date straordinarie sono archiviate in modo reversibile e le query operative ignorano le righe archiviate.
+
+M9-C applica il protocollo di anteprima e conferma a impostazioni, servizi e cutoff; M9-D lo estende a disponibilità locale e disattivazione globale delle sale. I fingerprint includono solo configurazione effettiva e prenotazioni pertinenti; `IMPACT_CHANGED` precede materializzazione, mutazione e audit. Il grandfathering conserva le preferenze già registrate, mentre nuove selezioni di sala rispettano stato globale e disponibilità del servizio. Riferimenti: ADR 007 e ADR 009.
+
+## 11.2 Identità amministrative
+
+Non esiste registrazione pubblica. M9-B genera per creazione e reset una password CSPRNG URL-safe di 24 caratteri, restituita solo nella risposta JSON `no-store` e mantenuta dalla UI esclusivamente fino alla chiusura della visualizzazione. PostgreSQL conserva soltanto Argon2id e `mustChangePassword`; pagine e API operative restano bloccate fino al cambio, salvo cambio password e logout.
+
+Creazione, ruolo, stato, reset e cambio personale rileggono attore e bersaglio nel perimetro del ristorante. Le mutazioni di stato/ruolo acquisiscono un `pg_advisory_xact_lock` stabile derivato da namespace e UUID del ristorante, poi ricontano gli Admin attivi dentro la stessa transazione serializzabile. Revoca sessioni, mutazione e audit a whitelist condividono il commit; un no-op non revoca e non produce audit. Gli utenti sono disattivati, mai eliminati. Riferimento: ADR 008.
+
+## 11.3 Configurazione pubblica e durata dei link
+
+M9-E separa tre mutazioni per contatti, set editoriale completo IT/EN e durata dei nuovi link. Tutte rileggono l'Admin e la configurazione dentro una transazione `SERIALIZABLE`, condividono il lock advisory per ristorante, verificano un fingerprint e salvano audit minimizzato nello stesso commit. Le pagine pubbliche derivano il tenant dalla configurazione server, usano `lang=it|en`, rendering React testuale e nessun interprete HTML/Markdown. Al reschedule la durata del token si ricava dalla vecchia scadenza e dal vecchio istante zonato, senza usare l'impostazione globale corrente. Riferimento: ADR 010.
+
+## 11.4 Consultazione audit
+
+`/admin/audit` e le due API GET rileggono un Admin attivo senza cambio password obbligatorio. La lista proietta `ReservationAuditEvent` e `AuditEvent` su un'intestazione comune, filtra il tenant prima dell'unione e applica nel database periodo locale, sorgente, categoria, azione, esito, attore, entità e correlation ID. Il limite è 25 per default e 100 massimo; il cursore versionato riprende esattamente `createdAt DESC`, ranking sorgente DESC e `id DESC`.
+
+Il repository di dettaglio seleziona un singolo record per sorgente, UUID e tenant. La proiezione di dominio converte prima/dopo/metadata in campi etichettati e validati; JSON, valori inattesi e testi liberi non raggiungono il DTO. Nessuna funzione di consultazione apre transazioni di scrittura, modifica eventi o produce audit. Riferimento: ADR 006.
 
 ## 12. Flussi principali
 
@@ -451,18 +483,20 @@ Sviluppo e staging usano esclusivamente provider simulati. La produzione WhatsAp
 
 Il pattern outbox garantisce che un errore del provider non perda o annulli la prenotazione. I dettagli sono in `docs/adr/005-notification-outbox.md`.
 
+Canale principale, fallback, invio parallelo, outbox e provider simulati vengono implementati insieme in M12. M9 introduce soltanto i dati di contatto, non strategie o invii.
+
 ## 14. Configurazione
 
 Devono essere configurabili e non hardcoded:
 
 - telefono pubblico;
-- dominio;
-- email;
-- numero WhatsApp;
-- testi pubblici;
+- URL canonico pubblico HTTPS;
+- email facoltativa;
+- numero WhatsApp facoltativo;
+- testi pubblici IT/EN per i casi approvati; etichette, errori tecnici e validazioni restano nel codice i18n e non esiste un archivio HTML libero;
 - durata del link personale;
 - giorni e servizi;
-- orari e slot;
+- orari; l'intervallo slot V1 resta fisso a 15 minuti;
 - cutoff;
 - limite di coperti;
 - sale disponibili;

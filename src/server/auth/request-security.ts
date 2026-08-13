@@ -10,6 +10,7 @@ const ALLOWED_POST_LOGIN_PATHS = new Set([
   "/admin/rooms",
   "/admin/schedules",
   "/admin/special-dates",
+  "/admin/users",
 ]);
 
 function firstForwardedValue(value: string | null): string | null {

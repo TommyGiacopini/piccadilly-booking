@@ -54,12 +54,6 @@ function bookingSettingsData(capacity: number) {
     dinnerModificationCutoff: operationalTimeToDatabase(
       DEFAULT_BOOKING_CUTOFFS.dinnerModificationCutoff,
     ),
-    fridayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.fridayDinnerBookingCutoff,
-    ),
-    saturdayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.saturdayDinnerBookingCutoff,
-    ),
   };
 }
 
@@ -137,6 +131,17 @@ describe.sequential("M5 availability with real PostgreSQL", () => {
         ...weeklySchedules(restaurantId),
         ...weeklySchedules(otherRestaurantId),
       ],
+    });
+    await prisma.bookingCutoffRule.createMany({
+      data: [DayOfWeek.FRIDAY, DayOfWeek.SATURDAY].map((dayOfWeek) => ({
+        restaurantId,
+        dayOfWeek,
+        serviceType: ServiceType.DINNER,
+        isEnabled: true,
+        cutoffTime: operationalTimeToDatabase(
+          DEFAULT_BOOKING_CUTOFFS.publicBookingCutoffTime,
+        ),
+      })),
     });
     await prisma.specialDateOverride.createMany({
       data: [
@@ -244,6 +249,23 @@ describe.sequential("M5 availability with real PostgreSQL", () => {
     expect(result.slots).toHaveLength(14);
     expect(result.slots[0]?.time).toBe("19:00");
     expect(result.slots.at(-1)?.time).toBe("22:15");
+  });
+
+  it("reads a generic Friday cutoff while keeping STAFF available", async () => {
+    const input = {
+      restaurantId,
+      date: "2099-11-20",
+      serviceType: "DINNER" as const,
+      partySize: 2,
+      now: new Date("2099-11-20T16:30:00.000Z"),
+    };
+    const [publicResult, staffResult] = await Promise.all([
+      getAvailabilityPreview({ ...input, channel: "PUBLIC" }),
+      getAvailabilityPreview({ ...input, channel: "STAFF" }),
+    ]);
+
+    expect(publicResult.slots[0]?.reason).toBe("ONLINE_CUTOFF_REACHED");
+    expect(staffResult.slots[0]?.available).toBe(true);
   });
 
   it("resolves a disabled weekly rule as closed", async () => {

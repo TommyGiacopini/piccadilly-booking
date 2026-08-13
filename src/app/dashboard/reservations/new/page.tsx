@@ -1,6 +1,8 @@
 import { ReservationCreateForm } from "@/app/dashboard/reservations/new/reservation-create-form";
 import { getStaffReservationFormContext } from "@/modules/dashboard/application/dashboard-query";
+import { listAvailableRoomsForService } from "@/modules/rooms/infrastructure/service-instance-repository";
 import { requireAuthenticatedUser } from "@/server/auth/authorization";
+import { prisma } from "@/server/db/prisma";
 import { resolveReservationConfig } from "@/shared/config/reservation-config";
 
 export const dynamic = "force-dynamic";
@@ -16,9 +18,17 @@ export default async function NewReservationPage({
   const user = await requireAuthenticatedUser("/dashboard/reservations/new");
   const config = resolveReservationConfig();
   const query = await searchParams;
+  const now = new Date();
   const context = await getStaffReservationFormContext({
     restaurantId: user.restaurantId,
     rawDate: typeof query.date === "string" ? query.date : undefined,
+    now,
+  });
+  const initialRooms = await listAvailableRoomsForService(prisma, {
+    restaurantId: user.restaurantId,
+    localDate: context.localDate,
+    serviceType: "DINNER",
+    now,
   });
 
   return (
@@ -39,9 +49,7 @@ export default async function NewReservationPage({
 
         <ReservationCreateForm
           defaultDate={context.localDate}
-          initialRooms={context.rooms
-            .filter((room) => room.isActive)
-            .map(({ code, name }) => ({ code, name }))}
+          initialRooms={initialRooms}
           privacyPolicyVersion={config.privacyPolicyVersion}
         />
       </div>

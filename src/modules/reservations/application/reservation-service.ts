@@ -36,6 +36,7 @@ import {
   acquireCapacityLock,
   acquireIdempotencyLock,
 } from "@/modules/reservations/infrastructure/reservation-locks";
+import { materializeServiceInstance } from "@/modules/rooms/infrastructure/service-instance-repository";
 import {
   resolveReservationConfig,
   type ReservationConfig,
@@ -255,6 +256,11 @@ export async function createReservation(input: {
       command,
       privacyPolicyVersion: config.privacyPolicyVersion,
       privacyConsentAt: now,
+    });
+    await materializeServiceInstance(client, {
+      restaurantId: actor.restaurantId,
+      localDate: command.localDate,
+      serviceType: command.serviceType,
     });
     await attachReservationToIdempotencyKey(
       client,

@@ -59,9 +59,15 @@ export async function readAvailabilityConfiguration(input: {
         select: {
           rollingCapacityCovers: true,
           rollingWindowMinutes: true,
-          fridayDinnerBookingCutoff: true,
-          saturdayDinnerBookingCutoff: true,
         },
+      },
+      bookingCutoffRules: {
+        where: {
+          dayOfWeek: DayOfWeek[input.dayOfWeek],
+          serviceType,
+        },
+        select: { isEnabled: true, cutoffTime: true },
+        take: 1,
       },
       weeklySchedules: {
         where: {
@@ -80,6 +86,7 @@ export async function readAvailabilityConfiguration(input: {
       specialDateOverrides: {
         where: {
           date: localDateToDatabase(input.date),
+          archivedAt: null,
           scope: {
             in: [SpecialDateScope.ALL, SpecialDateScope[input.serviceType]],
           },
@@ -115,11 +122,13 @@ export async function readAvailabilityConfiguration(input: {
             restaurant.bookingSettings.rollingCapacityCovers,
           rollingWindowMinutes:
             restaurant.bookingSettings.rollingWindowMinutes,
-          fridayDinnerBookingCutoff: operationalTimeFromDatabase(
-            restaurant.bookingSettings.fridayDinnerBookingCutoff,
-          ),
-          saturdayDinnerBookingCutoff: operationalTimeFromDatabase(
-            restaurant.bookingSettings.saturdayDinnerBookingCutoff,
+        }
+      : null,
+    bookingCutoffRule: restaurant.bookingCutoffRules[0]
+      ? {
+          isEnabled: restaurant.bookingCutoffRules[0].isEnabled,
+          cutoffTime: operationalTimeFromDatabase(
+            restaurant.bookingCutoffRules[0].cutoffTime,
           ),
         }
       : null,

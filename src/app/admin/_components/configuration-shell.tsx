@@ -2,11 +2,14 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 const links = [
+  { href: "/admin/users", label: "Utenti" },
   { href: "/admin/configuration", label: "Impostazioni" },
+  { href: "/admin/public-settings", label: "Pubblico IT/EN" },
   { href: "/admin/rooms", label: "Sale e tavoli" },
   { href: "/admin/schedules", label: "Orari settimanali" },
   { href: "/admin/special-dates", label: "Date speciali" },
   { href: "/admin/availability-preview", label: "Anteprima disponibilità" },
+  { href: "/admin/audit", label: "Audit" },
 ] as const;
 
 export function ConfigurationShell({
@@ -74,9 +77,11 @@ export function StatusBanner({
   const isError = status === "error";
   const text = isError
     ? message || "Controlla i dati inseriti e riprova."
-    : status === "deleted"
-      ? "Data speciale rimossa."
-      : "Configurazione salvata.";
+    : status === "archived"
+      ? "Data speciale archiviata."
+      : status === "reactivated"
+        ? "Data speciale ripristinata."
+        : "Configurazione salvata.";
 
   return (
     <div

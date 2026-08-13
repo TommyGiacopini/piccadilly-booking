@@ -1,6 +1,6 @@
 # Piccadilly Booking
 
-Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. La Milestone M8 aggiunge la dashboard giornaliera operativa, le prenotazioni telefoniche idempotenti e la gestione Staff/Admin con capacità e audit atomici.
+Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. M9-A aggiunge la fondazione audit; M9-B implementa il lifecycle degli account; M9-C rende amministrabili servizi, capacità e cutoff; M9-D aggiunge istanze lazy, disponibilità sale e catalogo tavoli; M9-E configura contatti, contenuti IT/EN e durata dei nuovi link; M9-F aggiunge la consultazione Admin read-only dell'audit. Le tranche M9-A–M9-F sono implementate e hanno superato la revisione tecnica indipendente Work. Il change set M9 è tracciato nella PR #10; deploy e milestone successive sono gestiti separatamente.
 
 ## Requisiti locali
 
@@ -64,6 +64,11 @@ Le migrazioni sono progressive:
 - `20260803141513_add_reservation_core`: nucleo persistente delle prenotazioni M6.
 - `20260810090000_add_public_booking_management`: prenotazione pubblica, link personale, audit e rate limit M7.
 - `20260810160000_add_authenticated_reservation_audit`: autore, ruolo e metadati dell'override per l'audit autenticato M8.
+- `20260812090000_add_admin_audit_foundation`: `AuditEvent`, lifecycle delle date straordinarie e sanificazione minimizzata degli snapshot legacy M9-A.
+- `20260812120000_add_user_lifecycle`: flag `mustChangePassword` per il lifecycle account M9-B.
+- `20260812160000_add_generic_booking_cutoff_rules`: regole generiche di cutoff pubblico M9-C e vincoli V1 per slot da 15 minuti e finestra da 30 minuti.
+- `20260812200000_add_service_instance_room_availability`: istanze servizio minimali, disponibilità per sala e policy del catalogo fisso M9-D, senza backfill.
+- `20260813123000_add_public_settings_and_content`: contatti pubblici e sette contenuti editoriali IT/EN M9-E, senza modificare prenotazioni o token.
 
 La migrazione M4 aggiunge:
 
@@ -78,9 +83,17 @@ La migrazione M6 aggiunge `Reservation`, `ReservationIdempotencyKey` e i soli en
 
 La migrazione M7 estende origine e consenso con `PUBLIC` e `WEB_CHECKBOX`, aggiunge la durata configurabile del link, il versionamento delle modifiche, condizioni e lingua del consenso, `ReservationManagementToken`, `PublicReservationRateLimit` e `ReservationAuditEvent`. I vincoli impediscono a una prenotazione pubblica di avere un autore Staff o un override e richiedono entrambi i consensi web versionati.
 
+La migrazione M9-A mantiene `ReservationAuditEvent` e aggiunge `AuditEvent` per autenticazione, identità futura e configurazione. Gli snapshot prenotazione legacy vengono trasformati in una whitelist operativa senza modificare prenotazioni, contatti, consensi, token, righe audit o correlation ID. `SpecialDateOverride.archivedAt` sostituisce la cancellazione fisica con archiviazione e ripristino.
+
+La migrazione M9-C trasferisce i cutoff pubblici iniziali del venerdì e sabato sera in `BookingCutoffRule`, verifica il backfill e rimuove i due campi legacy nella stessa migrazione. Il modello ammette una regola per ristorante, giorno e servizio; i vincoli PostgreSQL rendono invarianti gli slot da 15 minuti e la finestra mobile da 30 minuti. La migrazione non modifica prenotazioni o audit esistenti.
+
+La migrazione M9-D verifica il catalogo canonico, assegna `DEFAULT_AVAILABLE` a Sala 1–3 ed `EXPLICIT_ONLY` a Galleria/Terrazzo, quindi crea `ServiceInstance` e `ServiceRoomAvailability`. Non copia orari, capacità o cutoff, non collega né modifica prenotazioni e non materializza servizi in backfill.
+
+La migrazione M9-E crea `RestaurantPublicSettings` e `PublicContent`, con locale e chiavi in allow-list, unicità tenant e vincoli di formato e lunghezza. Non modifica durata, scadenze, hash, prenotazioni, utenti o audit esistenti.
+
 PostgreSQL usa colonne native `TIME(0)` per gli orari del giorno e `DATE` per le date locali. Il codice converte questi valori al bordo Prisma usando esclusivamente campi UTC della rappresentazione JavaScript: non viene associata una data operativa fittizia e una data come `2026-10-25` non slitta a causa della conversione `Europe/Rome`/UTC. I vincoli SQL impediscono intervalli invertiti, slot o capacità non positivi, posti massimi inferiori ai minimi e duplicati di sale, tavoli, regole settimanali o eccezioni.
 
-Il seed è idempotente e mantiene un solo ristorante `Piccadilly Demo`, un Admin e uno Staff fittizi insieme alla configurazione M4. Rifiuta sempre le credenziali demo con `APP_ENV=production`.
+Il seed è idempotente e mantiene un solo ristorante `Piccadilly Demo`, un Admin e uno Staff fittizi insieme alla configurazione. Le impostazioni, gli orari e le regole di cutoff già esistenti non vengono ripristinati o riattivati. Contatti `example.test` e testi dimostrativi IT/EN vengono creati soltanto se mancanti; valori Admin e durata del link non vengono sovrascritti. Il seed rifiuta sempre le credenziali demo con `APP_ENV=production`.
 
 ## Configurazione demo M4
 
@@ -111,7 +124,7 @@ Le impostazioni iniziali sono:
 - nuova cena online di venerdì e sabato: entro le 17:30 dello stesso giorno;
 - timezone operativa: `Europe/Rome`.
 
-Capacità, slot, orari, abilitazione dei servizi e cut-off sono modificabili dall'Admin. La durata della finestra mobile viene persistita e mostrata, ma resta fissata a 30 minuti nella prima versione per rispettare la decisione architetturale approvata. Le date speciali possono chiudere l'intera giornata, soltanto il pranzo o soltanto la cena; un'apertura può avere orari e capacità speciali opzionali. Il seed non inserisce date speciali, perché non sono documentate chiusure reali approvate.
+Capacità, orari, abilitazione dei servizi e cutoff sono gestiti dall'Admin. Secondo D-021, nella V1 soltanto il limite di coperti è modificabile: slot e finestra sono fissati rispettivamente a 15 e 30 minuti, mostrati come valori informativi e protetti da validazione server e vincoli PostgreSQL. Le date speciali possono chiudere l'intera giornata, soltanto il pranzo o soltanto la cena; un'apertura può avere orari e capacità speciali opzionali. Il seed non inserisce date speciali, perché non sono documentate chiusure reali approvate.
 
 ## Motore availability M5
 
@@ -132,7 +145,7 @@ La capacità usa finestre mobili ancorate a ogni slot configurato, mai blocchi f
 
 Tutti i confronti operativi usano la timezone IANA del ristorante, inizialmente `Europe/Rome`, tramite `Intl.DateTimeFormat` e un clock iniettato. Date `YYYY-MM-DD` e orari `HH:mm` restano valori locali e non vengono convertiti in timestamp UTC fittizi; i cambi tra ora solare e legale sono coperti da test deterministici.
 
-Per `PUBLIC`, gli slot trascorsi non sono disponibili e il dinner dello stesso venerdì o sabato chiude online al cutoff configurato, inizialmente 17:30. Il cutoff non si applica a date future o a `LUNCH`. Il canale `STAFF` ignora il cutoff online, ma continua a rispettare chiusure, configurazione e slot trascorsi.
+Per `PUBLIC`, gli slot trascorsi non sono disponibili e una regola `BookingCutoffRule` attiva chiude le nuove prenotazioni online dello stesso giorno all'orario configurato. Giorno e servizio sono generici; il seed abilita inizialmente venerdì e sabato a cena alle 17:30. Il canale `STAFF` ignora sempre questo cutoff pubblico, ma continua a rispettare chiusure, configurazione e slot trascorsi.
 
 L'anteprima M5 resta consultiva e usa intenzionalmente `arrivals: []`: non salva carichi simulati e non rappresenta disponibilità reale pubblica. La creazione M6 riusa invece lo stesso motore dentro la transazione, dopo aver riletto da PostgreSQL configurazione e prenotazioni confermate.
 
@@ -188,7 +201,7 @@ La prima risposta usa HTTP `201`. Un retry con la stessa chiave e lo stesso payl
 
 Il token URL-safe equivale a 32 byte e viene derivato deterministicamente con HMAC-SHA-256 dal secret server-side stabile e dall'UUID interno casuale della prenotazione. PostgreSQL conserva esclusivamente SHA-256 del token: il valore raw non è salvato, registrato nei log o restituito fuori dalla creazione e dal replay idempotente. Questa derivazione permette di ricostruire in sicurezza lo stesso link durante il replay senza cifrare o persistere il token raw.
 
-Il percorso personale è `/p/<token>`. Il link resta consultabile fino alla durata configurata in `RestaurantBookingSettings`, compresa tra 1 e 24 ore e inizialmente fissata a 24 ore dopo l'orario prenotato. Il cutoff di modifica/cancellazione è distinto: 10:30 per il pranzo e 17:30 per la cena nella configurazione demo. Dopo il cutoff la pagina resta in sola lettura; dopo la scadenza, token inesistenti, revocati e scaduti ricevono la stessa risposta generica.
+Il percorso personale è `/p/<token>`. Il link resta consultabile fino alla durata configurata in `RestaurantBookingSettings`, compresa tra 1 e 24 ore e inizialmente fissata a 24 ore dopo l'orario prenotato. Una variazione vale soltanto per i token successivi; al reschedule ogni token esistente conserva la durata originaria rispetto al nuovo orario, anche attraverso i cambi DST. Il cutoff di modifica/cancellazione è distinto: 10:30 per il pranzo e 17:30 per la cena nella configurazione demo. Dopo il cutoff la pagina resta in sola lettura; dopo la scadenza, token inesistenti, revocati e scaduti ricevono la stessa risposta generica.
 
 La modifica acquisisce il lock del token e i lock di capacità della destinazione corrente e nuova in ordine deterministico, esclude la prenotazione corrente dal conteggio, ricontrolla sala/slot/capienza e aggiorna anche la scadenza del link. La cancellazione cambia logicamente lo stato in `CANCELLED`, libera subito i coperti ed è idempotente. Creazione, modifica e cancellazione producono audit atomico con correlation ID e snapshot prima/dopo limitato ai dati operativi modificabili.
 
@@ -246,7 +259,7 @@ npm run test:e2e
 npm run build
 ```
 
-`npm run test:e2e` usa `@playwright/test`, costruisce l'app, ripristina subito prima del browser gli utenti e la configurazione demo idempotenti e avvia `next start` su `localhost:4000` con un runner che gestisce esplicitamente il processo anche su Windows. Il seed immediatamente precedente rende il test indipendente dalle fixture PostgreSQL delle suite Vitest. Copre accesso anonimo negato, login Staff/Admin, dashboard, filtri, inserimento, modifica, cancellazione, override e viewport smartphone, tablet e desktop.
+`npm run test:e2e` usa `@playwright/test`, costruisce l'app, esegue il seed strutturale senza sovrascrivere gli account demo e prepara separatamente i soli account fittizi dedicati `e2e.admin`/`e2e.staff`. Il runner avvia `next start` su `localhost:4000` e gestisce con teardown limitato il processo anche su Windows. Copre accesso anonimo negato, login Staff/Admin, dashboard, filtri, inserimento, modifica, cancellazione, override, lifecycle utenti/password e viewport smartphone, tablet e desktop.
 
 Il seed resta strutturale e idempotente: non crea prenotazioni, token personali, chiavi di idempotenza, eventi audit o bucket di rate limit.
 
@@ -257,22 +270,26 @@ Il seed resta strutturale e idempotente: non crea prenotazioni, token personali,
 | `ADMIN` | `demo.admin` | valore locale di `AUTH_DEMO_ADMIN_PASSWORD` |
 | `STAFF` | `demo.staff` | valore locale di `AUTH_DEMO_STAFF_PASSWORD` |
 
-Queste identità non corrispondono a persone reali. Le password di `.env.example` non devono essere usate in staging o produzione. Non esiste registrazione pubblica: la futura creazione degli account rimane un'operazione riservata all'Admin.
+Queste identità non corrispondono a persone reali. Le password di `.env.example` non devono essere usate in staging o produzione. Non esiste registrazione pubblica: la creazione degli account è un'operazione riservata all'Admin in `/admin/users`.
 
 `ADMIN` accede anche alla pagina tecnica `/admin`; `STAFF` può usare l'area protetta ordinaria ma viene respinto dalle pagine e dalle mutazioni di configurazione. I controlli sono eseguiti sul server e ogni aggiornamento è limitato al `restaurantId` della sessione.
 
-## Percorsi M4–M8
+## Percorsi M4–M9-F
 
 - `/admin/configuration`: capacità e cut-off;
-- `/admin/rooms`: ordine e stato delle sale, modifica dei tavoli demo;
+- `/admin/public-settings`: contatti, contenuti editoriali IT/EN e durata dei nuovi link;
+- `/admin/rooms`: data/servizio, disponibilità delle cinque sale, ordine/stato globale e lifecycle dei tavoli;
 - `/admin/schedules`: servizi e orari settimanali;
-- `/admin/special-dates`: creazione, modifica e rimozione delle eccezioni locali.
+- `/admin/special-dates`: creazione, modifica, archiviazione e ripristino delle eccezioni locali.
 - `/admin/availability-preview`: anteprima M5 di slot e capacità con carico persistente vuoto.
+- `/admin/audit`: lista unificata, filtri, paginazione keyset e dettaglio minimizzato dell'audit, solo Admin.
 - `/dashboard`: dashboard giornaliera Staff/Admin con filtri, riepiloghi, disponibilità e gestione;
 - `/dashboard/reservations/new`: inserimento telefonico rapido `PHONE` per STAFF e ADMIN;
 - `/dashboard/reservations/<id>/edit`: modifica autenticata con versione ottimistica;
 - `/prenota`: prenotazione pubblica responsive in italiano e inglese.
 - `/p/<token>`: consultazione e gestione della singola prenotazione pubblica.
+- `/admin/users`: gestione utenti riservata agli Admin;
+- `/cambia-password`: cambio personale, obbligatorio al primo accesso o volontario.
 
 La lettura tecnica `GET /api/admin/availability-preview?date=YYYY-MM-DD&service=LUNCH|DINNER&partySize=2&channel=PUBLIC|STAFF` resta accessibile esclusivamente ad `ADMIN`. Le API operative `/api/staff/*` sono accessibili a STAFF e ADMIN. Tutti i percorsi sono isolati sul `restaurantId` della sessione, validati sul server e restituiti con `Cache-Control: no-store`.
 
@@ -294,11 +311,12 @@ npm run dev
 - orari ADMIN: [http://localhost:4000/admin/schedules](http://localhost:4000/admin/schedules);
 - date speciali ADMIN: [http://localhost:4000/admin/special-dates](http://localhost:4000/admin/special-dates);
 - anteprima disponibilità ADMIN: [http://localhost:4000/admin/availability-preview](http://localhost:4000/admin/availability-preview);
+- audit ADMIN: [http://localhost:4000/admin/audit](http://localhost:4000/admin/audit);
 - API anteprima disponibilità ADMIN: [http://localhost:4000/api/admin/availability-preview](http://localhost:4000/api/admin/availability-preview);
 - health check: [http://localhost:4000/api/health](http://localhost:4000/api/health).
 - prenotazione pubblica: [http://localhost:4000/prenota](http://localhost:4000/prenota).
 
-Il login accetta username normalizzati e password di almeno 12 caratteri. Le risposte per username inesistente, password errata e utente disabilitato non rivelano quale controllo sia fallito.
+Il login mantiene compatibilità con gli account M3 (minimo storico 12). Le nuove password personali seguono la policy M9-B da 15 a 128 code point Unicode. Le risposte per username inesistente, password errata e utente disabilitato non rivelano quale controllo sia fallito.
 
 ## Password e sessioni
 
@@ -308,6 +326,8 @@ Ogni login crea una nuova sessione opaca con scadenza assoluta di 8 ore. Il cook
 
 Il logout valorizza `revokedAt`, cancella il cookie e rende inutilizzabile il token precedente. Se un utente viene disabilitato, la validazione respinge la sessione e revoca tutte le sue sessioni ancora aperte. In locale una nuova sessione si crea eseguendo nuovamente il login; per revocare una sessione specifica usare il logout. Per verifiche amministrative sui soli dati fittizi è possibile aprire `npm run db:studio` e valorizzare `revokedAt` senza eliminare utenti o database.
 
+Creazione e reset mostrano una password temporanea casuale di 24 caratteri soltanto nella risposta one-shot `no-store`; il seed non ripristina password, ruolo, stato o flag di account già esistenti. Cambio password, reset, variazione ruolo e disabilitazione revocano tutte le sessioni. Con `mustChangePassword=true` pagine e API operative sono bloccate fino al cambio, tranne cambio password e logout.
+
 Le richieste POST autenticate richiedono un'origine coerente con l'host e il cookie SameSite. I redirect dopo il login sono limitati ai percorsi tecnici autorizzati, inclusa la creazione M6.
 
 ## Rate limit del login
@@ -315,6 +335,28 @@ Le richieste POST autenticate richiedono un'origine coerente con l'host e il coo
 I tentativi falliti sono persistiti in PostgreSQL: 5 errori nella finestra di 15 minuti bloccano la chiave per 15 minuti. La chiave combina username normalizzato e indirizzo client, quindi viene salvata solo dopo HMAC e non rivela i valori originali. Le righe scadute sono rimosse durante i tentativi successivi.
 
 Con `AUTH_TRUST_PROXY=false` gli header inoltrati sono ignorati. Impostare `true` soltanto quando l'app è dietro un proxy fidato che sovrascrive `X-Forwarded-For`, `X-Forwarded-Host` e `X-Forwarded-Proto`.
+
+## Fondazione audit M9-A
+
+`AuditEvent` registra login riuscito, credenziali non valide, richieste bloccate dal rate limit, logout riuscito e tutte le mutazioni M4 già presenti. Revoca sessione, modifica configurazione e relativo audit condividono la stessa transazione; un fallimento dell'audit annulla la mutazione e un no-op non produce eventi. Categoria, azione ed esito sono validati dal dominio e tutte le operazioni sono isolate sul ristorante della sessione.
+
+Le configurazioni amministrative possono essere lette soltanto passando un attore server-side `ADMIN`; il servizio deriva `restaurantId` dall'attore. Le query tecniche interne del motore availability restano separate. Le note operative delle date sono rappresentate nell'audit soltanto da un flag di presenza.
+
+Il nuovo snapshot canonico delle prenotazioni è condiviso da flussi pubblici e autenticati. Conserva data, servizio, ora, coperti, stato, origine, versione, codice sala, flag logistici/alimentari e override, ma esclude PII e testi completi di richieste, allergie, intolleranze, ricorrenze e note.
+
+M9-A non implementava pannello o gestione utenti; M9-B li aggiunge. M9-C completa cutoff e impatto per la configurazione operativa. M9-D implementa `ServiceInstance`, disponibilità sale e tavoli senza assegnazione. M9-E aggiunge contatti, contenuti pubblici IT/EN e durata prospettica preservando i token esistenti. M9-F completa la superficie M9 con la consultazione audit; le assegnazioni restano M10.
+
+## Consultazione audit M9-F
+
+`GET /api/admin/audit` unisce in una sola query parametrizzata gli eventi prenotazione e amministrativi. Ogni ramo applica il tenant della sessione prima della `UNION ALL`; l'ordinamento è timestamp, ranking sorgente e UUID discendenti. I filtri sono allow-listed, il periodo usa giorni locali nella timezone del ristorante e la pagina successiva usa un cursore base64url versionato legato al fingerprint dei filtri, senza `OFFSET`.
+
+`GET /api/admin/audit/<source>/<id>` richiede sorgente e UUID validi e ricerca sempre anche il tenant. Prima/dopo/metadata sono proiettati in campi minimizzati per categoria e azione: non vengono restituiti raw JSON, contatti, contenuti pubblici, note, HMAC, token, hash o credenziali, anche se un evento storico contiene chiavi inattese. Pagina e API sono `no-store`, `noindex` e strettamente read-only; la consultazione non genera audit.
+
+## Configurazione operativa M9-C
+
+Le pagine `/admin/configuration` e `/admin/schedules` usano un protocollo a due passi. Il server calcola un'anteprima minimizzata delle sole prenotazioni future confermate, senza identificativi o PII; quando l'impatto è materiale l'Admin deve confermarlo esplicitamente. L'applicazione rilegge attore, configurazione e carico in una transazione `SERIALIZABLE`, acquisisce un lock advisory stabile per ristorante e rifiuta con `IMPACT_CHANGED` se il fingerprint non è più corrente.
+
+L'anteprima distingue servizio disabilitato, prenotazione fuori dai nuovi orari, superamento della nuova capacità e modifica del cutoff di gestione. Le eccezioni attive per data conservano la precedenza sulle regole settimanali e sulla capacità generale. La modifica confermata cambia soltanto la configurazione: nessuna prenotazione viene aggiornata, annullata o eliminata. Mutazione e audit minimizzato sono atomici; un no-op non produce audit.
 
 ## Health check
 
@@ -332,6 +374,6 @@ npm run build
 
 La suite Vitest comprende test unitari e test d'integrazione con PostgreSQL reale; non usa SQLite.
 
-## Confini della Milestone M8
+## Confini dei checkpoint M9-A/M9-B/M9-C/M9-D/M9-E/M9-F
 
-M8 implementa dashboard giornaliera, prenotazioni telefoniche e gestione Staff/Admin. Restano esclusi assegnazione definitiva di sale e tavoli, pannello amministratore M9, riattivazione, notifiche, outbox, WhatsApp, email, PDF, Excel, importazioni, deploy, staging, database cloud e dati reali. Il seed continua a creare soltanto ristorante, utenti, configurazioni, sale e tavoli fittizi e non inserisce prenotazioni operative o record tecnici M8.
+M9-A implementa fondazione e minimizzazione audit; M9-B lifecycle utenti e password; M9-C servizi/orari, capacità e cutoff; M9-D istanze lazy, sale e tavoli; M9-E contatti, contenuti IT/EN e durata dei link; M9-F consultazione Admin dell'audit. Le istanze hanno stati logici derivati `VIRTUAL`, `MATERIALIZED`, `HISTORICAL`; solo una prenotazione riuscita o una modifica Admin effettiva materializza tutte le righe sala. `DA ASSEGNARE` resta un'opzione virtuale e le assegnazioni appartengono a M10. Restano esclusi notifiche, documenti, deploy, dati reali e tutte le funzioni M10–M12.

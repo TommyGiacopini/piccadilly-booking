@@ -10,7 +10,10 @@ import {
   getStaffReservation,
   updateStaffReservation,
 } from "@/modules/reservations/application/staff-reservation-service";
-import { getRequestUser } from "@/server/auth/authorization";
+import {
+  getRequestUser,
+  passwordChangeRequiredResponse,
+} from "@/server/auth/authorization";
 import { resolveAuthConfig } from "@/server/auth/auth-config";
 import { isSameOriginRequest } from "@/server/auth/request-security";
 
@@ -38,6 +41,8 @@ export async function GET(
   if (!user) {
     return noStoreJson({ error: "Unauthorized" }, 401);
   }
+  const passwordGuard = passwordChangeRequiredResponse(user);
+  if (passwordGuard) return passwordGuard;
 
   const { id } = await context.params;
   const parsedId = z.string().uuid().safeParse(id);
@@ -106,6 +111,8 @@ async function mutate(
   const user = await getRequestUser(request);
 
   if (!user) return noStoreJson({ error: "Unauthorized" }, 401);
+  const passwordGuard = passwordChangeRequiredResponse(user);
+  if (passwordGuard) return passwordGuard;
 
   if (!isSameOriginRequest(request, resolveAuthConfig().trustProxy)) {
     return noStoreJson({ error: "Forbidden" }, 403);

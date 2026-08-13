@@ -17,8 +17,8 @@ export interface EffectiveAvailabilityConfiguration {
   slotIntervalMinutes: number | null;
   capacityLimit: number | null;
   rollingWindowMinutes: number | null;
-  fridayDinnerBookingCutoff: string | null;
-  saturdayDinnerBookingCutoff: string | null;
+  publicBookingCutoffEnabled: boolean;
+  publicBookingCutoffTime: string | null;
   isValid: boolean;
 }
 
@@ -67,10 +67,10 @@ export function resolveEffectiveAvailabilityConfiguration(
     settings?.rollingCapacityCovers ??
     null;
   const rollingWindowMinutes = settings?.rollingWindowMinutes ?? null;
-  const fridayDinnerBookingCutoff =
-    settings?.fridayDinnerBookingCutoff ?? null;
-  const saturdayDinnerBookingCutoff =
-    settings?.saturdayDinnerBookingCutoff ?? null;
+  const publicBookingCutoffEnabled =
+    configuration.bookingCutoffRule?.isEnabled ?? false;
+  const publicBookingCutoffTime =
+    configuration.bookingCutoffRule?.cutoffTime ?? null;
 
   const specialTimesAreCoherent =
     !selected.rule ||
@@ -82,11 +82,10 @@ export function resolveEffectiveAvailabilityConfiguration(
     isOperationalTime(startTime) &&
     isOperationalTime(endTime) &&
     operationalTimeToMinutes(startTime) < operationalTimeToMinutes(endTime);
-  const cutoffTimesAreValid =
-    fridayDinnerBookingCutoff !== null &&
-    saturdayDinnerBookingCutoff !== null &&
-    isOperationalTime(fridayDinnerBookingCutoff) &&
-    isOperationalTime(saturdayDinnerBookingCutoff);
+  const cutoffTimeIsValid =
+    !publicBookingCutoffEnabled ||
+    (publicBookingCutoffTime !== null &&
+      isOperationalTime(publicBookingCutoffTime));
   const serviceMatches = weeklyRule?.serviceType === serviceType;
   const isValid =
     specialTimesAreCoherent &&
@@ -96,7 +95,7 @@ export function resolveEffectiveAvailabilityConfiguration(
     hasValidPositiveInteger(capacityLimit) &&
     hasValidPositiveInteger(rollingWindowMinutes) &&
     rollingWindowMinutes >= slotIntervalMinutes &&
-    cutoffTimesAreValid;
+    cutoffTimeIsValid;
 
   return {
     source: selected.source,
@@ -106,8 +105,8 @@ export function resolveEffectiveAvailabilityConfiguration(
     slotIntervalMinutes,
     capacityLimit,
     rollingWindowMinutes,
-    fridayDinnerBookingCutoff,
-    saturdayDinnerBookingCutoff,
+    publicBookingCutoffEnabled,
+    publicBookingCutoffTime,
     isValid,
   };
 }

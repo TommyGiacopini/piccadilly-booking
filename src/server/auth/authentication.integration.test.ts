@@ -8,6 +8,10 @@ import { POST as logoutPost } from "@/app/api/auth/logout/route";
 import { UserRole } from "@/generated/prisma/client";
 import { authenticateCredentials } from "@/server/auth/authentication";
 import {
+  processLoginWithAudit,
+  revokeSessionWithAudit,
+} from "@/server/auth/authentication-audit";
+import {
   LOCAL_RATE_LIMIT_SECRET,
   resolveAuthConfig,
 } from "@/server/auth/auth-config";
@@ -107,6 +111,7 @@ describe.sequential("authentication with real PostgreSQL", () => {
     await prisma.loginRateLimit.deleteMany({
       where: { keyHash: { in: [...rateLimitKeys] } },
     });
+    await prisma.auditEvent.deleteMany({ where: { restaurantId } });
     await prisma.user.deleteMany({ where: { restaurantId } });
     await prisma.restaurant.deleteMany({ where: { id: restaurantId } });
     await prisma.$disconnect();
@@ -162,6 +167,43 @@ describe.sequential("authentication with real PostgreSQL", () => {
         password: testPassword,
       }),
     ).resolves.toBeNull();
+  });
+
+  it("audits invalid credentials without identity data or secrets", async () => {
+    const keyHash = createRateLimitKeyHash(
+      "integration.audit-failure",
+      "direct-client",
+      resolveAuthConfig(process.env).rateLimitSecret,
+    );
+    rateLimitKeys.add(keyHash);
+
+    const response = await loginPost(
+      createFormRequest("/api/auth/login", {
+        username: "integration.audit-failure",
+        password: wrongPassword,
+      }),
+    );
+    expect(response.status).toBe(303);
+
+    const event = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        restaurantId,
+        action: "LOGIN_FAILED",
+        metadata: { path: ["credentialFingerprint"], equals: keyHash },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(event).toMatchObject({
+      category: "AUTHENTICATION",
+      outcome: "FAILURE",
+      actorUserId: null,
+      actorRole: null,
+      metadata: { credentialFingerprint: keyHash },
+    });
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain("integration.audit-failure");
+    expect(serialized).not.toContain(wrongPassword);
+    expect(serialized).not.toContain("direct-client");
   });
 
   it("creates, validates and revokes an opaque database session", async () => {
@@ -234,6 +276,46 @@ describe.sequential("authentication with real PostgreSQL", () => {
     ).resolves.toMatchObject({ attempts: config.rateLimitMaxAttempts });
   });
 
+  it("audits a request already blocked by the login rate limiter", async () => {
+    const config = resolveAuthConfig(process.env);
+    const username = "integration.route-rate-limit";
+    const keyHash = createRateLimitKeyHash(
+      username,
+      "direct-client",
+      config.rateLimitSecret,
+    );
+    rateLimitKeys.add(keyHash);
+
+    for (let attempt = 0; attempt <= config.rateLimitMaxAttempts; attempt += 1) {
+      const response = await loginPost(
+        createFormRequest("/api/auth/login", {
+          username,
+          password: wrongPassword,
+        }),
+      );
+      expect(response.status).toBe(303);
+    }
+
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          restaurantId,
+          action: "LOGIN_FAILED",
+          metadata: { path: ["credentialFingerprint"], equals: keyHash },
+        },
+      }),
+    ).resolves.toBe(config.rateLimitMaxAttempts);
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          restaurantId,
+          action: "LOGIN_RATE_LIMITED",
+          metadata: { path: ["credentialFingerprint"], equals: keyHash },
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
   it("cleans up expired login rate-limit entries", async () => {
     const keyHash = "a".repeat(64);
     rateLimitKeys.add(keyHash);
@@ -290,6 +372,131 @@ describe.sequential("authentication with real PostgreSQL", () => {
       "piccadilly_session=",
     );
     await expect(validateSessionToken(rawToken)).resolves.toBeNull();
+
+    const events = await prisma.auditEvent.findMany({
+      where: {
+        restaurantId,
+        action: { in: ["LOGIN_SUCCEEDED", "LOGOUT_SUCCEEDED"] },
+        actorUserId: adminId,
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(events.map((event) => event.action)).toEqual([
+      "LOGIN_SUCCEEDED",
+      "LOGOUT_SUCCEEDED",
+    ]);
+    expect(events.every((event) => event.restaurantId === restaurantId)).toBe(
+      true,
+    );
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("integration.admin");
+    expect(serialized).not.toContain(testPassword);
+    expect(serialized).not.toContain(rawToken!);
+  });
+
+  it("rolls session revocation back if the logout audit cannot be written", async () => {
+    const created = await createSessionForUser(staffId);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION m9a_test_reject_logout_audit()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.action = 'LOGOUT_SUCCEEDED' THEN
+          RAISE EXCEPTION 'synthetic M9-A logout audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER m9a_test_reject_logout_audit_trigger
+      BEFORE INSERT ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION m9a_test_reject_logout_audit();
+    `);
+
+    try {
+      await expect(
+        revokeSessionWithAudit({ restaurantId, rawToken: created.token }),
+      ).rejects.toThrow("synthetic M9-A logout audit failure");
+    } finally {
+      await prisma.$executeRawUnsafe(
+        "DROP TRIGGER IF EXISTS m9a_test_reject_logout_audit_trigger ON audit_events",
+      );
+      await prisma.$executeRawUnsafe(
+        "DROP FUNCTION IF EXISTS m9a_test_reject_logout_audit()",
+      );
+    }
+
+    await expect(
+      prisma.session.findUnique({ where: { id: created.id } }),
+    ).resolves.toMatchObject({ revokedAt: null });
+    await expect(revokeSessionToken(created.token)).resolves.toBe(true);
+  });
+
+  it("rolls session creation back if the successful-login audit fails", async () => {
+    const config = resolveAuthConfig(process.env);
+    const sessionsBefore = await prisma.session.count({ where: { userId: adminId } });
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION m9a_test_reject_login_audit()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.action = 'LOGIN_SUCCEEDED' THEN
+          RAISE EXCEPTION 'synthetic M9-A login audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER m9a_test_reject_login_audit_trigger
+      BEFORE INSERT ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION m9a_test_reject_login_audit();
+    `);
+
+    try {
+      await expect(
+        processLoginWithAudit({
+          restaurantId,
+          credentials: {
+            username: "integration.admin",
+            password: testPassword,
+          },
+          credentialFingerprint: "b".repeat(64),
+          config,
+        }),
+      ).rejects.toThrow("synthetic M9-A login audit failure");
+    } finally {
+      await prisma.$executeRawUnsafe(
+        "DROP TRIGGER IF EXISTS m9a_test_reject_login_audit_trigger ON audit_events",
+      );
+      await prisma.$executeRawUnsafe(
+        "DROP FUNCTION IF EXISTS m9a_test_reject_login_audit()",
+      );
+    }
+
+    await expect(
+      prisma.session.count({ where: { userId: adminId } }),
+    ).resolves.toBe(sessionsBefore);
+  });
+
+  it("does not revoke or audit a session through another restaurant", async () => {
+    const created = await createSessionForUser(staffId);
+    const auditCount = await prisma.auditEvent.count({ where: { restaurantId } });
+
+    await expect(
+      revokeSessionWithAudit({
+        restaurantId: randomUUID(),
+        rawToken: created.token,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      prisma.session.findUnique({ where: { id: created.id } }),
+    ).resolves.toMatchObject({ revokedAt: null });
+    await expect(
+      prisma.auditEvent.count({ where: { restaurantId } }),
+    ).resolves.toBe(auditCount);
+    await expect(revokeSessionToken(created.token)).resolves.toBe(true);
   });
 
   it("keeps the restaurant and both fake users idempotent", async () => {

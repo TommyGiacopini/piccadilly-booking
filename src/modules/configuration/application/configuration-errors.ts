@@ -3,6 +3,7 @@ export type ConfigurationErrorCode =
   | "NOT_FOUND"
   | "VALIDATION"
   | "DUPLICATE"
+  | "IMPACT_CHANGED"
   | "INTERNAL";
 
 export class ConfigurationError extends Error {
@@ -14,4 +15,3 @@ export class ConfigurationError extends Error {
     this.name = "ConfigurationError";
   }
 }
-

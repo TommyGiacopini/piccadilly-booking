@@ -1,7 +1,6 @@
 import { isLocalDate } from "@/modules/configuration/domain/operational-time";
 import { resolveEffectiveAvailabilityConfiguration } from "@/modules/availability/domain/effective-configuration";
 import {
-  getLocalDayOfWeek,
   getZonedDateTimeParts,
   isSlotInPastOrCurrentMinute,
   isSupportedTimezone,
@@ -131,18 +130,12 @@ export function calculateAvailability(
     input.now,
     input.configuration.timezone,
   );
-  const dayOfWeek = getLocalDayOfWeek(input.date);
-  const weekendDinnerCutoff =
-    input.serviceType === "DINNER" && dayOfWeek === "FRIDAY"
-      ? effective.fridayDinnerBookingCutoff
-      : input.serviceType === "DINNER" && dayOfWeek === "SATURDAY"
-        ? effective.saturdayDinnerBookingCutoff
-        : null;
   const onlineCutoffReached =
     input.channel === "PUBLIC" &&
     input.date === localNow.date &&
-    weekendDinnerCutoff !== null &&
-    localNow.time >= weekendDinnerCutoff;
+    effective.publicBookingCutoffEnabled &&
+    effective.publicBookingCutoffTime !== null &&
+    localNow.time >= effective.publicBookingCutoffTime;
 
   return {
     ...resultBase,

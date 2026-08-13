@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { AvailabilityApplicationError } from "@/modules/availability/application/availability-errors";
 import { availabilityPreviewQuerySchema } from "@/modules/availability/application/availability-preview-query";
 import { getAvailabilityPreview } from "@/modules/availability/application/availability-service";
-import { getRequestUser } from "@/server/auth/authorization";
+import {
+  getRequestUser,
+  passwordChangeRequiredResponse,
+} from "@/server/auth/authorization";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +34,8 @@ export async function GET(request: Request): Promise<Response> {
   if (!user) {
     return noStoreJson({ error: "Unauthorized" }, 401);
   }
+  const passwordGuard = passwordChangeRequiredResponse(user);
+  if (passwordGuard) return passwordGuard;
 
   if (user.role !== "ADMIN") {
     return noStoreJson({ error: "Forbidden" }, 403);

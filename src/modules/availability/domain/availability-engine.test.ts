@@ -19,6 +19,7 @@ function configuration(
   overrides: {
     timezone?: string;
     settings?: Partial<NonNullable<AvailabilityConfigurationInput["settings"]>> | null;
+    bookingCutoffRule?: AvailabilityConfigurationInput["bookingCutoffRule"];
     weeklyRule?: Partial<NonNullable<AvailabilityConfigurationInput["weeklyRule"]>> | null;
     allDateOverride?: SpecialDateAvailabilityRule | null;
     serviceDateOverride?: SpecialDateAvailabilityRule | null;
@@ -34,8 +35,6 @@ function configuration(
       : {
           rollingCapacityCovers: 30,
           rollingWindowMinutes: 30,
-          fridayDinnerBookingCutoff: "17:30",
-          saturdayDinnerBookingCutoff: "17:30",
           ...overrides.settings,
         };
   const weeklyRule =
@@ -52,6 +51,7 @@ function configuration(
   return {
     timezone: overrides.timezone ?? "Europe/Rome",
     settings,
+    bookingCutoffRule: overrides.bookingCutoffRule ?? null,
     weeklyRule,
     allDateOverride: overrides.allDateOverride ?? null,
     serviceDateOverride: overrides.serviceDateOverride ?? null,
@@ -391,7 +391,7 @@ describe("local dates, Europe/Rome and injected clock", () => {
   });
 });
 
-describe("PUBLIC weekend cutoff and STAFF behavior", () => {
+describe("PUBLIC generic cutoff and STAFF behavior", () => {
   function weekendResult(input: {
     date: string;
     instant: string;
@@ -405,7 +405,13 @@ describe("PUBLIC weekend cutoff and STAFF behavior", () => {
         date: input.date,
         serviceType,
         channel: input.channel ?? "PUBLIC",
-        configuration: configuration(serviceType),
+        configuration: configuration(serviceType, {
+          bookingCutoffRule:
+            serviceType === "DINNER" &&
+            (input.date === "2026-08-07" || input.date === "2026-08-08")
+              ? { isEnabled: true, cutoffTime: "17:30" }
+              : null,
+        }),
         now: new Date(input.instant),
       }),
     );
@@ -486,6 +492,63 @@ describe("PUBLIC weekend cutoff and STAFF behavior", () => {
     });
 
     expect(slotAt(result, "19:00")?.available).toBe(true);
+  });
+
+  it("applies an enabled rule to another weekday", () => {
+    const result = calculateAvailability(
+      engineInput({
+        date: "2026-08-10",
+        now: new Date("2026-08-10T15:30:00.000Z"),
+        configuration: configuration("DINNER", {
+          bookingCutoffRule: { isEnabled: true, cutoffTime: "17:30" },
+        }),
+      }),
+    );
+
+    expect(slotAt(result, "19:00")?.reason).toBe("ONLINE_CUTOFF_REACHED");
+  });
+
+  it("applies an enabled lunch rule", () => {
+    const result = calculateAvailability(
+      engineInput({
+        date: "2026-08-07",
+        serviceType: "LUNCH",
+        now: new Date("2026-08-07T08:30:00.000Z"),
+        configuration: configuration("LUNCH", {
+          bookingCutoffRule: { isEnabled: true, cutoffTime: "10:30" },
+        }),
+      }),
+    );
+
+    expect(slotAt(result, "12:00")?.reason).toBe("ONLINE_CUTOFF_REACHED");
+  });
+
+  it("ignores a disabled rule even at its exact limit", () => {
+    const result = calculateAvailability(
+      engineInput({
+        date: "2026-08-10",
+        now: new Date("2026-08-10T15:30:00.000Z"),
+        configuration: configuration("DINNER", {
+          bookingCutoffRule: { isEnabled: false, cutoffTime: "17:30" },
+        }),
+      }),
+    );
+
+    expect(slotAt(result, "19:00")?.available).toBe(true);
+  });
+
+  it("uses Europe/Rome across the spring daylight-saving change", () => {
+    const result = calculateAvailability(
+      engineInput({
+        date: "2026-03-29",
+        now: new Date("2026-03-29T01:00:00.000Z"),
+        configuration: configuration("DINNER", {
+          bookingCutoffRule: { isEnabled: true, cutoffTime: "03:00" },
+        }),
+      }),
+    );
+
+    expect(slotAt(result, "19:00")?.reason).toBe("ONLINE_CUTOFF_REACHED");
   });
 });
 

@@ -88,12 +88,6 @@ function bookingSettingsData(capacity = 4) {
     dinnerModificationCutoff: operationalTimeToDatabase(
       DEFAULT_BOOKING_CUTOFFS.dinnerModificationCutoff,
     ),
-    fridayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.fridayDinnerBookingCutoff,
-    ),
-    saturdayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.saturdayDinnerBookingCutoff,
-    ),
     managementLinkDurationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
   };
 }
@@ -211,6 +205,29 @@ function tokenFromPath(path: string): string {
   return token;
 }
 
+async function expectNoPublicCreationArtifacts(): Promise<void> {
+  await expect(
+    prisma.serviceInstance.count({ where: { restaurantId } }),
+  ).resolves.toBe(0);
+  await expect(
+    prisma.serviceRoomAvailability.count({ where: { restaurantId } }),
+  ).resolves.toBe(0);
+  await expect(
+    prisma.reservation.count({ where: { restaurantId } }),
+  ).resolves.toBe(0);
+  await expect(
+    prisma.reservationManagementToken.count({
+      where: { reservation: { restaurantId } },
+    }),
+  ).resolves.toBe(0);
+  await expect(
+    prisma.reservationIdempotencyKey.count({ where: { restaurantId } }),
+  ).resolves.toBe(0);
+  await expect(
+    prisma.reservationAuditEvent.count({ where: { restaurantId } }),
+  ).resolves.toBe(0);
+}
+
 describe.sequential("M7 public booking with real PostgreSQL", () => {
   beforeAll(async () => {
     process.env.APP_ENV = "development";
@@ -245,12 +262,22 @@ describe.sequential("M7 public booking with real PostgreSQL", () => {
   beforeEach(async () => {
     await prisma.reservationAuditEvent.deleteMany({ where: { restaurantId } });
     await prisma.reservation.deleteMany({ where: { restaurantId } });
+    await prisma.serviceRoomAvailability.deleteMany({ where: { restaurantId } });
+    await prisma.serviceInstance.deleteMany({ where: { restaurantId } });
     await prisma.publicReservationRateLimit.deleteMany({ where: { restaurantId } });
+    await prisma.restaurantBookingSettings.update({
+      where: { restaurantId },
+      data: {
+        managementLinkDurationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
+      },
+    });
   });
 
   afterAll(async () => {
     await prisma.reservationAuditEvent.deleteMany({ where: { restaurantId } });
     await prisma.reservation.deleteMany({ where: { restaurantId } });
+    await prisma.serviceRoomAvailability.deleteMany({ where: { restaurantId } });
+    await prisma.serviceInstance.deleteMany({ where: { restaurantId } });
     await prisma.publicReservationRateLimit.deleteMany({ where: { restaurantId } });
     await prisma.restaurant.delete({ where: { id: restaurantId } });
     await prisma.$disconnect();
@@ -338,6 +365,71 @@ describe.sequential("M7 public booking with real PostgreSQL", () => {
     expect(reservation.auditEvents.map((event) => event.action)).toEqual(["CREATED"]);
   });
 
+  it("rolls back instance, rooms, reservation, token, idempotency and audit after materialization", async () => {
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION m9d_test_reject_management_token() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'synthetic M9-D post-materialization failure';
+      END;
+      $$;
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER m9d_test_reject_management_token_trigger
+      BEFORE INSERT ON reservation_management_tokens
+      FOR EACH ROW EXECUTE FUNCTION m9d_test_reject_management_token();
+    `);
+
+    try {
+      await expect(serviceCreate()).rejects.toThrow(
+        "synthetic M9-D post-materialization failure",
+      );
+    } finally {
+      await prisma.$executeRawUnsafe(
+        "DROP TRIGGER IF EXISTS m9d_test_reject_management_token_trigger ON reservation_management_tokens",
+      );
+      await prisma.$executeRawUnsafe(
+        "DROP FUNCTION IF EXISTS m9d_test_reject_management_token()",
+      );
+    }
+
+    await expectNoPublicCreationArtifacts();
+  });
+
+  it("rejects the reservation and rolls everything back when room materialization fails", async () => {
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION m9d_test_reject_room_materialization() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.restaurant_id = '${restaurantId}'::uuid THEN
+          RAISE EXCEPTION 'synthetic M9-D materialization failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER m9d_test_reject_room_materialization_trigger
+      BEFORE INSERT ON service_room_availability
+      FOR EACH ROW EXECUTE FUNCTION m9d_test_reject_room_materialization();
+    `);
+
+    try {
+      await expect(serviceCreate()).rejects.toThrow(
+        "synthetic M9-D materialization failure",
+      );
+    } finally {
+      await prisma.$executeRawUnsafe(
+        "DROP TRIGGER IF EXISTS m9d_test_reject_room_materialization_trigger ON service_room_availability",
+      );
+      await prisma.$executeRawUnsafe(
+        "DROP FUNCTION IF EXISTS m9d_test_reject_room_materialization()",
+      );
+    }
+
+    await expectNoPublicCreationArtifacts();
+  });
+
   it("requires Idempotency-Key at the public API", async () => {
     const response = await publicReservationPost(
       routeRequest({
@@ -366,6 +458,26 @@ describe.sequential("M7 public booking with real PostgreSQL", () => {
     const results = await Promise.all(Array.from({ length: 8 }, () => serviceCreate({}, key)));
     expect(new Set(results.map((result) => result.managementPath)).size).toBe(1);
     expect(results.filter((result) => !result.replayed)).toHaveLength(1);
+    await expect(
+      prisma.serviceInstance.count({ where: { restaurantId } }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.serviceRoomAvailability.count({ where: { restaurantId } }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.reservation.count({ where: { restaurantId } }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.reservationManagementToken.count({
+        where: { reservation: { restaurantId } },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.reservationIdempotencyKey.count({ where: { restaurantId } }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.reservationAuditEvent.count({ where: { restaurantId } }),
+    ).resolves.toBe(1);
   });
 
   it("rejects capacity overflow and concurrent claims on the final cover", async () => {
@@ -448,6 +560,178 @@ describe.sequential("M7 public booking with real PostgreSQL", () => {
     const audit = await prisma.reservationAuditEvent.findMany({ where: { restaurantId }, orderBy: { createdAt: "asc" } });
     expect(audit.map((event) => event.action)).toEqual(["CREATED", "UPDATED"]);
     expect(audit[1]?.previousState).not.toEqual(audit[1]?.newState);
+  });
+
+  it.each([6, 12])(
+    "applies a changed duration of %s hours only to newly created tokens",
+    async (newDuration) => {
+      const oldReservation = await serviceCreate();
+      const oldToken = await prisma.reservationManagementToken.findUniqueOrThrow({
+        where: {
+          tokenHash: hashManagementToken(
+            tokenFromPath(oldReservation.managementPath),
+          ),
+        },
+      });
+      await prisma.restaurantBookingSettings.update({
+        where: { restaurantId },
+        data: { managementLinkDurationHours: newDuration },
+      });
+
+      const oldTokenAfter = await prisma.reservationManagementToken.findUniqueOrThrow({
+        where: { id: oldToken.id },
+      });
+      expect(oldTokenAfter).toEqual(oldToken);
+
+      const createdAfter = await serviceCreate({
+        localDate: loadDate,
+        arrivalTime: "20:00",
+      });
+      const newToken = await prisma.reservationManagementToken.findUniqueOrThrow({
+        where: {
+          tokenHash: hashManagementToken(tokenFromPath(createdAfter.managementPath)),
+        },
+      });
+      expect(newToken.viewExpiresAt).toEqual(
+        new Date(
+          localReservationInstant(loadDate, "20:00", "Europe/Rome").getTime() +
+            newDuration * 60 * 60 * 1_000,
+        ),
+      );
+    },
+  );
+
+  it.each([
+    ["2026-03-27", "2026-03-29"],
+    ["2026-10-24", "2026-10-25"],
+  ])(
+    "preserves duration across the Europe/Rome DST weekend from %s to %s",
+    async (sourceDate, destinationDate) => {
+      await prisma.restaurantBookingSettings.update({
+        where: { restaurantId },
+        data: { managementLinkDurationHours: 7 },
+      });
+      const created = await serviceCreate(
+        { localDate: sourceDate, arrivalTime: "19:00", partySize: 1 },
+        randomUUID(),
+        new Date("2026-01-01T10:00:00.000Z"),
+      );
+      const rawToken = tokenFromPath(created.managementPath);
+      const tokenHash = hashManagementToken(rawToken);
+      const before = await prisma.reservationManagementToken.findUniqueOrThrow({
+        where: { tokenHash },
+      });
+      await prisma.restaurantBookingSettings.update({
+        where: { restaurantId },
+        data: { managementLinkDurationHours: 2 },
+      });
+
+      await updateManagedPublicReservation({
+        restaurantId,
+        rawToken,
+        rawPayload: updatePayload({
+          localDate: destinationDate,
+          arrivalTime: "20:00",
+          partySize: 1,
+        }),
+        now: new Date("2026-01-01T10:00:00.000Z"),
+      });
+      const after = await prisma.reservationManagementToken.findUniqueOrThrow({
+        where: { tokenHash },
+      });
+      expect(after.id).toBe(before.id);
+      expect(after.tokenHash).toBe(before.tokenHash);
+      expect(after.viewExpiresAt).toEqual(
+        new Date(
+          localReservationInstant(
+            destinationDate,
+            "20:00",
+            "Europe/Rome",
+          ).getTime() +
+            7 * 60 * 60 * 1_000,
+        ),
+      );
+    },
+  );
+
+  it.each([6, 12])(
+    "preserves the original 24-hour token duration after a global change to %s",
+    async (newDuration) => {
+      const created = await serviceCreate();
+      const rawToken = tokenFromPath(created.managementPath);
+      const tokenHash = hashManagementToken(rawToken);
+      const beforeToken = await prisma.reservationManagementToken.findUniqueOrThrow({
+        where: { tokenHash },
+      });
+      await prisma.restaurantBookingSettings.update({
+        where: { restaurantId },
+        data: { managementLinkDurationHours: newDuration },
+      });
+
+      await updateManagedPublicReservation({
+        restaurantId,
+        rawToken,
+        rawPayload: updatePayload(),
+        now: earlyNow,
+      });
+      const afterToken = await prisma.reservationManagementToken.findUniqueOrThrow({
+        where: { tokenHash },
+      });
+      expect(afterToken.id).toBe(beforeToken.id);
+      expect(afterToken.tokenHash).toBe(beforeToken.tokenHash);
+      expect(afterToken.viewExpiresAt).toEqual(
+        new Date(
+          localReservationInstant(updateDate, "19:30", "Europe/Rome").getTime() +
+            DEFAULT_MANAGEMENT_LINK_DURATION_HOURS * 60 * 60 * 1_000,
+        ),
+      );
+    },
+  );
+
+  it("rolls back reservation, token and audit for incoherent legacy duration", async () => {
+    const created = await serviceCreate();
+    const rawToken = tokenFromPath(created.managementPath);
+    const tokenHash = hashManagementToken(rawToken);
+    await prisma.reservationManagementToken.update({
+      where: { tokenHash },
+      data: {
+        viewExpiresAt: new Date(
+          localReservationInstant(standardDate, "19:00", "Europe/Rome").getTime() +
+            3.5 * 60 * 60 * 1_000,
+        ),
+      },
+    });
+    const beforeReservation = await prisma.reservation.findFirstOrThrow({
+      where: { restaurantId },
+    });
+    const beforeToken = await prisma.reservationManagementToken.findUniqueOrThrow({
+      where: { tokenHash },
+    });
+
+    await expect(
+      updateManagedPublicReservation({
+        restaurantId,
+        rawToken,
+        rawPayload: updatePayload(),
+        now: earlyNow,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIGURATION_INVALID" });
+
+    expect(
+      await prisma.reservation.findUniqueOrThrow({
+        where: { id: beforeReservation.id },
+      }),
+    ).toEqual(beforeReservation);
+    expect(
+      await prisma.reservationManagementToken.findUniqueOrThrow({
+        where: { tokenHash },
+      }),
+    ).toEqual(beforeToken);
+    expect(
+      await prisma.reservationAuditEvent.count({
+        where: { reservationId: beforeReservation.id },
+      }),
+    ).toBe(1);
   });
 
   it("rejects an update that would overbook the destination", async () => {

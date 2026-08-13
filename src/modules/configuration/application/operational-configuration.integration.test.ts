@@ -7,9 +7,10 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 import { POST as configurationPost } from "@/app/api/admin/configuration/route";
 import {
+  archiveSpecialDate,
   createSpecialDate,
-  deleteSpecialDate,
   getOperationalConfiguration,
+  reactivateSpecialDate,
   updateBookingSettings,
   updateDiningTable,
   updateRoom,
@@ -49,8 +50,8 @@ let scheduleId = "";
 let adminCookie = "";
 let staffCookie = "";
 
-const adminActor = { restaurantId, role: "ADMIN" as const };
-const staffActor = { restaurantId, role: "STAFF" as const };
+const adminActor = { id: adminId, restaurantId, role: "ADMIN" as const };
+const staffActor = { id: staffId, restaurantId, role: "STAFF" as const };
 
 function settingsData() {
   return {
@@ -61,12 +62,6 @@ function settingsData() {
     ),
     dinnerModificationCutoff: operationalTimeToDatabase(
       DEFAULT_BOOKING_CUTOFFS.dinnerModificationCutoff,
-    ),
-    fridayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.fridayDinnerBookingCutoff,
-    ),
-    saturdayDinnerBookingCutoff: operationalTimeToDatabase(
-      DEFAULT_BOOKING_CUTOFFS.saturdayDinnerBookingCutoff,
     ),
   };
 }
@@ -215,6 +210,9 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
   });
 
   afterAll(async () => {
+    await prisma.auditEvent.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
     await prisma.user.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -259,7 +257,7 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
   });
 
   it("returns rooms in display order and supports activation changes", async () => {
-    const configuration = await getOperationalConfiguration(restaurantId);
+    const configuration = await getOperationalConfiguration(adminActor);
     expect(configuration.rooms.slice(0, 2).map((room) => room.displayOrder)).toEqual([
       1, 2,
     ]);
@@ -277,9 +275,47 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
       displayOrder: "2",
       isActive: "true",
     });
+
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        restaurantId,
+        action: "ROOM_UPDATED",
+        entityId: primaryRoomId,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(audit).toMatchObject({
+      category: "CONFIGURATION",
+      outcome: "SUCCESS",
+      actorUserId: adminId,
+      actorRole: UserRole.ADMIN,
+      previousState: expect.objectContaining({ displayOrder: 3, isActive: false }),
+      newState: expect.objectContaining({ displayOrder: 2, isActive: true }),
+    });
+  });
+
+  it("does not emit an audit event for a configuration no-op", async () => {
+    const before = await prisma.auditEvent.count({
+      where: { restaurantId, action: "ROOM_UPDATED", entityId: primaryRoomId },
+    });
+
+    await updateRoom(adminActor, {
+      id: primaryRoomId,
+      displayOrder: "2",
+      isActive: "true",
+    });
+
+    await expect(
+      prisma.auditEvent.count({
+        where: { restaurantId, action: "ROOM_UPDATED", entityId: primaryRoomId },
+      }),
+    ).resolves.toBe(before);
   });
 
   it("allows ADMIN and rejects STAFF before any configuration write", async () => {
+    await expect(getOperationalConfiguration(staffActor)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
     await updateDiningTable(adminActor, {
       id: diningTableId,
       name: "DEMO-INTEGRATION-UPDATED",
@@ -342,6 +378,18 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
         },
       }),
     ).rejects.toBeTruthy();
+    await expect(
+      prisma.weeklyServiceSchedule.update({
+        where: { id: scheduleId },
+        data: { slotIntervalMinutes: 20 },
+      }),
+    ).rejects.toBeTruthy();
+    await expect(
+      prisma.restaurantBookingSettings.update({
+        where: { restaurantId },
+        data: { rollingWindowMinutes: 45 },
+      }),
+    ).rejects.toBeTruthy();
   });
 
   it("validates positive capacity and configurable cut-offs", async () => {
@@ -349,7 +397,9 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
       updateBookingSettings(adminActor, {
         rollingCapacityCovers: "0",
         rollingWindowMinutes: "30",
-        ...DEFAULT_BOOKING_CUTOFFS,
+        lunchModificationCutoff: "10:30",
+        dinnerModificationCutoff: "17:30",
+        managementLinkDurationHours: "24",
       }),
     ).rejects.toMatchObject({ code: "VALIDATION" });
 
@@ -358,16 +408,13 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
       rollingWindowMinutes: "30",
       lunchModificationCutoff: "10:15",
       dinnerModificationCutoff: "17:15",
-      fridayDinnerBookingCutoff: "17:20",
-      saturdayDinnerBookingCutoff: "17:25",
+      managementLinkDurationHours: "24",
     });
-    const configuration = await getOperationalConfiguration(restaurantId);
+    const configuration = await getOperationalConfiguration(adminActor);
     expect(configuration.settings).toMatchObject({
       rollingCapacityCovers: 32,
       lunchModificationCutoff: "10:15",
       dinnerModificationCutoff: "17:15",
-      fridayDinnerBookingCutoff: "17:20",
-      saturdayDinnerBookingCutoff: "17:25",
     });
   });
 
@@ -397,7 +444,7 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
       }),
     );
 
-    const configuration = await getOperationalConfiguration(restaurantId);
+    const configuration = await getOperationalConfiguration(adminActor);
     expect(
       configuration.specialDateOverrides.map((override) => [
         override.date,
@@ -422,7 +469,7 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
     });
   });
 
-  it("updates and removes a special date", async () => {
+  it("updates, archives and reactivates a special date without deleting it", async () => {
     const existing = await prisma.specialDateOverride.findFirstOrThrow({
       where: {
         restaurantId,
@@ -442,13 +489,37 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
         specialCapacityCovers: "26",
       }),
     );
-    await deleteSpecialDate(adminActor, { id: existing.id });
+    await archiveSpecialDate(adminActor, { id: existing.id });
     await expect(
       prisma.specialDateOverride.findUnique({ where: { id: existing.id } }),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({ id: existing.id, archivedAt: expect.any(Date) });
+
+    await reactivateSpecialDate(adminActor, { id: existing.id });
+    await expect(
+      prisma.specialDateOverride.findUnique({ where: { id: existing.id } }),
+    ).resolves.toMatchObject({ id: existing.id, archivedAt: null });
+
+    const lifecycleAudits = await prisma.auditEvent.findMany({
+      where: {
+        restaurantId,
+        entityId: existing.id,
+        action: { in: ["SPECIAL_DATE_UPDATED", "SPECIAL_DATE_ARCHIVED", "SPECIAL_DATE_REACTIVATED"] },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(lifecycleAudits.map((event) => event.action)).toEqual([
+      "SPECIAL_DATE_UPDATED",
+      "SPECIAL_DATE_ARCHIVED",
+      "SPECIAL_DATE_REACTIVATED",
+    ]);
+    const serialized = JSON.stringify(lifecycleAudits);
+    expect(serialized).not.toContain("Chiusura completa fittizia");
+    expect(serialized).not.toContain("operationalNotes\"");
+    expect(serialized).toContain("operationalNotesPresent");
   });
 
   it("prevents cross-restaurant updates", async () => {
+    const auditCount = await prisma.auditEvent.count({ where: { restaurantId } });
     await expect(
       updateRoom(adminActor, {
         id: otherRoomId,
@@ -459,9 +530,74 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
     await expect(
       prisma.room.findUnique({ where: { id: otherRoomId } }),
     ).resolves.toMatchObject({ displayOrder: 1, isActive: true });
+    await expect(
+      prisma.auditEvent.count({ where: { restaurantId } }),
+    ).resolves.toBe(auditCount);
+    await expect(
+      prisma.auditEvent.count({ where: { entityId: otherRoomId } }),
+    ).resolves.toBe(0);
   });
 
-  it("enforces anonymous, STAFF and ADMIN mutation authorization at the HTTP boundary", async () => {
+  it("rolls the configuration write back when the audit insert fails", async () => {
+    const current = await prisma.room.findUniqueOrThrow({
+      where: { id: primaryRoomId },
+    });
+    const auditCount = await prisma.auditEvent.count({
+      where: { restaurantId, action: "ROOM_UPDATED", entityId: primaryRoomId },
+    });
+
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION m9a_test_reject_configuration_audit()
+      RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.action = 'ROOM_UPDATED' AND NEW.entity_id = '${primaryRoomId}'::uuid THEN
+          RAISE EXCEPTION 'synthetic M9-A audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER m9a_test_reject_configuration_audit_trigger
+      BEFORE INSERT ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION m9a_test_reject_configuration_audit();
+    `);
+
+    try {
+      await expect(
+        updateRoom(adminActor, {
+          id: primaryRoomId,
+          displayOrder: String(current.displayOrder + 1),
+          isActive: current.isActive ? "true" : undefined,
+        }),
+      ).rejects.toThrow("synthetic M9-A audit failure");
+    } finally {
+      await prisma.$executeRawUnsafe(
+        "DROP TRIGGER IF EXISTS m9a_test_reject_configuration_audit_trigger ON audit_events",
+      );
+      await prisma.$executeRawUnsafe(
+        "DROP FUNCTION IF EXISTS m9a_test_reject_configuration_audit()",
+      );
+    }
+
+    await expect(
+      prisma.room.findUnique({ where: { id: primaryRoomId } }),
+    ).resolves.toMatchObject({
+      displayOrder: current.displayOrder,
+      isActive: current.isActive,
+    });
+    await expect(
+      prisma.auditEvent.count({
+        where: { restaurantId, action: "ROOM_UPDATED", entityId: primaryRoomId },
+      }),
+    ).resolves.toBe(auditCount);
+  });
+
+  it("retires the legacy room form mutation while preserving authorization", async () => {
+    const before = await prisma.room.findUniqueOrThrow({
+      where: { id: primaryRoomId },
+      select: { displayOrder: true, isActive: true },
+    });
     const data = {
       action: "update-room",
       id: primaryRoomId,
@@ -474,11 +610,10 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
       403,
     );
     const adminResponse = await configurationPost(formRequest(data, adminCookie));
-    expect(adminResponse.status).toBe(200);
-    await expect(adminResponse.json()).resolves.toEqual({ ok: true });
+    expect(adminResponse.status).toBe(400);
     await expect(
       prisma.room.findUnique({ where: { id: primaryRoomId } }),
-    ).resolves.toMatchObject({ displayOrder: 4 });
+    ).resolves.toMatchObject(before);
   });
 
   it("keeps the operational seed idempotent without reservations", async () => {
@@ -490,7 +625,10 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
     ).resolves.toBe(5);
     await expect(
       prisma.diningTable.count({
-        where: { room: { restaurantId: DEMO_RESTAURANT_ID } },
+        where: {
+          room: { restaurantId: DEMO_RESTAURANT_ID },
+          name: { startsWith: "DEMO-" },
+        },
       }),
     ).resolves.toBe(5);
     await expect(
@@ -503,5 +641,10 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
         where: { restaurantId: DEMO_RESTAURANT_ID },
       }),
     ).resolves.toBe(1);
+    await expect(
+      prisma.bookingCutoffRule.count({
+        where: { restaurantId: DEMO_RESTAURANT_ID },
+      }),
+    ).resolves.toBe(14);
   });
 });

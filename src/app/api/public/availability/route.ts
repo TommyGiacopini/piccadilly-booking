@@ -1,13 +1,14 @@
 import { AvailabilityApplicationError } from "@/modules/availability/application/availability-errors";
 import { availabilityPreviewQuerySchema } from "@/modules/availability/application/availability-preview-query";
 import { getAvailabilityPreview } from "@/modules/availability/application/availability-service";
-import { listActivePublicRooms } from "@/modules/reservations/infrastructure/public-reservation-repository";
+import { listAvailableRoomsForService } from "@/modules/rooms/infrastructure/service-instance-repository";
 import {
   publicJson,
   rateLimitResponse,
 } from "@/app/api/public/_shared";
 import { enforcePublicRateLimit } from "@/server/security/public-request";
 import { resolvePublicBookingConfig } from "@/shared/config/public-booking-config";
+import { prisma } from "@/server/db/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,6 +50,7 @@ export async function GET(request: Request): Promise<Response> {
       return publicJson({ error: "I parametri non sono validi." }, 400);
     }
 
+    const now = new Date();
     const [availability, rooms] = await Promise.all([
       getAvailabilityPreview({
         restaurantId: config.restaurantId,
@@ -56,10 +58,15 @@ export async function GET(request: Request): Promise<Response> {
         serviceType: parsed.data.service,
         partySize: parsed.data.partySize,
         channel: "PUBLIC",
-        now: new Date(),
+        now,
         includePersistentLoad: true,
       }),
-      listActivePublicRooms(config.restaurantId),
+      listAvailableRoomsForService(prisma, {
+        restaurantId: config.restaurantId,
+        localDate: parsed.data.date,
+        serviceType: parsed.data.service,
+        now,
+      }),
     ]);
 
     return publicJson({ ...availability, rooms });
