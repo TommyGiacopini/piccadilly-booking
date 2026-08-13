@@ -1,6 +1,6 @@
 # Piccadilly Booking
 
-Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. M9-A aggiunge la fondazione audit; M9-B implementa il lifecycle degli account; M9-C rende amministrabili servizi, capacità e cutoff; M9-D aggiunge istanze lazy, disponibilità sale e catalogo tavoli; M9-E configura contatti, contenuti IT/EN e durata dei nuovi link; M9-F aggiunge la consultazione Admin read-only dell'audit. Le tranche M9-A–M9-F sono implementate, la revisione tecnica indipendente e la verifica remota conclusiva Work sono state superate e M9 è pubblicata nella PR #10. Non sono stati eseguiti merge o deploy.
+Monolite modulare Next.js del sistema proprietario di prenotazione del Risto Pizza Piccadilly. M9-A aggiunge la fondazione audit; M9-B implementa il lifecycle degli account; M9-C rende amministrabili servizi, capacità e cutoff; M9-D aggiunge istanze lazy, disponibilità sale e catalogo tavoli; M9-E configura contatti, contenuti IT/EN e durata dei nuovi link; M9-F aggiunge la consultazione Admin read-only dell'audit. Le tranche M9-A–M9-F sono implementate e hanno superato la revisione tecnica indipendente Work. Il change set M9 è tracciato nella PR #10; deploy e milestone successive sono gestiti separatamente.
 
 ## Requisiti locali
 

@@ -1,8 +1,8 @@
 # Riepilogo canonico M9
 
-**Stato al 13 agosto 2026:** `M9 COMPLETATA E APPROVATA TECNICAMENTE DA WORK — PR #10 PUBBLICATA, MERGE NON AUTORIZZATO`.
+**Stato al 13 agosto 2026:** `M9 COMPLETATA E APPROVATA TECNICAMENTE DA WORK`.
 
-M9 è pubblicata nella PR #10 tramite il branch remoto `feature/admin-panel`. Il commit funzionale M9 è `e602ae1b21606eba680faf11d7d2716e9f750f49`; il primo commit di riconciliazione documentale è `8c1982fd07907be3fef9a0d6cde300661060c390`. La revisione tecnica indipendente Work e la verifica remota conclusiva del commit `8c1982fd07907be3fef9a0d6cde300661060c390` sono state superate. Il confronto complessivo M9 con `main` comprende 165 file. Non sono stati eseguiti merge o deploy, né usati dati reali o provider esterni.
+Il change set M9, composto da 165 percorsi, è stato sottoposto alla revisione tecnica indipendente Work nella PR #10. La verifica ha incluso il commit funzionale e le riconciliazioni documentali pubblicate sul branch feature/admin-panel. Le verifiche applicative documentate sono locali perché, al momento della revisione, non era configurata CI GitHub per il branch. Nessun dato reale o provider esterno è stato usato; deploy e milestone M10–M12 restano attività separate.
 
 ## Checkpoint
 
@@ -48,7 +48,7 @@ M9-F non modifica `prisma/schema.prisma`, non crea migrazioni, viste, indici, tr
 
 I test M9 coprono matrice Admin/Staff/anonimo/cambio obbligatorio/disabilitato, isolamento cross-tenant, atomicità audit, concorrenza dell'ultimo Admin, preview e fingerprint, grandfathering, istanze lazy, disponibilità sale, contatti e contenuti, token prospettici, DST, proiezione audit, privacy legacy, filtri, keyset e read-only. Le integrazioni di persistenza e concorrenza usano PostgreSQL reale; gli E2E usano esclusivamente dati fittizi.
 
-La regressione finale locale è verde: Prisma ha trovato esattamente 11 migrazioni e database aggiornato; due seed consecutivi sono riusciti; lint e typecheck non hanno errori; Vitest ha superato 372 test in 41 file; Playwright ha superato 32 scenari; il build di produzione è riuscito. Queste verifiche sono esclusivamente locali: GitHub non presenta workflow o status check configurati per il branch. La documentazione canonica registra l'approvazione Work e la pubblicazione nella PR #10 senza dichiarare merge o deploy.
+La regressione finale locale è verde: Prisma ha trovato esattamente 11 migrazioni e database aggiornato; due seed consecutivi sono riusciti; lint e typecheck non hanno errori; Vitest ha superato 372 test in 41 file; Playwright ha superato 32 scenari; il build di produzione è riuscito. Al momento della revisione, GitHub non presentava workflow o status check configurati per il branch. Questa sezione registra l’esito tecnico M9 e non lo stato transitorio della PR o del deploy.
 
 ## Funzioni escluse
 
