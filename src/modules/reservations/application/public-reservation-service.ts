@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { calculateAvailability } from "@/modules/availability/domain/availability-engine";
 import type { AvailabilityReason } from "@/modules/availability/domain/types";
+import { acquireOperationalConfigurationLock } from "@/modules/configuration/infrastructure/operational-configuration-repository";
 import {
   PublicReservationError,
 } from "@/modules/reservations/application/public-reservation-errors";
@@ -28,6 +29,8 @@ import {
   publicCreateReservationSchema,
   publicUpdateReservationSchema,
   parsePublicPreferences,
+  serializePublicAllergies,
+  serializePublicPreferences,
   type PublicCreateReservationInput,
   type PublicUpdateReservationInput,
 } from "@/modules/reservations/domain/public-validation";
@@ -61,6 +64,7 @@ import {
   findAvailableRoomForService,
   materializeServiceInstance,
 } from "@/modules/rooms/infrastructure/service-instance-repository";
+import { clearReservationAssignmentForScheduleChange } from "@/modules/rooms/application/reservation-assignment-service";
 import {
   acquireCapacityLock,
   acquireCapacityLocks,
@@ -433,6 +437,7 @@ export async function updateManagedPublicReservation(input: {
       input.restaurantId,
       access.reservation.id,
     );
+    await acquireOperationalConfigurationLock(client, input.restaurantId);
     access = await findPublicReservationAccess(
       tokenHash,
       input.restaurantId,
@@ -448,6 +453,26 @@ export async function updateManagedPublicReservation(input: {
     }
     if (!canMutate(command, access.settings, now)) {
       throw new PublicReservationError("CUTOFF_REACHED");
+    }
+
+    const requestedPreferences = serializePublicPreferences(command);
+    const requestedAllergies = serializePublicAllergies(command);
+    const scheduleChanged =
+      access.reservation.localDate !== command.localDate ||
+      access.reservation.serviceType !== command.serviceType ||
+      access.reservation.arrivalTime !== command.arrivalTime;
+    const changed =
+      scheduleChanged ||
+      access.reservation.partySize !== command.partySize ||
+      access.reservation.notes !== command.notes ||
+      access.reservation.preferences !== requestedPreferences ||
+      access.reservation.allergies !== requestedAllergies;
+    if (!changed) {
+      return toPublicReservationDto({
+        reservation: access.reservation,
+        canMutate: true,
+        viewExpiresAt: access.viewExpiresAt,
+      });
     }
 
     await acquireCapacityLocks(client, [
@@ -541,14 +566,24 @@ export async function updateManagedPublicReservation(input: {
         serviceType: command.serviceType,
       });
     }
+    const correlationId = randomUUID();
     await insertPublicAuditEvent(client, {
       restaurantId: input.restaurantId,
       reservationId: updated.id,
       action: "UPDATED",
-      correlationId: randomUUID(),
+      correlationId,
       previousState: reservationAuditSnapshot(access.reservation),
       newState: reservationAuditSnapshot(updated),
     });
+    if (scheduleChanged) {
+      await clearReservationAssignmentForScheduleChange(client, {
+        restaurantId: input.restaurantId,
+        reservationId: updated.id,
+        actor: { origin: "PUBLIC", id: null, role: null },
+        correlationId,
+        now: new Date(now.getTime() + 1),
+      });
+    }
 
     return toPublicReservationDto({
       reservation: updated,
@@ -579,6 +614,7 @@ export async function cancelManagedPublicReservation(input: {
       input.restaurantId,
       access.reservation.id,
     );
+    await acquireOperationalConfigurationLock(client, input.restaurantId);
     access = await findPublicReservationAccess(
       tokenHash,
       input.restaurantId,

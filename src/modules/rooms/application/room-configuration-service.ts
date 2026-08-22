@@ -3,12 +3,12 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 
 import { Prisma } from "@/generated/prisma/client";
-import { auditStatesEqual } from "@/modules/audit/domain/audit-event";
 import { insertAuditEvent } from "@/modules/audit/infrastructure/audit-repository";
 import { getZonedDateTimeParts } from "@/modules/availability/domain/local-calendar";
 import {
   localDateFromDatabase,
   localDateToDatabase,
+  operationalTimeFromDatabase,
 } from "@/modules/configuration/domain/operational-time";
 import {
   acquireOperationalConfigurationLock,
@@ -22,6 +22,7 @@ import {
   type DiningTableMutation,
   type RoomConfigurationImpact,
   type RoomConfigurationProposal,
+  type RoomImpactClassification,
 } from "@/modules/rooms/domain/room-configuration";
 import { RoomAvailabilityError } from "@/modules/rooms/application/room-availability-errors";
 import {
@@ -39,11 +40,27 @@ export interface RoomConfigurationActor {
 interface RelevantReservation {
   id: string;
   status: "CONFIRMED";
+  version: number;
   localDate: string;
   serviceType: "LUNCH" | "DINNER";
+  arrivalTime: string;
   partySize: number;
   roomCode: string;
+  preferenceAffected: boolean;
+  assignmentAffected: boolean;
+  assignment: {
+    id: string;
+    roomId: string;
+    roomCode: string;
+    roomIsActive: boolean;
+    tableIds: string[];
+    tableStates: Array<{ id: string; isActive: boolean }>;
+  } | null;
 }
+
+type ImpactTarget =
+  | { kind: "ROOM"; roomId: string; roomCode: string }
+  | { kind: "TABLE"; tableId: string; roomId: string; roomCode: string };
 
 export interface RoomConfigurationPreview {
   proposal: RoomConfigurationProposal;
@@ -102,7 +119,7 @@ async function readRelevantReservations(
   client: OperationalConfigurationClient,
   input: {
     restaurantId: string;
-    roomCode: string;
+    target: ImpactTarget;
     localToday: string;
     localDate?: string;
     serviceType?: "LUNCH" | "DINNER";
@@ -120,10 +137,30 @@ async function readRelevantReservations(
     select: {
       id: true,
       status: true,
+      version: true,
       localDate: true,
       serviceType: true,
+      arrivalTime: true,
       partySize: true,
       preferences: true,
+      assignment: {
+        select: {
+          id: true,
+          restaurantId: true,
+          roomId: true,
+          clearedAt: true,
+          room: {
+            select: { code: true, isActive: true },
+          },
+          tables: {
+            select: {
+              diningTableId: true,
+              diningTable: { select: { isActive: true } },
+            },
+            orderBy: { diningTableId: "asc" },
+          },
+        },
+      },
     },
     orderBy: [
       { localDate: "asc" },
@@ -135,15 +172,51 @@ async function readRelevantReservations(
 
   return rows.flatMap((row) => {
     const roomCode = parsePublicPreferences(row.preferences).roomCode;
-    return roomCode === input.roomCode
+    const activeAssignment =
+      row.assignment?.restaurantId === input.restaurantId &&
+      row.assignment.clearedAt === null
+        ? row.assignment
+        : null;
+    const preferenceAffected =
+      input.target.kind === "ROOM" && roomCode === input.target.roomCode;
+    const targetTableId =
+      input.target.kind === "TABLE" ? input.target.tableId : null;
+    const assignmentAffected =
+      activeAssignment !== null &&
+      (input.target.kind === "ROOM"
+        ? activeAssignment.roomId === input.target.roomId
+        : activeAssignment.tables.some(
+            (table) => table.diningTableId === targetTableId,
+          ));
+
+    return preferenceAffected || assignmentAffected
       ? [
           {
             id: row.id,
             status: "CONFIRMED" as const,
+            version: row.version,
             localDate: localDateFromDatabase(row.localDate),
             serviceType: row.serviceType,
+            arrivalTime: operationalTimeFromDatabase(row.arrivalTime),
             partySize: row.partySize,
             roomCode,
+            preferenceAffected,
+            assignmentAffected,
+            assignment: assignmentAffected
+              ? {
+                  id: activeAssignment!.id,
+                  roomId: activeAssignment!.roomId,
+                  roomCode: activeAssignment!.room.code,
+                  roomIsActive: activeAssignment!.room.isActive,
+                  tableIds: activeAssignment!.tables.map(
+                    (table) => table.diningTableId,
+                  ),
+                  tableStates: activeAssignment!.tables.map((table) => ({
+                    id: table.diningTableId,
+                    isActive: table.diningTable.isActive,
+                  })),
+                }
+              : null,
           },
         ]
       : [];
@@ -154,37 +227,51 @@ function impact(input: {
   proposal: RoomConfigurationProposal;
   roomCode: string;
   previousAvailable: boolean;
+  destructive: boolean;
   relevantReservations: RelevantReservation[];
 }): RoomConfigurationImpact {
-  const reservations =
-    input.proposal.kind === "SERVICE_ROOM_AVAILABILITY"
-      ? input.proposal.isAvailable
-        ? []
-        : input.relevantReservations
-      : input.proposal.isActive
-        ? []
-        : input.relevantReservations;
+  const reservations = input.destructive ? input.relevantReservations : [];
   const covers = reservations.reduce(
     (total, reservation) => total + reservation.partySize,
     0,
   );
+  const preferenceReservationCount = reservations.filter(
+    (reservation) => reservation.preferenceAffected,
+  ).length;
+  const assignmentReservationCount = reservations.filter(
+    (reservation) => reservation.assignmentAffected,
+  ).length;
   const classification =
     reservations.length === 0
       ? "NO_EXISTING_RESERVATION_IMPACT"
       : input.proposal.kind === "SERVICE_ROOM_AVAILABILITY"
         ? "ROOM_UNAVAILABLE"
-        : "ROOM_DISABLED";
+        : input.proposal.kind === "ROOM_CATALOG"
+          ? "ROOM_DISABLED"
+          : "TABLE_DISABLED";
   const proposedAvailable =
     input.proposal.kind === "SERVICE_ROOM_AVAILABILITY"
       ? input.proposal.isAvailable
       : input.proposal.isActive;
+  const classifications: RoomImpactClassification[] = [
+    classification,
+    ...(preferenceReservationCount > 0
+      ? (["RESERVATION_WITH_AFFECTED_ROOM_PREFERENCE"] as const)
+      : []),
+    ...(assignmentReservationCount > 0
+      ? (["RESERVATION_WITH_AFFECTED_FINAL_ASSIGNMENT"] as const)
+      : []),
+  ];
 
   return {
     reservationCount: reservations.length,
     covers,
+    preferenceReservationCount,
+    assignmentReservationCount,
     items: [
       {
         classification,
+        classifications,
         localDate:
           input.proposal.kind === "SERVICE_ROOM_AVAILABILITY"
             ? input.proposal.localDate
@@ -196,6 +283,8 @@ function impact(input: {
         roomCode: input.roomCode,
         reservationCount: reservations.length,
         covers,
+        preferenceReservationCount,
+        assignmentReservationCount,
         previousAvailable: input.previousAvailable,
         proposedAvailable,
       },
@@ -241,19 +330,21 @@ async function calculatePreview(
     if (!room) {
       throw new RoomAvailabilityError("NOT_FOUND", "Sala non disponibile.");
     }
-    const reservations = proposal.isAvailable
-      ? []
-      : await readRelevantReservations(client, {
+    const destructive = room.isAvailable && !proposal.isAvailable;
+    const reservations = destructive
+      ? await readRelevantReservations(client, {
           restaurantId: actor.restaurantId,
           localToday,
           localDate: proposal.localDate,
           serviceType: proposal.serviceType,
-          roomCode: room.code,
-        });
+          target: { kind: "ROOM", roomId: room.id, roomCode: room.code },
+        })
+      : [];
     const calculatedImpact = impact({
       proposal,
       roomCode: room.code,
       previousAvailable: room.configuredAvailable,
+      destructive,
       relevantReservations: reservations,
     });
     const changed = room.configuredAvailable !== proposal.isAvailable;
@@ -282,40 +373,97 @@ async function calculatePreview(
     };
   }
 
-  const room = await client.room.findFirst({
-    where: { id: proposal.roomId, restaurantId: actor.restaurantId },
+  if (proposal.kind === "ROOM_CATALOG") {
+    const room = await client.room.findFirst({
+      where: { id: proposal.roomId, restaurantId: actor.restaurantId },
+      select: {
+        id: true,
+        code: true,
+        displayOrder: true,
+        isActive: true,
+        serviceAvailabilityPolicy: true,
+      },
+    });
+    if (!room) {
+      throw new RoomAvailabilityError("NOT_FOUND", "Sala non disponibile.");
+    }
+    const reservations =
+      room.isActive && !proposal.isActive
+        ? await readRelevantReservations(client, {
+            restaurantId: actor.restaurantId,
+            localToday,
+            target: { kind: "ROOM", roomId: room.id, roomCode: room.code },
+          })
+        : [];
+    const calculatedImpact = impact({
+      proposal,
+      roomCode: room.code,
+      previousAvailable: room.isActive,
+      destructive: room.isActive && !proposal.isActive,
+      relevantReservations: reservations,
+    });
+    const changed =
+      room.displayOrder !== proposal.displayOrder ||
+      room.isActive !== proposal.isActive;
+
+    return {
+      proposal,
+      fingerprint: hashFingerprint({ proposal, current: room, reservations }),
+      changed,
+      confirmationRequired: changed && calculatedImpact.reservationCount > 0,
+      impact: calculatedImpact,
+    };
+  }
+
+  const table = await client.diningTable.findFirst({
+    where: {
+      id: proposal.tableId,
+      room: { restaurantId: actor.restaurantId },
+    },
     select: {
       id: true,
-      code: true,
+      roomId: true,
+      name: true,
+      minimumSeats: true,
+      maximumSeats: true,
       displayOrder: true,
       isActive: true,
-      serviceAvailabilityPolicy: true,
+      room: { select: { code: true, isActive: true } },
     },
   });
-  if (!room) {
-    throw new RoomAvailabilityError("NOT_FOUND", "Sala non disponibile.");
+  if (!table) {
+    throw new RoomAvailabilityError("NOT_FOUND", "Tavolo non disponibile.");
   }
-  const reservations =
-    room.isActive && !proposal.isActive
-      ? await readRelevantReservations(client, {
-          restaurantId: actor.restaurantId,
-          localToday,
-          roomCode: room.code,
-        })
-      : [];
+  const destructive = table.isActive && !proposal.isActive;
+  const reservations = destructive
+    ? await readRelevantReservations(client, {
+        restaurantId: actor.restaurantId,
+        localToday,
+        target: {
+          kind: "TABLE",
+          tableId: table.id,
+          roomId: table.roomId,
+          roomCode: table.room.code,
+        },
+      })
+    : [];
   const calculatedImpact = impact({
     proposal,
-    roomCode: room.code,
-    previousAvailable: room.isActive,
+    roomCode: table.room.code,
+    previousAvailable: table.isActive,
+    destructive,
     relevantReservations: reservations,
   });
   const changed =
-    room.displayOrder !== proposal.displayOrder ||
-    room.isActive !== proposal.isActive;
+    table.name !== proposal.name ||
+    table.minimumSeats !== proposal.minimumSeats ||
+    table.maximumSeats !== proposal.maximumSeats ||
+    table.displayOrder !== proposal.displayOrder ||
+    table.isActive !== proposal.isActive;
 
   return {
     proposal,
-    fingerprint: hashFingerprint({ proposal, current: room, reservations }),
+    fingerprint: hashFingerprint({ proposal, current: table, reservations }),
     changed,
     confirmationRequired: changed && calculatedImpact.reservationCount > 0,
     impact: calculatedImpact,
@@ -379,14 +527,13 @@ export async function applyRoomConfigurationChange(
 
   return runOperationalConfigurationTransaction(async (client) => {
     await requireFreshAdmin(client, actor);
+    await acquireOperationalConfigurationLock(client, actor.restaurantId);
     if (parsed.data.proposal.kind === "SERVICE_ROOM_AVAILABILITY") {
       await acquireCapacityLock(client, {
         restaurantId: actor.restaurantId,
         localDate: parsed.data.proposal.localDate,
         serviceType: parsed.data.proposal.serviceType,
       });
-    } else {
-      await acquireOperationalConfigurationLock(client, actor.restaurantId);
     }
 
     const preview = await calculatePreview(
@@ -452,6 +599,11 @@ export async function applyRoomConfigurationChange(
           reservationCount: preview.impact.reservationCount,
           covers: preview.impact.covers,
           classification: before?.classification ?? null,
+          classifications: before?.classifications ?? [],
+          preferenceReservationCount:
+            preview.impact.preferenceReservationCount,
+          assignmentReservationCount:
+            preview.impact.assignmentReservationCount,
         },
         createdAt: now,
       });
@@ -459,27 +611,82 @@ export async function applyRoomConfigurationChange(
     }
 
     const proposal = parsed.data.proposal;
-    const current = await client.room.findFirstOrThrow({
-      where: { id: proposal.roomId, restaurantId: actor.restaurantId },
+    if (proposal.kind === "ROOM_CATALOG") {
+      const current = await client.room.findFirstOrThrow({
+        where: { id: proposal.roomId, restaurantId: actor.restaurantId },
+      });
+      const previousState = {
+        code: current.code,
+        displayOrder: current.displayOrder,
+        isActive: current.isActive,
+      };
+      await client.room.update({
+        where: { id: current.id },
+        data: {
+          displayOrder: proposal.displayOrder,
+          isActive: proposal.isActive,
+        },
+      });
+      const action =
+        current.isActive !== proposal.isActive
+          ? proposal.isActive
+            ? "ROOM_ENABLED"
+            : "ROOM_DISABLED"
+          : "ROOM_ORDER_UPDATED";
+      await insertAuditEvent(client, {
+        restaurantId: actor.restaurantId,
+        category: "CONFIGURATION",
+        action,
+        outcome: "SUCCESS",
+        actorUserId: actor.id,
+        actorRole: "ADMIN",
+        entityType: "ROOM",
+        entityId: current.id,
+        correlationId: randomUUID(),
+        previousState,
+        newState: {
+          code: current.code,
+          displayOrder: proposal.displayOrder,
+          isActive: proposal.isActive,
+        },
+        metadata: {
+          reservationCount: preview.impact.reservationCount,
+          covers: preview.impact.covers,
+          classification: preview.impact.items[0]?.classification ?? null,
+          classifications: preview.impact.items[0]?.classifications ?? [],
+          preferenceReservationCount:
+            preview.impact.preferenceReservationCount,
+          assignmentReservationCount:
+            preview.impact.assignmentReservationCount,
+        },
+        createdAt: now,
+      });
+      return { changed: true };
+    }
+
+    const current = await client.diningTable.findFirstOrThrow({
+      where: {
+        id: proposal.tableId,
+        room: { restaurantId: actor.restaurantId },
+      },
     });
-    const previousState = {
-      code: current.code,
-      displayOrder: current.displayOrder,
-      isActive: current.isActive,
-    };
-    await client.room.update({
+    const previousState = tableSnapshot(current);
+    const updated = await client.diningTable.update({
       where: { id: current.id },
       data: {
+        name: proposal.name,
+        minimumSeats: proposal.minimumSeats,
+        maximumSeats: proposal.maximumSeats,
         displayOrder: proposal.displayOrder,
         isActive: proposal.isActive,
       },
     });
     const action =
-      current.isActive !== proposal.isActive
-        ? proposal.isActive
-          ? "ROOM_ENABLED"
-          : "ROOM_DISABLED"
-        : "ROOM_ORDER_UPDATED";
+      current.isActive !== updated.isActive
+        ? updated.isActive
+          ? "DINING_TABLE_ENABLED"
+          : "DINING_TABLE_DISABLED"
+        : "DINING_TABLE_UPDATED";
     await insertAuditEvent(client, {
       restaurantId: actor.restaurantId,
       category: "CONFIGURATION",
@@ -487,19 +694,20 @@ export async function applyRoomConfigurationChange(
       outcome: "SUCCESS",
       actorUserId: actor.id,
       actorRole: "ADMIN",
-      entityType: "ROOM",
+      entityType: "DINING_TABLE",
       entityId: current.id,
       correlationId: randomUUID(),
       previousState,
-      newState: {
-        code: current.code,
-        displayOrder: proposal.displayOrder,
-        isActive: proposal.isActive,
-      },
+      newState: tableSnapshot(updated),
       metadata: {
         reservationCount: preview.impact.reservationCount,
         covers: preview.impact.covers,
         classification: preview.impact.items[0]?.classification ?? null,
+        classifications: preview.impact.items[0]?.classifications ?? [],
+        preferenceReservationCount:
+          preview.impact.preferenceReservationCount,
+        assignmentReservationCount:
+          preview.impact.assignmentReservationCount,
       },
       createdAt: now,
     });
@@ -540,96 +748,50 @@ export async function mutateDiningTable(
   const command: DiningTableMutation = parsed.data;
   const now = options.now ?? new Date();
 
+  if (command.action === "UPDATE_TABLE") {
+    throw new RoomAvailabilityError(
+      "VALIDATION",
+      "Gli aggiornamenti dei tavoli richiedono il protocollo di anteprima e applicazione.",
+    );
+  }
+
   try {
     return await runOperationalConfigurationTransaction(async (client) => {
       await requireFreshAdmin(client, actor);
       await acquireOperationalConfigurationLock(client, actor.restaurantId);
 
-      if (command.action === "CREATE_TABLE") {
-        const room = await client.room.findFirst({
-          where: { id: command.roomId, restaurantId: actor.restaurantId },
-          select: { id: true },
-        });
-        if (!room) {
-          throw new RoomAvailabilityError("NOT_FOUND", "Sala non disponibile.");
-        }
-        const created = await client.diningTable.create({
-          data: {
-            roomId: room.id,
-            name: command.name,
-            minimumSeats: command.minimumSeats,
-            maximumSeats: command.maximumSeats,
-            displayOrder: command.displayOrder,
-          },
-        });
-        await insertAuditEvent(client, {
-          restaurantId: actor.restaurantId,
-          category: "CONFIGURATION",
-          action: "DINING_TABLE_CREATED",
-          outcome: "SUCCESS",
-          actorUserId: actor.id,
-          actorRole: "ADMIN",
-          entityType: "DINING_TABLE",
-          entityId: created.id,
-          correlationId: randomUUID(),
-          previousState: null,
-          newState: tableSnapshot(created),
-          metadata: null,
-          createdAt: now,
-        });
-        return { changed: true, id: created.id };
-      }
-
-      const current = await client.diningTable.findFirst({
-        where: { id: command.id, room: { restaurantId: actor.restaurantId } },
+      const room = await client.room.findFirst({
+        where: { id: command.roomId, restaurantId: actor.restaurantId },
+        select: { id: true },
       });
-      if (!current) {
-        throw new RoomAvailabilityError("NOT_FOUND", "Tavolo non disponibile.");
+      if (!room) {
+        throw new RoomAvailabilityError("NOT_FOUND", "Sala non disponibile.");
       }
-      const previousState = tableSnapshot(current);
-      const requestedState = {
-        ...previousState,
-        name: command.name,
-        minimumSeats: command.minimumSeats,
-        maximumSeats: command.maximumSeats,
-        displayOrder: command.displayOrder,
-        isActive: command.isActive,
-      };
-      if (auditStatesEqual(previousState, requestedState)) {
-        return { changed: false, id: current.id };
-      }
-      const updated = await client.diningTable.update({
-        where: { id: current.id },
+      const created = await client.diningTable.create({
         data: {
+          roomId: room.id,
           name: command.name,
           minimumSeats: command.minimumSeats,
           maximumSeats: command.maximumSeats,
           displayOrder: command.displayOrder,
-          isActive: command.isActive,
         },
       });
-      const action =
-        current.isActive !== updated.isActive
-          ? updated.isActive
-            ? "DINING_TABLE_ENABLED"
-            : "DINING_TABLE_DISABLED"
-          : "DINING_TABLE_UPDATED";
       await insertAuditEvent(client, {
         restaurantId: actor.restaurantId,
         category: "CONFIGURATION",
-        action,
+        action: "DINING_TABLE_CREATED",
         outcome: "SUCCESS",
         actorUserId: actor.id,
         actorRole: "ADMIN",
         entityType: "DINING_TABLE",
-        entityId: current.id,
+        entityId: created.id,
         correlationId: randomUUID(),
-        previousState,
-        newState: tableSnapshot(updated),
+        previousState: null,
+        newState: tableSnapshot(created),
         metadata: null,
         createdAt: now,
       });
-      return { changed: true, id: current.id };
+      return { changed: true, id: created.id };
     });
   } catch (error) {
     if (

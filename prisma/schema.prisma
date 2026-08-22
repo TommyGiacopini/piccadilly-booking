@@ -67,6 +67,9 @@ enum ReservationAuditAction {
   CREATED
   UPDATED
   CANCELLED
+  ASSIGNED
+  REASSIGNED
+  UNASSIGNED
 }
 
 enum PublicContentLocale {
@@ -150,6 +153,8 @@ model Room {
   restaurant                Restaurant                    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   diningTables              DiningTable[]
   serviceAvailabilities     ServiceRoomAvailability[]
+  reservationAssignments    ReservationAssignment[]
+  reservationAssignmentRows ReservationAssignmentTable[]  @relation("ReservationAssignmentTableRoom")
 
   @@unique([restaurantId, code], map: "rooms_restaurant_id_code_key")
   @@unique([restaurantId, name], map: "rooms_restaurant_id_name_key")
@@ -193,18 +198,20 @@ model ServiceRoomAvailability {
 }
 
 model DiningTable {
-  id           String   @id @default(uuid()) @db.Uuid
-  roomId       String   @map("room_id") @db.Uuid
-  name         String   @db.VarChar(40)
-  minimumSeats Int      @map("minimum_seats")
-  maximumSeats Int      @map("maximum_seats")
-  isActive     Boolean  @default(true) @map("is_active")
-  displayOrder Int      @default(0) @map("display_order")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
-  room         Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  id                        String                       @id @default(uuid()) @db.Uuid
+  roomId                    String                       @map("room_id") @db.Uuid
+  name                      String                       @db.VarChar(40)
+  minimumSeats              Int                          @map("minimum_seats")
+  maximumSeats              Int                          @map("maximum_seats")
+  isActive                  Boolean                      @default(true) @map("is_active")
+  displayOrder              Int                          @default(0) @map("display_order")
+  createdAt                 DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  room                      Room                         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  reservationAssignmentRows ReservationAssignmentTable[]
 
   @@unique([roomId, name], map: "dining_tables_room_id_name_key")
+  @@unique([roomId, id], map: "dining_tables_room_id_id_key")
   @@index([roomId, isActive, displayOrder], map: "dining_tables_room_active_order_idx")
   @@map("dining_tables")
 }
@@ -293,8 +300,11 @@ model User {
   createdReservations    Reservation[]
   reservationAuditEvents ReservationAuditEvent[] @relation("ReservationAuditActor")
   auditEvents            AuditEvent[]            @relation("AuditEventActor")
+  initialAssignments     ReservationAssignment[] @relation("ReservationAssignmentAssignedBy")
+  updatedAssignments     ReservationAssignment[] @relation("ReservationAssignmentUpdatedBy")
 
   @@unique([restaurantId, username], map: "users_restaurant_id_username_key")
+  @@unique([restaurantId, id], map: "users_restaurant_id_id_key")
   @@index([restaurantId, role, isActive], map: "users_restaurant_role_active_idx")
   @@map("users")
 }
@@ -361,9 +371,49 @@ model Reservation {
   idempotencyKey         ReservationIdempotencyKey?
   managementToken        ReservationManagementToken?
   auditEvents            ReservationAuditEvent[]
+  assignment             ReservationAssignment?
 
+  @@unique([restaurantId, id], map: "reservations_restaurant_id_id_key")
   @@index([restaurantId, localDate, serviceType, status, arrivalTime], map: "reservations_capacity_lookup_idx")
   @@map("reservations")
+}
+
+model ReservationAssignment {
+  id               String                       @id @default(uuid()) @db.Uuid
+  restaurantId     String                       @map("restaurant_id") @db.Uuid
+  reservationId    String                       @map("reservation_id") @db.Uuid
+  roomId           String                       @map("room_id") @db.Uuid
+  internalNotes    String?                      @map("internal_notes") @db.VarChar(1000)
+  assignedByUserId String                       @map("assigned_by_user_id") @db.Uuid
+  updatedByUserId  String                       @map("updated_by_user_id") @db.Uuid
+  createdAt        DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  clearedAt        DateTime?                    @map("cleared_at") @db.Timestamptz(3)
+  reservation      Reservation                  @relation(fields: [restaurantId, reservationId], references: [restaurantId, id], onDelete: Restrict, map: "reservation_assignments_restaurant_reservation_fkey")
+  room             Room                         @relation(fields: [restaurantId, roomId], references: [restaurantId, id], onDelete: Restrict, map: "reservation_assignments_restaurant_room_fkey")
+  assignedByUser   User                         @relation("ReservationAssignmentAssignedBy", fields: [restaurantId, assignedByUserId], references: [restaurantId, id], onDelete: Restrict, map: "reservation_assignments_restaurant_assigned_by_fkey")
+  updatedByUser    User                         @relation("ReservationAssignmentUpdatedBy", fields: [restaurantId, updatedByUserId], references: [restaurantId, id], onDelete: Restrict, map: "reservation_assignments_restaurant_updated_by_fkey")
+  tables           ReservationAssignmentTable[]
+
+  @@unique([restaurantId, reservationId], map: "reservation_assignments_restaurant_reservation_key")
+  @@unique([restaurantId, id, roomId], map: "reservation_assignments_restaurant_id_room_key")
+  @@index([restaurantId, clearedAt], map: "reservation_assignments_restaurant_cleared_idx")
+  @@index([restaurantId, roomId], map: "reservation_assignments_restaurant_room_idx")
+  @@map("reservation_assignments")
+}
+
+model ReservationAssignmentTable {
+  restaurantId  String                @map("restaurant_id") @db.Uuid
+  assignmentId  String                @map("assignment_id") @db.Uuid
+  roomId        String                @map("room_id") @db.Uuid
+  diningTableId String                @map("dining_table_id") @db.Uuid
+  assignment    ReservationAssignment @relation(fields: [restaurantId, assignmentId, roomId], references: [restaurantId, id, roomId], onDelete: Restrict, map: "reservation_assignment_tables_assignment_room_fkey")
+  room          Room                  @relation("ReservationAssignmentTableRoom", fields: [restaurantId, roomId], references: [restaurantId, id], onDelete: Restrict, map: "reservation_assignment_tables_restaurant_room_fkey")
+  diningTable   DiningTable           @relation(fields: [roomId, diningTableId], references: [roomId, id], onDelete: Restrict, map: "reservation_assignment_tables_room_table_fkey")
+
+  @@id([restaurantId, assignmentId, diningTableId], map: "reservation_assignment_tables_pkey")
+  @@index([restaurantId, roomId, diningTableId], map: "reservation_assignment_tables_restaurant_room_table_idx")
+  @@map("reservation_assignment_tables")
 }
 
 model ReservationIdempotencyKey {

@@ -8,6 +8,15 @@ import {
   type Page,
 } from "@playwright/test";
 
+import {
+  e2eAdminUsername,
+  e2eAdminUserId,
+  e2eCreatedStaffUsername,
+  e2eResetStaffUsername,
+  e2eRunId,
+  e2eStaffUsername,
+} from "./e2e-run";
+
 function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Variabile E2E ${name} non configurata.`);
@@ -16,7 +25,6 @@ function requiredEnvironment(name: string): string {
 
 const adminPassword = requiredEnvironment("AUTH_DEMO_ADMIN_PASSWORD");
 const staffPassword = requiredEnvironment("AUTH_DEMO_STAFF_PASSWORD");
-const e2eAdminId = "00000000-0000-4000-8000-000000000901";
 
 async function loginAs(page: Page, username: string, password: string) {
   await page.goto("/login");
@@ -26,7 +34,7 @@ async function loginAs(page: Page, username: string, password: string) {
 }
 
 async function loginAsDemoAdmin(page: Page) {
-  await loginAs(page, "e2e.admin", adminPassword);
+  await loginAs(page, e2eAdminUsername, adminPassword);
   await expect(page).toHaveURL(/\/dashboard(?:\?|$)/, { timeout: 20_000 });
 }
 
@@ -102,9 +110,8 @@ test.describe.serial("M9-B gestione utenti e password", () => {
   test("Admin crea Staff, mostra la temporanea una volta e impone cambio e nuovo login", async ({
     page,
   }) => {
-    const suffix = Date.now();
-    const username = `e2e.staff.create.${suffix}`;
-    const selectedPassword = `E2E scelta personale ${suffix} 😀`;
+    const username = e2eCreatedStaffUsername;
+    const selectedPassword = `E2E scelta personale ${e2eRunId} 😀`;
 
     await loginAsDemoAdmin(page);
     const temporaryPassword = await createUserAndReadTemporaryPassword(
@@ -138,9 +145,8 @@ test.describe.serial("M9-B gestione utenti e password", () => {
     page,
     browser,
   }) => {
-    const suffix = Date.now();
-    const username = `e2e.staff.reset.${suffix}`;
-    const selectedPassword = `E2E prima scelta ${suffix} !`;
+    const username = e2eResetStaffUsername;
+    const selectedPassword = `E2E prima scelta ${e2eRunId} !`;
     await loginAsDemoAdmin(page);
     const temporaryPassword = await createUserAndReadTemporaryPassword(
       page,
@@ -180,12 +186,14 @@ test.describe.serial("M9-B gestione utenti e password", () => {
   }) => {
     await loginAsDemoAdmin(page);
     await page.goto("/admin/users");
-    const selfCard = page.locator("article").filter({ hasText: "e2e.admin" });
+    const selfCard = page
+      .locator("article")
+      .filter({ hasText: e2eAdminUsername });
     await expect(selfCard.getByLabel("Ruolo")).toBeDisabled();
     await expect(selfCard.getByRole("button", { name: "Disattiva" })).toBeDisabled();
 
     const roleResponse = await page.request.patch(
-      `/api/admin/users/${e2eAdminId}/role`,
+      `/api/admin/users/${e2eAdminUserId}/role`,
       {
         headers: { origin: "http://localhost:4000" },
         data: { role: "STAFF" },
@@ -195,7 +203,7 @@ test.describe.serial("M9-B gestione utenti e password", () => {
     expect((await roleResponse.json()).code).toBe("SELF_PROTECTED");
 
     const statusResponse = await page.request.patch(
-      `/api/admin/users/${e2eAdminId}/status`,
+      `/api/admin/users/${e2eAdminUserId}/status`,
       {
         headers: { origin: "http://localhost:4000" },
         data: { isActive: false },
@@ -216,17 +224,17 @@ test.describe.serial("M9-B gestione utenti e password", () => {
       await expect(anonymous.page).toHaveURL(/\/login/);
       const anonymousApi = await anonymous.page.request.post("/api/admin/users", {
         headers: { origin: "http://localhost:4000" },
-        data: { username: `e2e.denied.${Date.now()}`, role: "STAFF" },
+        data: { username: `e2e.denied.${e2eRunId}`, role: "STAFF" },
       });
       expect(anonymousApi.status()).toBe(401);
 
-      await loginAs(staff.page, "e2e.staff", staffPassword);
+      await loginAs(staff.page, e2eStaffUsername, staffPassword);
       await expect(staff.page).toHaveURL(/\/dashboard(?:\?|$)/);
       await staff.page.goto("/admin/users");
       await expect(staff.page).toHaveURL(/\/dashboard\?access=denied/);
       const staffApi = await staff.page.request.post("/api/admin/users", {
         headers: { origin: "http://localhost:4000" },
-        data: { username: `e2e.denied.staff.${Date.now()}`, role: "STAFF" },
+        data: { username: `e2e.denied.staff.${e2eRunId}`, role: "STAFF" },
       });
       expect(staffApi.status()).toBe(403);
     } finally {

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { calculateAvailability } from "@/modules/availability/domain/availability-engine";
 import type { AvailabilityReason } from "@/modules/availability/domain/types";
 import { operationalTimeToMinutes } from "@/modules/configuration/domain/operational-time";
+import { acquireOperationalConfigurationLock } from "@/modules/configuration/infrastructure/operational-configuration-repository";
 import {
   managementViewExpiry,
   originalManagementLinkDurationHours,
@@ -68,6 +69,7 @@ import {
   findAvailableRoomForService,
   materializeServiceInstance,
 } from "@/modules/rooms/infrastructure/service-instance-repository";
+import { clearReservationAssignmentForScheduleChange } from "@/modules/rooms/application/reservation-assignment-service";
 import {
   resolveReservationConfig,
   type ReservationConfig,
@@ -494,6 +496,10 @@ export async function updateStaffReservation(input: {
       input.actor.restaurantId,
       input.reservationId,
     );
+    await acquireOperationalConfigurationLock(
+      client,
+      input.actor.restaurantId,
+    );
     const current = await findReservationById(
       input.actor.restaurantId,
       input.reservationId,
@@ -532,10 +538,12 @@ export async function updateStaffReservation(input: {
       },
     ]);
 
-    const capacityChanged =
+    const scheduleChanged =
       current.localDate !== command.localDate ||
       current.serviceType !== command.serviceType ||
-      current.arrivalTime !== command.arrivalTime ||
+      current.arrivalTime !== command.arrivalTime;
+    const capacityChanged =
+      scheduleChanged ||
       current.partySize !== command.partySize;
 
     const configuration = capacityChanged
@@ -611,10 +619,7 @@ export async function updateStaffReservation(input: {
     }
 
     const publicScheduleChanged =
-      current.origin === "PUBLIC" &&
-      (current.localDate !== command.localDate ||
-        current.serviceType !== command.serviceType ||
-        current.arrivalTime !== command.arrivalTime);
+      current.origin === "PUBLIC" && scheduleChanged;
     let publicLinkContext:
       | { timezone: string; originalDurationHours: number }
       | null = null;
@@ -696,12 +701,13 @@ export async function updateStaffReservation(input: {
       }
     }
 
+    const correlationId = randomUUID();
     await insertAuthenticatedAuditEvent(client, {
       actor: input.actor,
       reservationId: updated.id,
       action: "UPDATED",
       actorOrigin: "STAFF",
-      correlationId: randomUUID(),
+      correlationId,
       previousState: reservationAuditSnapshot(current),
       newState: staffAuditState(updated, overrideResult),
       capacityOverride: overrideResult !== null,
@@ -710,6 +716,19 @@ export async function updateStaffReservation(input: {
         : null,
       createdAt: now,
     });
+    if (scheduleChanged) {
+      await clearReservationAssignmentForScheduleChange(client, {
+        restaurantId: input.actor.restaurantId,
+        reservationId: updated.id,
+        actor: {
+          origin: "STAFF",
+          id: input.actor.id,
+          role: input.actor.role,
+        },
+        correlationId,
+        now: new Date(now.getTime() + 1),
+      });
+    }
 
     return { reservation: toStaffReservationDto(updated), changed: true };
   });
@@ -733,6 +752,10 @@ export async function cancelStaffReservation(input: {
       client,
       input.actor.restaurantId,
       input.reservationId,
+    );
+    await acquireOperationalConfigurationLock(
+      client,
+      input.actor.restaurantId,
     );
     const current = await findReservationById(
       input.actor.restaurantId,

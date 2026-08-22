@@ -3,7 +3,13 @@ import "dotenv/config";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { Pool } from "pg";
 
-import { e2eReservationFirstName, e2eRunId } from "./e2e-run";
+import {
+  e2eAdminUsername,
+  e2eDiningTableName,
+  e2eReservationFirstName,
+  e2eRestaurantId,
+  e2eStaffUsername,
+} from "./e2e-run";
 
 const origin = "http://localhost:4000";
 const date = "2099-11-18";
@@ -28,9 +34,9 @@ async function serviceInstanceSnapshot() {
     SELECT id::text, version, local_date::text, service_type::text,
            created_at::text, updated_at::text
     FROM service_instances
-    WHERE restaurant_id = '00000000-0000-4000-8000-000000000001'::uuid
+    WHERE restaurant_id = $1::uuid
     ORDER BY id
-  `);
+  `, [e2eRestaurantId]);
   const rooms = await database.query<{
     id: string;
     service_instance_id: string;
@@ -42,9 +48,9 @@ async function serviceInstanceSnapshot() {
     SELECT id::text, service_instance_id::text, room_id::text, is_available,
            created_at::text, updated_at::text
     FROM service_room_availability
-    WHERE restaurant_id = '00000000-0000-4000-8000-000000000001'::uuid
+    WHERE restaurant_id = $1::uuid
     ORDER BY id
-  `);
+  `, [e2eRestaurantId]);
   return {
     instances: instances.rows,
     rooms: rooms.rows,
@@ -88,7 +94,7 @@ test.describe.serial("M9-D sale e tavoli", () => {
   });
 
   test("Admin abilita separatamente Galleria e la disponibilità pubblica la riflette", async ({ page }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     const state = await configuration(page.request);
     const room = state.rooms.find((candidate) => candidate.code === "galleria");
     const terrace = state.rooms.find((candidate) => candidate.code === "terrazzo");
@@ -116,7 +122,7 @@ test.describe.serial("M9-D sale e tavoli", () => {
   });
 
   test("sala non disponibile scompare per pubblico e Staff senza mutare la prenotazione", async ({ page }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     const state = await configuration(page.request);
     const room = state.rooms.find((candidate) => candidate.code === "sala-1");
     const proposal = { kind: "SERVICE_ROOM_AVAILABILITY", localDate: date, serviceType: service, roomId: room?.id, isAvailable: false };
@@ -144,7 +150,7 @@ test.describe.serial("M9-D sale e tavoli", () => {
 
   test("Admin preserva lifecycle sala, gestisce un tavolo e una preview concorrente diventa obsoleta", async ({ page }) => {
     test.setTimeout(60_000);
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     const state = await configuration(page.request);
     const room = state.rooms.find((candidate) => candidate.code === "sala-2")!;
     const availabilityProposal = { kind: "SERVICE_ROOM_AVAILABILITY", localDate: date, serviceType: service, roomId: room.id, isAvailable: false };
@@ -167,7 +173,7 @@ test.describe.serial("M9-D sale e tavoli", () => {
       await apply(page.request, { ...availabilityProposal, isAvailable: true });
     }
 
-    const tableName = `E2E-${e2eRunId.slice(0, 8)}`;
+    const tableName = e2eDiningTableName;
     await page.goto(`/admin/rooms?date=${date}&service=${service}`);
     const roomSection = page.locator("section").filter({ has: page.getByRole("heading", { name: "Sala 2", exact: true }) });
     await roomSection.getByLabel("Nuovo tavolo").fill(tableName);
@@ -183,12 +189,12 @@ test.describe.serial("M9-D sale e tavoli", () => {
     await updateForm.getByLabel("Max").fill("6");
     await updateForm.getByLabel("Attivo").uncheck();
     await updateForm.getByRole("button", { name: "Salva" }).click();
-    await expect(page.getByRole("status")).toContainText("Tavolo salvato");
+    await expect(page.getByRole("status")).toContainText("Configurazione salvata");
     await expect(updateForm.getByLabel("Attivo")).not.toBeChecked();
   });
 
   test("Staff e anonimo sono respinti e la UI non deborda a 390, 820 e 1440 px", async ({ browser, page }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     for (const width of [390, 820, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`/admin/rooms?date=${date}&service=${service}`);
@@ -196,7 +202,7 @@ test.describe.serial("M9-D sale e tavoli", () => {
     }
     const anonymous = await browser.newPage();
     const staff = await browser.newPage();
-    await login(staff, "e2e.staff", staffPassword);
+    await login(staff, e2eStaffUsername, staffPassword);
     const payload = { kind: "ROOM_CATALOG", roomId: crypto.randomUUID(), displayOrder: 1, isActive: false };
     expect((await anonymous.request.post("/api/admin/room-configuration/preview", { headers: { origin }, data: payload })).status()).toBe(401);
     expect((await staff.request.post("/api/admin/room-configuration/preview", { headers: { origin }, data: payload })).status()).toBe(403);
@@ -206,7 +212,7 @@ test.describe.serial("M9-D sale e tavoli", () => {
 
   test("GET, rendering server-side e preview non modificano istanze o righe sala", async ({ page }) => {
     const readDate = "2099-11-24";
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     const createdResponse = await page.request.post("/api/public/reservations", {
       headers: { origin, "Idempotency-Key": crypto.randomUUID() },
       data: {

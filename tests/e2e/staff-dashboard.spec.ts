@@ -2,7 +2,11 @@ import "dotenv/config";
 
 import { expect, test, type Page } from "@playwright/test";
 
-import { e2eReservationFirstName } from "./e2e-run";
+import {
+  e2eAdminUsername,
+  e2eReservationFirstName,
+  e2eStaffUsername,
+} from "./e2e-run";
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name];
@@ -15,7 +19,8 @@ const adminPassword = requiredEnvironment("AUTH_DEMO_ADMIN_PASSWORD");
 
 async function login(page: Page, role: "STAFF" | "ADMIN") {
   await page.goto("/login");
-  await page.getByLabel("Username").fill(role === "STAFF" ? "e2e.staff" : "e2e.admin");
+  const username = role === "STAFF" ? e2eStaffUsername : e2eAdminUsername;
+  await page.getByLabel("Username").fill(username);
   await page
     .getByLabel("Password")
     .fill(role === "STAFF" ? staffPassword : adminPassword);
@@ -24,7 +29,7 @@ async function login(page: Page, role: "STAFF" | "ADMIN") {
   await expect(page.getByRole("heading", { name: /agosto|settembre|ottobre|novembre|dicembre|gennaio|febbraio|marzo|aprile|maggio|giugno|luglio/i })).toBeVisible();
   await expect(
     page.getByText(
-      `sessione ${role === "STAFF" ? "e2e.staff" : "e2e.admin"} (${role})`,
+      `sessione ${username} (${role})`,
       { exact: false },
     ),
   ).toBeVisible();
@@ -80,7 +85,15 @@ async function cancelCreatedReservation(
   await expect(card).toBeVisible();
   if (overrideReason) await expect(card).toContainText(overrideReason);
   await card.getByRole("button", { name: "Cancella" }).click();
+  const cancellationResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "DELETE" &&
+      /\/api\/staff\/reservations\/[0-9a-f-]+$/u.test(
+        new URL(response.url()).pathname,
+      ),
+  );
   await card.getByRole("button", { name: "Sì, cancella" }).click();
+  expect((await cancellationResponse).status()).toBe(200);
   await expect(card).toContainText("Cancellata");
 }
 
@@ -176,7 +189,16 @@ test.describe("M8 dashboard Staff/Admin", () => {
     await expect(updatedCard).toContainText("+39 000 000 0999");
     await expect(updatedCard).toContainText("Ultimo aggiornamento");
     await updatedCard.getByRole("button", { name: "Cancella" }).click();
+    const cancellationResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "DELETE" &&
+        /\/api\/staff\/reservations\/[0-9a-f-]+$/u.test(
+          new URL(response.url()).pathname,
+        ),
+    );
     await updatedCard.getByRole("button", { name: "Sì, cancella" }).click();
+    expect((await cancellationResponse).status()).toBe(200);
+    await expect(updatedCard).toContainText("Cancellata");
     await page.getByLabel("Stato").selectOption("CANCELLED");
     await page.getByRole("button", { name: "Applica filtri" }).click();
     await expect(

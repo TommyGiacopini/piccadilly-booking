@@ -209,8 +209,12 @@ describe.sequential("M9-D service rooms and table lifecycle", () => {
   it("creates, updates, disables and re-enables a table without moving it", async () => {
     const room = await prisma.room.findFirstOrThrow({ where: { restaurantId, code: "sala-2" } });
     const created = await mutateDiningTable(actor, { action: "CREATE_TABLE", roomId: room.id, name: "T-FAKE", minimumSeats: 2, maximumSeats: 6, displayOrder: 1 }, { now });
-    await mutateDiningTable(actor, { action: "UPDATE_TABLE", id: created.id, name: "T-FAKE", minimumSeats: 1, maximumSeats: 8, displayOrder: 2, isActive: false }, { now });
-    await mutateDiningTable(actor, { action: "UPDATE_TABLE", id: created.id, name: "T-FAKE", minimumSeats: 1, maximumSeats: 8, displayOrder: 2, isActive: true }, { now });
+    for (const isActive of [false, true]) {
+      const proposal = { kind: "DINING_TABLE", tableId: created.id, name: "T-FAKE", minimumSeats: 1, maximumSeats: 8, displayOrder: 2, isActive } as const;
+      const preview = await previewRoomConfigurationChange(actor, proposal, { now });
+      expect(preview.confirmationRequired).toBe(false);
+      await applyRoomConfigurationChange(actor, { proposal, fingerprint: preview.fingerprint }, { now });
+    }
     await expect(mutateDiningTable(actor, { action: "UPDATE_TABLE", id: created.id, roomId: randomUUID(), name: "T-FAKE", minimumSeats: 1, maximumSeats: 8, displayOrder: 2, isActive: true }, { now })).rejects.toMatchObject({ code: "VALIDATION" });
     await expect(prisma.diningTable.findUniqueOrThrow({ where: { id: created.id } })).resolves.toMatchObject({ roomId: room.id, isActive: true, maximumSeats: 8 });
   });

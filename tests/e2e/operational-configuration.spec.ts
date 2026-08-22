@@ -2,7 +2,11 @@ import "dotenv/config";
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
-import { e2eReservationFirstName } from "./e2e-run";
+import {
+  e2eAdminUsername,
+  e2eReservationFirstName,
+  e2eStaffUsername,
+} from "./e2e-run";
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name];
@@ -48,6 +52,19 @@ async function apply(request: APIRequestContext, proposal: unknown) {
   );
   expect(response.ok(), await response.text()).toBe(true);
   return current;
+}
+
+async function readOperationalConfiguration(request: APIRequestContext) {
+  const response = await request.get("/api/admin/operational-configuration");
+  expect(response.ok(), await response.text()).toBe(true);
+  return (await response.json()).configuration as {
+    bookingCutoffRules: Array<{
+      dayOfWeek: string;
+      serviceType: string;
+      isEnabled: boolean;
+      cutoffTime: string;
+    }>;
+  };
 }
 
 function settingsProposal(capacity: number) {
@@ -131,7 +148,7 @@ test.describe.serial("M9-C configurazione con impatto", () => {
   test("Admin salva senza impatto e le pagine restano responsive", async ({
     page,
   }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     await apply(page.request, settingsProposal(30));
     await page.goto("/admin/configuration");
     await page.getByLabel("Capacità massima nella finestra").fill("31");
@@ -157,7 +174,7 @@ test.describe.serial("M9-C configurazione con impatto", () => {
   });
 
   test("riduzione con impatto richiede conferma e preserva la prenotazione", async ({ page }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     await apply(page.request, settingsProposal(30));
     const reservation = await createPhoneFixture(page.request);
     try {
@@ -185,7 +202,7 @@ test.describe.serial("M9-C configurazione con impatto", () => {
   });
 
   test("un cambiamento concorrente rende obsoleta l'anteprima", async ({ page }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     await apply(page.request, settingsProposal(30));
     await createPhoneFixture(page.request);
     await page.goto("/admin/configuration");
@@ -203,9 +220,16 @@ test.describe.serial("M9-C configurazione con impatto", () => {
   });
 
   test("cutoff generico blocca il pubblico ma non il canale Staff", async ({ page }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     await apply(page.request, settingsProposal(30));
     const { date, weekday } = romeDateAndWeekday();
+    const originalRule = (
+      await readOperationalConfiguration(page.request)
+    ).bookingCutoffRules.find(
+      (rule) =>
+        rule.dayOfWeek === weekday && rule.serviceType === "DINNER",
+    );
+    expect(originalRule).toBeTruthy();
     await apply(page.request, {
       kind: "BOOKING_CUTOFF_RULE",
       dayOfWeek: weekday,
@@ -213,23 +237,53 @@ test.describe.serial("M9-C configurazione con impatto", () => {
       isEnabled: true,
       cutoffTime: "00:00",
     });
-    const query = `date=${date}&service=DINNER&partySize=1`;
-    const [publicResponse, staffResponse] = await Promise.all([
-      page.request.get(`/api/public/availability?${query}`),
-      page.request.get(`/api/staff/availability?${query}`),
-    ]);
-    const publicBody = await publicResponse.json();
-    const staffBody = await staffResponse.json();
+    let scenarioError: unknown;
+    let cleanupError: unknown;
+    try {
+      const query = `date=${date}&service=DINNER&partySize=1`;
+      const [publicResponse, staffResponse] = await Promise.all([
+        page.request.get(`/api/public/availability?${query}`),
+        page.request.get(`/api/staff/availability?${query}`),
+      ]);
+      const publicBody = await publicResponse.json();
+      const staffBody = await staffResponse.json();
 
-    expect(publicResponse.ok()).toBe(true);
-    expect(publicBody.slots.some((slot: { reason?: string }) => slot.reason === "ONLINE_CUTOFF_REACHED")).toBe(true);
-    expect(staffResponse.ok()).toBe(true);
-    expect(staffBody.slots.some((slot: { available: boolean }) => slot.available)).toBe(true);
-    const staffSlot = staffBody.slots.find(
-      (slot: { available: boolean; time: string }) => slot.available,
-    );
-    expect(staffSlot).toBeTruthy();
-    await createPhoneFixture(page.request, date, staffSlot.time);
+      expect(publicResponse.ok()).toBe(true);
+      expect(
+        publicBody.slots.some(
+          (slot: { reason?: string }) =>
+            slot.reason === "ONLINE_CUTOFF_REACHED",
+        ),
+      ).toBe(true);
+      expect(staffResponse.ok()).toBe(true);
+      expect(
+        staffBody.slots.some((slot: { available: boolean }) => slot.available),
+      ).toBe(true);
+      const staffSlot = staffBody.slots.find(
+        (slot: { available: boolean; time: string }) => slot.available,
+      );
+      expect(staffSlot).toBeTruthy();
+      await createPhoneFixture(page.request, date, staffSlot.time);
+    } catch (error) {
+      scenarioError = error;
+    } finally {
+      try {
+        await apply(page.request, {
+          kind: "BOOKING_CUTOFF_RULE",
+          dayOfWeek: weekday,
+          serviceType: "DINNER",
+          isEnabled: originalRule!.isEnabled,
+          cutoffTime: originalRule!.cutoffTime,
+        });
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
+    if (scenarioError) {
+      if (cleanupError) console.error("Operational cutoff cleanup also failed.", cleanupError);
+      throw scenarioError;
+    }
+    if (cleanupError) throw cleanupError;
   });
 
   test("Staff e anonimo non accedono a pagina o API", async ({ browser }) => {
@@ -246,7 +300,7 @@ test.describe.serial("M9-C configurazione con impatto", () => {
       );
       expect(anonymousApi.status()).toBe(401);
 
-      await login(staff, "e2e.staff", staffPassword);
+      await login(staff, e2eStaffUsername, staffPassword);
       await staff.goto("/admin/configuration");
       await expect(staff).toHaveURL(/\/dashboard\?access=denied/);
       const staffApi = await staff.request.post(

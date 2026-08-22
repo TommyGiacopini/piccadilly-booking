@@ -8,7 +8,11 @@ import {
 } from "@playwright/test";
 
 import { localReservationInstant } from "../../src/modules/reservations/domain/management-time";
-import { e2eReservationFirstName } from "./e2e-run";
+import {
+  e2eAdminUsername,
+  e2eReservationFirstName,
+  e2eStaffUsername,
+} from "./e2e-run";
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name];
@@ -110,7 +114,7 @@ test.describe.serial("M9-E configurazione pubblica", () => {
   test("Admin modifica contatti fittizi e il pubblico li visualizza", async ({
     page,
   }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     const original = await readConfiguration(page.request);
     try {
       await save(page.request, "contacts", {
@@ -145,7 +149,7 @@ test.describe.serial("M9-E configurazione pubblica", () => {
   });
 
   test("contenuti IT/EN seguono il selettore e preservano lang", async ({ page }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     const original = await readConfiguration(page.request);
     const changed = structuredClone(original.contents);
     changed.IT.BOOKING_PAGE_TITLE = "Titolo E2E italiano";
@@ -176,7 +180,7 @@ test.describe.serial("M9-E configurazione pubblica", () => {
   test("durata prospettica e reschedule conservano il valore originario", async ({
     page,
   }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     const original = await readConfiguration(page.request);
     const changedDuration = original.managementLinkDurationHours === 6 ? 12 : 6;
     try {
@@ -245,7 +249,7 @@ test.describe.serial("M9-E configurazione pubblica", () => {
     browser,
     page,
   }) => {
-    await login(page, "e2e.staff", staffPassword);
+    await login(page, e2eStaffUsername, staffPassword);
     await page.goto("/admin/public-settings");
     await expect(page).toHaveURL(/\/dashboard\?access=denied/);
     const response = await page.request.get("/api/admin/public-settings");
@@ -266,7 +270,7 @@ test.describe.serial("M9-E configurazione pubblica", () => {
   test("payload editoriale incompleto o arbitrario non viene salvato", async ({
     page,
   }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     const before = await readConfiguration(page.request);
     const response = await page.request.post(
       "/api/admin/public-settings/content",
@@ -288,7 +292,7 @@ test.describe.serial("M9-E configurazione pubblica", () => {
   test("UI Admin e pubblica non hanno overflow a 390, 820 e 1440 px", async ({
     page,
   }) => {
-    await login(page, "e2e.admin", adminPassword);
+    await login(page, e2eAdminUsername, adminPassword);
     for (const viewport of [
       { width: 390, height: 844 },
       { width: 820, height: 1_180 },

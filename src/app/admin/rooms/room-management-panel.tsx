@@ -6,14 +6,18 @@ import { useState } from "react";
 type ServiceType = "LUNCH" | "DINNER";
 type Proposal =
   | { kind: "SERVICE_ROOM_AVAILABILITY"; localDate: string; serviceType: ServiceType; roomId: string; isAvailable: boolean }
-  | { kind: "ROOM_CATALOG"; roomId: string; displayOrder: number; isActive: boolean };
+  | { kind: "ROOM_CATALOG"; roomId: string; displayOrder: number; isActive: boolean }
+  | { kind: "DINING_TABLE"; tableId: string; name: string; minimumSeats: number; maximumSeats: number; displayOrder: number; isActive: boolean };
 interface ImpactItem {
   classification: string;
+  classifications: string[];
   localDate: string | null;
   serviceType: ServiceType | null;
   roomCode: string;
   reservationCount: number;
   covers: number;
+  preferenceReservationCount: number;
+  assignmentReservationCount: number;
   previousAvailable: boolean;
   proposedAvailable: boolean;
 }
@@ -22,7 +26,7 @@ interface Preview {
   fingerprint: string;
   changed: boolean;
   confirmationRequired: boolean;
-  impact: { reservationCount: number; covers: number; items: ImpactItem[] };
+  impact: { reservationCount: number; covers: number; preferenceReservationCount: number; assignmentReservationCount: number; items: ImpactItem[] };
 }
 interface RoomDto {
   id: string;
@@ -64,7 +68,17 @@ export function RoomManagementPanel({ configuration }: { configuration: Configur
   async function apply(preview: Preview) {
     const { response, result } = await postJson("/api/admin/room-configuration/apply", { proposal: preview.proposal, fingerprint: preview.fingerprint });
     if (!response.ok) {
-      if (result.code === "IMPACT_CHANGED" && result.preview) setPending(result.preview as Preview);
+      if (result.code === "IMPACT_CHANGED") {
+        const updatedPreview = result.preview as Preview | undefined;
+        setPending(
+          updatedPreview?.changed && updatedPreview.confirmationRequired
+            ? updatedPreview
+            : null,
+        );
+        throw new Error(
+          "L'impatto è cambiato. Ripeti l'azione prima di applicare la configurazione.",
+        );
+      }
       throw new Error(typeof result.error === "string" ? result.error : "Salvataggio non riuscito.");
     }
     setPending(null);
@@ -131,7 +145,7 @@ export function RoomManagementPanel({ configuration }: { configuration: Configur
             <div className="mt-6 space-y-3">
               <h3 className="text-sm font-black uppercase tracking-wide text-zinc-600">Tavoli</h3>
               {room.diningTables.map((table) => (
-                <form className="grid min-w-0 gap-3 rounded-2xl bg-zinc-100 p-4 md:grid-cols-6 md:items-end" key={table.id} onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void mutateTable({ action: "UPDATE_TABLE", id: table.id, name: data.get("name"), minimumSeats: Number(data.get("minimumSeats")), maximumSeats: Number(data.get("maximumSeats")), displayOrder: Number(data.get("displayOrder")), isActive: data.get("isActive") === "on" }); }}>
+                <form className="grid min-w-0 gap-3 rounded-2xl bg-zinc-100 p-4 md:grid-cols-6 md:items-end" key={table.id} onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void propose({ kind: "DINING_TABLE", tableId: table.id, name: String(data.get("name") ?? ""), minimumSeats: Number(data.get("minimumSeats")), maximumSeats: Number(data.get("maximumSeats")), displayOrder: Number(data.get("displayOrder")), isActive: data.get("isActive") === "on" }); }}>
                   <label className="min-w-0 text-xs font-bold md:col-span-2">Nome<input className={field} defaultValue={table.name} maxLength={40} name="name" required /></label>
                   <label className="text-xs font-bold">Min<input className={field} defaultValue={table.minimumSeats} min="1" name="minimumSeats" required type="number" /></label>
                   <label className="text-xs font-bold">Max<input className={field} defaultValue={table.maximumSeats} min="1" name="maximumSeats" required type="number" /></label>
@@ -151,7 +165,7 @@ export function RoomManagementPanel({ configuration }: { configuration: Configur
         );
       })}
 
-      {pending ? <div aria-modal="true" className="fixed inset-0 z-50 overflow-y-auto bg-black/70 p-4 sm:p-8" role="dialog"><section className="mx-auto max-w-2xl rounded-3xl bg-white p-6"><p className="text-xs font-black uppercase tracking-widest text-orange-700">Conferma esplicita</p><h2 className="mt-2 text-2xl font-black">Preferenze sala coinvolte</h2><p className="mt-3 text-sm text-zinc-600">Le prenotazioni non vengono modificate o cancellate. L’impatto è limitato alle preferenze già registrate.</p><p className="mt-5 rounded-2xl bg-zinc-100 p-4 font-black">{pending.impact.reservationCount} prenotazioni · {pending.impact.covers} coperti</p><div className="mt-6 flex justify-end gap-3"><button className="rounded-xl border border-zinc-300 px-4 py-2 font-bold" disabled={busy} onClick={() => setPending(null)} type="button">Annulla</button><button className="rounded-xl bg-orange-600 px-4 py-2 font-black text-white disabled:opacity-50" disabled={busy} onClick={() => { setBusy(true); void apply(pending).catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Operazione non riuscita.")).finally(() => setBusy(false)); }} type="button">Conferma e applica</button></div></section></div> : null}
+      {pending ? <div aria-modal="true" className="fixed inset-0 z-50 overflow-y-auto bg-black/70 p-4 sm:p-8" role="dialog"><section className="mx-auto max-w-2xl rounded-3xl bg-white p-6"><p className="text-xs font-black uppercase tracking-widest text-orange-700">Conferma esplicita</p><h2 className="mt-2 text-2xl font-black">Prenotazioni coinvolte</h2><p className="mt-3 text-sm text-zinc-600">La configurazione non modifica le prenotazioni né le assegnazioni esistenti. I riferimenti interessati resteranno visibili come grandfathered.</p><div className="mt-5 grid gap-3 sm:grid-cols-3"><p className="rounded-2xl bg-zinc-100 p-4 font-black">{pending.impact.reservationCount} prenotazioni · {pending.impact.covers} coperti</p><p className="rounded-2xl bg-zinc-100 p-4 font-black">{pending.impact.assignmentReservationCount} assegnazioni finali</p><p className="rounded-2xl bg-zinc-100 p-4 font-black">{pending.impact.preferenceReservationCount} preferenze</p></div><div className="mt-6 flex justify-end gap-3"><button className="rounded-xl border border-zinc-300 px-4 py-2 font-bold" disabled={busy} onClick={() => setPending(null)} type="button">Annulla</button><button className="rounded-xl bg-orange-600 px-4 py-2 font-black text-white disabled:opacity-50" disabled={busy} onClick={() => { setBusy(true); void apply(pending).catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Operazione non riuscita.")).finally(() => setBusy(false)); }} type="button">Conferma e applica</button></div></section></div> : null}
     </div>
   );
 }
