@@ -245,6 +245,33 @@ L'ordinamento globale è `createdAt DESC`, ranking stabile della sorgente (`ADMI
 
 Riferimento: `docs/adr/006-audit-architecture-minimization.md`.
 
+### D-037 — Fondazione dell'assegnazione manuale di sala e tavoli
+
+M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; M10-C introdurrà la UI operativa. M10-A e M10-B non concludono M10.
+
+Le decisioni vincolanti approvate sono formalizzate come segue:
+
+- **M10-01 — stato dell'assegnazione:** una sola entità persistente per prenotazione, stato attivo derivato da `clearedAt IS NULL`, sala finale e almeno un tavolo distinto della stessa sala, rimozione esplicita e nessun backfill;
+- **M10-02 — posti dei tavoli:** `minimumSeats` e `maximumSeats` sono soltanto informazioni operative e non bloccano la scelta manuale;
+- **M10-03 — riutilizzo dello stesso tavolo:** è ammesso tra prenotazioni dello stesso servizio e non vengono introdotti durata, occupazione o collision detection;
+- **M10-04 — reschedule e cancellazione:** una modifica effettiva di data, servizio o orario rimuove atomicamente l'assegnazione attiva, mentre persone, preferenza, contatti, esigenze e note la conservano; la cancellazione conserva storicamente l'ultima assegnazione e la esclude dagli impatti operativi;
+- **M10-05 — prenotazioni storiche:** Staff e Admin possono correggerle senza cutoff, usando riferimenti attivi e coerenti ma senza ricostruire disponibilità passate o materializzare istanze;
+- **M10-06 — grandfathering:** riferimenti esistenti poi inattivi o indisponibili restano visibili e conservabili; ogni riferimento nuovo deve essere attivo e l'analisi d'impatto delle disattivazioni usa preview, conferma esplicita, fingerprint, ricalcolo transazionale e audit senza modificare le assegnazioni esistenti.
+
+Ogni prenotazione possiede al massimo una `ReservationAssignment` persistente. L'assegnazione logica corrente esiste solo quando `clearedAt` è nullo, richiede una sala finale e da uno a venti tavoli distinti appartenenti alla stessa sala. `DA ASSEGNARE` resta derivato dall'assenza di assegnazione attiva. La rimozione è un comando esplicito e logico; una riattivazione riusa la stessa entità e ne sovrascrive lo stato corrente, preservando l'autore iniziale. Non viene eseguito alcun backfill.
+
+I posti minimi e massimi dei tavoli sono dati operativi informativi e non bloccano l'assegnazione. Lo stesso tavolo può essere assegnato a più prenotazioni dello stesso servizio: non esistono ancora durata, occupazione, vincoli temporali o collision detection. Gli ID tavolo sono trattati come insieme e ordinati deterministicamente. Le note interne sono facoltative, non pubbliche, limitate a 1.000 code point e nell'audit compare soltanto il flag di presenza.
+
+Staff e Admin attivi, non disabilitati e senza cambio password obbligatorio possono assegnare, riassegnare e rimuovere. Il tenant, il ruolo, l'attore e il correlation ID derivano esclusivamente dal server e vengono riletti nella transazione. Le mutazioni usano `SERIALIZABLE`, retry, lock nell'ordine prenotazione, configurazione tenant e capacità, versione ottimistica, incremento della `Reservation.version` solo per cambi effettivi e `ReservationAuditEvent` atomico con azioni `ASSIGNED`, `REASSIGNED` e `UNASSIGNED`. I no-op non cambiano versione, timestamp o audit.
+
+Solo prenotazioni confermate ricevono nuove assegnazioni; le cancellate vengono rifiutate. Per servizi correnti o futuri ogni nuovo riferimento deve essere attivo e la sala deve essere effettivamente disponibile. Per prenotazioni storiche sala e tavoli devono essere attivi e coerenti, senza ricostruire disponibilità non versionata e senza materializzare `ServiceInstance`. Riferimenti già assegnati restano visibili e possono essere conservati anche se poi inattivi o indisponibili; ogni riferimento introdotto successivamente deve essere attivo.
+
+M10-B rimuove atomicamente l'assegnazione quando cambiano data, servizio o orario, con un solo incremento della versione della prenotazione e un audit `UNASSIGNED` nella stessa transazione e con lo stesso correlation ID dell'aggiornamento. La conserva per modifiche a persone, preferenza, contatti, esigenze e note e conserva storicamente l'ultima assegnazione alla cancellazione, senza esporla al cliente.
+
+Disattivazioni di sale o tavoli e indisponibilità per data/servizio riusano il protocollo M9-D: la preview minimizzata conteggia una sola volta le prenotazioni confermate correnti o future con assegnazione attiva pertinente, richiede conferma quando esiste impatto e usa un fingerprint opaco ricalcolato nella transazione. Un fingerprint obsoleto produce `IMPACT_CHANGED` senza mutazione o audit. L'applicazione della configurazione preserva assegnazioni, tavoli, note e `clearedAt` secondo grandfathering. M10-C realizzerà dashboard, filtri, indicatori e comandi UI di assegnazione.
+
+Riferimento: `docs/adr/011-manual-room-table-assignment.md`.
+
 ## 3. Decisioni reversibili
 
 Le seguenti scelte possono cambiare senza alterare il dominio, purché il cambiamento venga testato e documentato:
@@ -291,7 +318,6 @@ Questi punti non bloccano la documentazione corrente, ma devono essere decisi pr
 - librerie concrete e versioni da installare in ciascuna milestone;
 - provider e procedure definitive di backup coerenti con RPO/RTO;
 - RPO/RTO specifici dei singoli componenti esterni;
-- regola operativa sul riuso dello stesso tavolo, dato che non esiste una durata prestabilita;
 - limiti massimi pratici dell'intervallo Excel per tempo di generazione e dimensione del file;
 - criteri di retention o revoca per token scaduti e record tecnici di rate limiting.
 

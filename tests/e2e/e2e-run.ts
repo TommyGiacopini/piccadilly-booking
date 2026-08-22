@@ -1,8 +1,20 @@
-const runId = process.env.E2E_RUN_ID?.trim().toLowerCase();
+import {
+  e2eAdminUsername as adminUsername,
+  e2eAdminUserId as adminUserId,
+  e2eCreatedUsernames,
+  e2eDiningTableName as diningTableName,
+  e2eReservationFirstName as reservationFirstName,
+  e2eRestaurantId as restaurantId,
+  e2eStaffUsername as staffUsername,
+  parseE2eRunId,
+} from "../../scripts/e2e-fixture-ownership";
 
-if (!runId) {
-  throw new Error("E2E_RUN_ID is required for browser fixtures.");
-}
-
-export const e2eRunId = runId;
-export const e2eReservationFirstName = `E2E-${runId}`;
+export const e2eRunId = parseE2eRunId(process.env.E2E_RUN_ID);
+export const e2eRestaurantId = restaurantId(e2eRunId);
+export const e2eAdminUsername = adminUsername(e2eRunId);
+export const e2eAdminUserId = adminUserId(e2eRunId);
+export const e2eStaffUsername = staffUsername(e2eRunId);
+export const e2eReservationFirstName = reservationFirstName(e2eRunId);
+export const e2eDiningTableName = diningTableName(e2eRunId);
+export const [e2eAuditMustChangeUsername, e2eCreatedStaffUsername, e2eResetStaffUsername] =
+  e2eCreatedUsernames(e2eRunId);

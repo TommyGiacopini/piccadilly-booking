@@ -82,6 +82,9 @@ const actionLabels: Record<AuditListAction, string> = {
   CREATED: "Prenotazione creata",
   UPDATED: "Prenotazione aggiornata",
   CANCELLED: "Prenotazione cancellata",
+  ASSIGNED: "Sala e tavoli assegnati",
+  REASSIGNED: "Assegnazione sala e tavoli aggiornata",
+  UNASSIGNED: "Assegnazione sala e tavoli rimossa",
   LOGIN_SUCCEEDED: "Accesso riuscito",
   LOGIN_FAILED: "Accesso non riuscito",
   LOGIN_RATE_LIMITED: "Accesso limitato",
@@ -196,6 +199,14 @@ function enumArrayParser(values: readonly string[]): ValueParser {
       : null;
 }
 
+function uuidArrayParser(value: unknown): SafeValue | null {
+  const parsed = z.array(z.uuid()).min(1).max(20).safeParse(value);
+  if (!parsed.success || new Set(parsed.data).size !== parsed.data.length) {
+    return null;
+  }
+  return [...parsed.data].sort((left, right) => left.localeCompare(right)).join(", ");
+}
+
 const bool = scalarParser(z.boolean());
 const count = scalarParser(z.number().int().min(0).max(1_000_000));
 const positiveCount = scalarParser(z.number().int().min(1).max(1_000_000));
@@ -213,7 +224,9 @@ const classification = scalarParser(z.enum([
   "MODIFICATION_CUTOFF_CHANGED",
   "ROOM_UNAVAILABLE",
   "ROOM_DISABLED",
+  "TABLE_DISABLED",
   "RESERVATION_WITH_AFFECTED_ROOM_PREFERENCE",
+  "RESERVATION_WITH_AFFECTED_FINAL_ASSIGNMENT",
   "NO_EXISTING_RESERVATION_IMPACT",
 ]));
 
@@ -243,6 +256,17 @@ const reservationRules = [
   rule("requests.animals", "Animali", bool),
   rule("requests.notesPresent", "Note presenti", bool),
   rule("capacityOverride", "Override capacità", bool),
+] as const;
+const reservationAssignmentRules = [
+  rule("assignment.finalRoomCode", "Sala finale", roomCode),
+  rule("assignment.tableIds", "ID tavoli", uuidArrayParser),
+  rule("assignment.tableCount", "Numero tavoli", positiveCount),
+  rule("assignment.internalNotesPresent", "Note interne presenti", bool),
+  rule(
+    "reason",
+    "Motivo rimozione",
+    scalarParser(z.literal("RESERVATION_SCHEDULE_CHANGED")),
+  ),
 ] as const;
 
 const identityStateRules = [
@@ -332,9 +356,13 @@ const impactRules = [
     "MODIFICATION_CUTOFF_CHANGED",
     "ROOM_UNAVAILABLE",
     "ROOM_DISABLED",
+    "TABLE_DISABLED",
     "RESERVATION_WITH_AFFECTED_ROOM_PREFERENCE",
+    "RESERVATION_WITH_AFFECTED_FINAL_ASSIGNMENT",
     "NO_EXISTING_RESERVATION_IMPACT",
   ])),
+  rule("preferenceReservationCount", "Preferenze coinvolte", count),
+  rule("assignmentReservationCount", "Assegnazioni coinvolte", count),
   rule("previousLimit", "Limite precedente", count),
   rule("proposedLimit", "Limite proposto", count),
   rule("maxLoad", "Carico massimo", count),
@@ -434,7 +462,11 @@ export function projectAuditDetail(record: AuditDetailDatabaseRecord): AuditDeta
   const header = parseListHeader(record);
   if (!header) return null;
   const stateRules = header.source === "RESERVATION"
-    ? reservationRules
+    ? header.action === "ASSIGNED" ||
+      header.action === "REASSIGNED" ||
+      header.action === "UNASSIGNED"
+      ? reservationAssignmentRules
+      : reservationRules
     : stateRulesByAction[header.action as AuditAction];
   if (!stateRules) return null;
   const metadata = header.source === "RESERVATION"

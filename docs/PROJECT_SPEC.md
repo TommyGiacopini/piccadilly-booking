@@ -432,7 +432,7 @@ Ogni modifica deve conservare:
 
 Una configurazione successiva non invalida retroattivamente prenotazioni confermate e non le modifica o cancella automaticamente. Contatti, note e richieste possono essere aggiornati conservando dati operativi invariati; nuova data, servizio, ora o sala e gli aumenti di coperti rispettano la configurazione corrente. Una riduzione dei coperti sullo stesso servizio resta consentita.
 
-Le modifiche amministrative con prenotazioni coinvolte richiedono anteprima server-side senza PII, conferma esplicita, ricalcolo transazionale, rifiuto `IMPACT_CHANGED` in caso di divergenza e audit. M9-C applica questo protocollo a impostazioni, servizi e cutoff; M9-D alla disponibilità e disattivazione delle sale.
+Le modifiche amministrative con prenotazioni coinvolte richiedono anteprima server-side senza PII, conferma esplicita, ricalcolo transazionale, rifiuto `IMPACT_CHANGED` in caso di divergenza e audit. M9-C applica questo protocollo a impostazioni, servizi e cutoff; M9-D alla disponibilità e disattivazione delle sale. M10-B estende lo stesso motore M9-D alle assegnazioni finali interessate dalla disattivazione di sale o tavoli e dall'indisponibilità di una sala per data/servizio.
 
 
 
@@ -623,6 +623,30 @@ Il personale assegna alle 17:30:
 
 
 La preferenza originale del cliente deve restare visibile.
+
+### Fondazione M10-A
+
+M10-A, approvata tecnicamente da Work, introduce soltanto persistenza, dominio, servizio applicativo e API Staff/Admin, senza dashboard o altri componenti UI. Ogni prenotazione può avere al massimo una assegnazione logica corrente, separata dalla preferenza originaria. Una assegnazione attiva richiede una sala finale e da uno a venti tavoli distinti appartenenti a quella sala; `DA ASSEGNARE` continua a derivare dall'assenza di assegnazione attiva.
+
+La rimozione è esplicita e logica. Una successiva assegnazione riattiva la stessa entità persistente, preserva l'autore iniziale e registra l'ultimo autore. Non viene eseguito backfill delle prenotazioni e non viene introdotta alcuna relazione con `ServiceInstance`.
+
+I posti minimi e massimi dei tavoli sono informazioni operative restituibili a Staff/Admin, ma non bloccano l'assegnazione e non producono override. Lo stesso tavolo può essere usato manualmente da più prenotazioni dello stesso servizio perché la prima versione non modella durata o occupazione temporale. Non esistono assegnazione automatica, combinazione automatica o collision detection.
+
+Le note dell'assegnazione sono interne, facoltative e limitate a 1.000 code point. Non compaiono nelle API pubbliche, nel link personale o nell'audit; quest'ultimo conserva soltanto la presenza delle note, il codice sala finale e gli UUID tavolo ordinati.
+
+Staff e Admin possono assegnare e correggere prenotazioni confermate, incluse quelle storiche. Per servizi correnti o futuri una nuova sala deve essere attiva e disponibile per data/servizio e i nuovi tavoli devono essere attivi e coerenti. Per lo storico si verificano stato attivo e appartenenza, senza ricostruire la disponibilità non versionata e senza materializzare istanze. Riferimenti già assegnati restano visibili e possono essere conservati se diventano inattivi o indisponibili; ogni riferimento nuovo deve essere attivo.
+
+Le mutazioni incrementano la versione della prenotazione soltanto quando lo stato cambia e producono audit atomico `ASSIGNED`, `REASSIGNED` o `UNASSIGNED`. Un payload invariato e una rimozione già effettuata sono no-op.
+
+### Integrazione lifecycle M10-B
+
+Una modifica effettiva di data, servizio o orario rimuove logicamente l'assegnazione attiva nella stessa transazione del reschedule, senza un secondo incremento di versione. L'audit ordinario `UPDATED` e l'evento `UNASSIGNED` condividono correlation ID; quest'ultimo usa la motivazione canonica `RESERVATION_SCHEDULE_CHANGED` e la proiezione minimizzata. Se l'assegnazione è già assente non viene creata alcuna riga o audit aggiuntivo. Persone, preferenza, contatti, esigenze e note conservano integralmente l'assegnazione.
+
+La cancellazione Staff o pubblica conserva l'ultima assegnazione, inclusi tavoli e note interne, senza valorizzare `clearedAt` e senza produrre `UNASSIGNED`; la prenotazione cancellata è però esclusa dagli impatti operativi e i dati di assegnazione non entrano nelle risposte pubbliche.
+
+Disattivazione globale di una sala, disattivazione di un tavolo e indisponibilità della sala per data/servizio includono nel protocollo M9-D le sole prenotazioni confermate correnti o future con assegnazione attiva pertinente. La preview espone soltanto conteggi e classificazioni, richiede conferma quando necessario e usa un fingerprint opaco ricalcolato nella transazione. La configurazione applicata preserva le assegnazioni come grandfathered; prenotazioni cancellate, storiche, assegnazioni rimosse e altri tenant non partecipano all'impatto.
+
+M10-C introdurrà dashboard, filtri, indicatori e comandi visuali di assegnazione. M10-B non conclude M10.
 
 
 

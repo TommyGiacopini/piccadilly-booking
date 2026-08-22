@@ -234,6 +234,24 @@ M9-E usa route distinte per contatti, contenuti e durata. Telefono e WhatsApp ri
 
 M9-F espone soltanto GET Admin `no-store` e `noindex`. Ruolo, stato, cambio password obbligatorio e tenant vengono riletti dal database; il `restaurantId` è dentro ogni ramo della query unificata. Il cursore keyset è opaco e legato ai filtri, non contiene tenant o dati personali. Il dettaglio applica allow-list positive per azione anche a JSON legacy ostile e non restituisce raw JSON, HMAC, contatti, contenuti, note, token o hash. La consultazione non scrive e non genera audit ricorsivo.
 
+## 9.2 Sicurezza delle assegnazioni manuali M10-A
+
+Le API assegnazione sono riservate a STAFF e ADMIN con sessione verificata, account attivo, `disabledAt` nullo e `mustChangePassword=false`. Il servizio rilegge nella transazione utente, ruolo e tenant; il client non invia `restaurantId`, ruolo, username, actor ID o correlation ID. Le query di prenotazione, assegnazione, sala, tavoli e audit sono tenant-scoped e un ID cross-tenant restituisce lo stesso esito di una risorsa inesistente.
+
+`PUT` e `DELETE` richiedono stessa origine, `application/json` e payload Zod strict. Gli ID tavolo sono UUID distinti, limitati a venti e ordinati deterministicamente; le note interne sono nullable/opzionali, limitate a 1.000 code point e mai pubbliche. Tutte le risposte usano `Cache-Control: no-store`.
+
+Le mutazioni usano `SERIALIZABLE`, retry, lock deterministici e versione ottimistica della prenotazione. Assegnazione e audit specializzato condividono la transazione e un errore audit annulla l'intera scrittura. I no-op non cambiano versione o timestamp e non producono eventi. Gli snapshot `ASSIGNED`, `REASSIGNED` e `UNASSIGNED` includono soltanto codice sala, UUID tavolo, conteggio e flag di presenza delle note: mai testo delle note, etichette libere, PII, contatti, token, sessioni o raw request.
+
+La GET non apre flussi di materializzazione, non crea `ServiceInstance`, non acquisisce lock di scrittura e non genera audit. Le API pubbliche e il link personale non includono assegnazione o note interne.
+
+## 9.3 Sicurezza del lifecycle M10-B
+
+I reschedule Staff e tramite link personale eseguono il clear logico dentro la transazione di modifica già aperta. Soltanto un cambiamento effettivo di data, servizio o orario genera `UNASSIGNED`; l'evento condivide il correlation ID con `UPDATED`, usa la motivazione allow-listed `RESERVATION_SCHEDULE_CHANGED` e non contiene testo delle note, PII, contatti, token, hash o raw request. Un errore in uno dei due audit annulla reschedule, clear e singolo incremento della versione. Le cancellazioni preservano l'assegnazione e non la espongono al cliente.
+
+Le disattivazioni di sale/tavoli e l'indisponibilità per servizio riusano autenticazione Admin, stessa origine, Zod strict, `no-store`, lock configurazione e protocollo M9-D. Preview e audit espongono soltanto conteggi aggregati di preferenze e assegnazioni e classificazioni allow-listed, senza ID di prenotazione, tavolo o assegnazione. Il fingerprint è opaco e tenant-scoped; una variazione pertinente restituisce `IMPACT_CHANGED` prima di qualsiasi scrittura o audit. Applicare la configurazione non modifica assegnazioni, tavoli collegati, `clearedAt` o note interne.
+
+L'ordine globale dei lock è prenotazione, configurazione tenant, capacità. I flussi configurazione non acquisiscono lock prenotazione: ricalcolo serializzabile e fingerprint impediscono cicli e stati parziali, mentre il lock configurazione condiviso impedisce a una nuova assegnazione di usare riferimenti divenuti invalidi.
+
 ## 10. Segreti e configurazione
 
 - `.env` e varianti con segreti sono esclusi da Git.

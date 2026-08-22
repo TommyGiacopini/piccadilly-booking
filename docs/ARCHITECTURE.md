@@ -177,6 +177,8 @@ Gestisce:
 
 Non effettua assegnazione automatica o combinazione automatica dei tavoli.
 
+M10-A mantiene in questo modulo dominio, repository e servizio delle assegnazioni. `ReservationAssignment` è separata dalla prenotazione e possiede una relazione esplicita con i tavoli; `clearedAt` distingue lo stato attivo dalla rimozione logica. La preferenza resta nel dominio Reservations e viene soltanto letta nel contesto Staff/Admin. M10-B espone inoltre un comando interno di clear per reschedule, usabile dentro la transazione Reservations già aperta senza invocare la route e senza incrementare una seconda volta la versione.
+
 ### Identity
 
 Gestisce autenticazione, sessioni, ruoli Admin e Staff, cambio password e autorizzazioni applicative. M9-B separa policy password pura, servizio applicativo transazionale e route/UI: il client non invia `restaurantId`, ruolo dell'attore o dati di audit.
@@ -297,6 +299,8 @@ Per una prenotazione telefonica il consenso registra almeno origine `PHONE`, ver
 
 Il modello completo è documentato ora; ogni tabella sarà creata nella milestone in cui diventa necessaria.
 
+M10-A crea `reservation_assignments` e `reservation_assignment_tables`. Esiste una sola riga di assegnazione per prenotazione; la junction usa chiavi composte che legano tenant, assegnazione, sala finale e tavolo della stessa sala. La rimozione valorizza `cleared_at` e non elimina l'entità. Una riattivazione riusa la riga esistente. Non vengono collegate prenotazioni e istanze servizio e non viene eseguito backfill.
+
 I due registri audit restano separati. M9-F li unisce mediante una proiezione applicativa di sola lettura: `UNION ALL` parametrizzata, tenant filter in ciascun ramo, ordinamento globale deterministico e paginazione keyset. Il dettaglio trasforma gli stati con allow-list positive e non espone raw JSON. Ogni evento è scritto nella stessa transazione della mutazione, usa campi a whitelist e non serializza indiscriminatamente modelli Prisma. Riferimenti: ADR 006 e D-036.
 
 ### 8.4 Dati da non inserire direttamente in `reservations`
@@ -340,6 +344,8 @@ Soltanto il limite è configurabile dall'Admin. Nella prima versione intervallo 
 8. eseguire le attività esterne solo dopo il commit.
 
 Tutte le scritture che cambiano i coperti devono rispettare lo stesso protocollo. Se una modifica sposta la prenotazione fra due servizi, entrambi vengono bloccati in ordine deterministico per ridurre il rischio di deadlock.
+
+Le mutazioni M10-A/M10-B, pur non cambiando la capacità, convergono sull'ordine condiviso: lock di mutazione prenotazione, lock configurazione tenant e lock di capacità della data/servizio. I mutatori Staff/pubblici di prenotazione acquisiscono quindi il lock configurazione dopo quello di prenotazione e prima dei lock capacità. Dentro la transazione `SERIALIZABLE` vengono riletti attore quando previsto, tenant, ruolo, prenotazione, assegnazione, sala e tavoli; versione, mutazione e audit sono atomici. Le mutazioni di configurazione acquisiscono invece il solo lock configurazione prima degli eventuali lock capacità e usano snapshot serializzabile e fingerprint, senza bloccare indiscriminatamente le prenotazioni: non si crea così un ciclo con il lock prenotazione e non vengono materializzate istanze durante letture o preview.
 
 Admin e Staff possono superare il limite solo con azione esplicita e motivazione obbligatoria. L'override non cambia il limite configurato e viene registrato nell'audit.
 
@@ -385,7 +391,7 @@ Tutti i calcoli operativi usano la timezone configurata del ristorante, inizialm
 
 Sale, tavoli, servizi ed eccezioni non vengono eliminati fisicamente: sono disattivati o archiviati. Le sale V1 sono le cinque canoniche, con codice immutabile; i tavoli possono essere creati, aggiornati e disattivati e un cambio sala richiede disattivazione e nuova creazione. Le date straordinarie sono archiviate in modo reversibile e le query operative ignorano le righe archiviate.
 
-M9-C applica il protocollo di anteprima e conferma a impostazioni, servizi e cutoff; M9-D lo estende a disponibilità locale e disattivazione globale delle sale. I fingerprint includono solo configurazione effettiva e prenotazioni pertinenti; `IMPACT_CHANGED` precede materializzazione, mutazione e audit. Il grandfathering conserva le preferenze già registrate, mentre nuove selezioni di sala rispettano stato globale e disponibilità del servizio. Riferimenti: ADR 007 e ADR 009.
+M9-C applica il protocollo di anteprima e conferma a impostazioni, servizi e cutoff; M9-D lo estende a disponibilità locale e disattivazione globale delle sale. M10-B integra nello stesso protocollo anche disattivazione tavolo e assegnazioni finali attive pertinenti. I fingerprint includono solo proposta, configurazione interessata e prenotazioni confermate correnti/future rilevanti con versione, collocazione temporale e assegnazione ordinata; `IMPACT_CHANGED` precede materializzazione, mutazione e audit. Il grandfathering conserva preferenze e assegnazioni già registrate, mentre nuovi riferimenti rispettano stato globale, appartenenza del tavolo e disponibilità del servizio. Riferimenti: ADR 007, ADR 009 e ADR 011.
 
 ## 11.2 Identità amministrative
 
@@ -433,22 +439,28 @@ Il repository di dettaglio seleziona un singolo record per sorgente, UUID e tena
 
 1. autorizzazione tramite token o sessione;
 2. controllo cutoff e versione della prenotazione;
-3. lock del servizio attuale e dell'eventuale servizio nuovo;
+3. lock prenotazione, configurazione tenant e servizi attuale/nuovo nell'ordine condiviso;
 4. ricalcolo della capacità escludendo la prenotazione corrente;
-5. aggiornamento atomico e audit prima/dopo;
-6. evento di notifica dopo il commit.
+5. clear logico dell'assegnazione attiva soltanto se cambia data, servizio o orario;
+6. singolo incremento versione e audit atomici; `UPDATED` precede `UNASSIGNED` e condivide il correlation ID;
+7. evento di notifica dopo il commit.
 
 ### 12.4 Cancellazione
 
 1. autorizzazione e controllo cutoff;
-2. lock e cambio stato a `CANCELLED`;
-3. audit atomico;
-4. disponibilità dei coperti immediatamente ripristinata dopo il commit;
-5. nessuna eliminazione fisica.
+2. lock prenotazione, configurazione tenant e capacità e cambio stato a `CANCELLED`;
+3. conservazione dell'ultima assegnazione senza `UNASSIGNED`;
+4. audit atomico della cancellazione;
+5. disponibilità dei coperti immediatamente ripristinata dopo il commit;
+6. nessuna eliminazione fisica.
 
 ### 12.5 Assegnazione
 
 L'assegnazione può avvenire in qualsiasi momento. Le 17:30 sono un riferimento operativo, non un vincolo tecnico. Sala definitiva, tavoli e note interne vengono salvati separatamente dalla preferenza originale e ogni modifica viene registrata.
+
+M10-A, approvata tecnicamente da Work, espone una lettura strettamente read-only e comandi espliciti di assegnazione/riassegnazione/rimozione per Staff e Admin. Le correzioni storiche verificano riferimenti attivi senza ricostruire disponibilità passate; per servizi correnti o futuri una nuova sala deve essere effettivamente disponibile. I posti dei tavoli non bloccano e lo stesso tavolo può essere riutilizzato da prenotazioni diverse.
+
+M10-B integra reschedule, cancellazione e impatto delle configurazioni. Data, servizio o orario modificati rimuovono atomicamente l'assegnazione; gli altri campi la conservano. La cancellazione la conserva come storia ma la esclude dagli impatti. Il motore M9-D conta una prenotazione una sola volta, richiede conferma su assegnazioni future coinvolte e preserva i riferimenti come grandfathered. La dashboard di assegnazione resta M10-C.
 
 ### 12.6 Esportazioni
 
@@ -538,3 +550,4 @@ L'infrastruttura definitiva e le procedure operative saranno implementate in mil
 - `docs/adr/003-reservation-capacity-concurrency.md`;
 - `docs/adr/004-environment-separation.md`;
 - `docs/adr/005-notification-outbox.md`.
+- `docs/adr/011-manual-room-table-assignment.md`.
