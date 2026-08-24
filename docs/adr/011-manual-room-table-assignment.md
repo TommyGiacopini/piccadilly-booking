@@ -1,6 +1,6 @@
 # ADR 011 — Assegnazione manuale di sala e tavoli
 
-**Stato:** accettato; M10-A approvata tecnicamente da Work; integrazione M10-B attuata
+**Stato:** accettato; M10-A e M10-B merged su `main`; UI M10-C implementata nel working tree e in attesa di Quality Gate
 **Data:** 13 agosto 2026
 
 ## Contesto
@@ -71,7 +71,7 @@ STAFF e ADMIN possono usare le API solo con sessione valida, account attivo, `di
 ### Vincoli
 
 - nessuna assegnazione automatica, combinazione, capacità tavoli o collision detection;
-- nessuna UI di assegnazione o dashboard in M10-A/M10-B; l'unica UI M10-B estende la conferma configurazioni M9-D;
+- nessuna UI di assegnazione appartiene a M10-A/M10-B; M10-C riusa le API esistenti e mantiene server e PostgreSQL come autorità;
 - i flussi reschedule/cancellazione e i servizi Admin sale/tavoli sono integrati soltanto nel perimetro lifecycle M10-B;
 - la disponibilità storica non può essere ricostruita perché non è versionata.
 

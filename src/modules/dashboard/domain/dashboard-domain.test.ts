@@ -7,6 +7,8 @@ import {
   restaurantToday,
   shiftLocalDate,
   toDashboardReservation,
+  type DashboardAssignmentSource,
+  type DashboardReservationSource,
 } from "@/modules/dashboard/domain/dashboard-domain";
 import type { StoredReservation } from "@/modules/reservations/domain/types";
 
@@ -64,6 +66,36 @@ const rooms = [
   { code: "sala-2", name: "Sala 2", displayOrder: 2, isActive: true },
 ];
 
+function source(
+  reservationOverrides: Partial<StoredReservation> = {},
+  assignment: DashboardAssignmentSource | null = null,
+): DashboardReservationSource {
+  return { reservation: reservation(reservationOverrides), assignment };
+}
+
+function assignment(
+  overrides: Partial<DashboardAssignmentSource> = {},
+): DashboardAssignmentSource {
+  return {
+    room: {
+      id: "00000000-0000-4000-8000-000000000101",
+      code: "sala-2",
+      name: "Sala 2",
+      isActive: true,
+    },
+    tables: [
+      {
+        id: "00000000-0000-4000-8000-000000000201",
+        name: "T2",
+        displayOrder: 1,
+        isActive: true,
+      },
+    ],
+    internalNotesPresent: false,
+    ...overrides,
+  };
+}
+
 describe("M8 dashboard domain", () => {
   it("uses the restaurant timezone for the current local day", () => {
     expect(
@@ -78,38 +110,83 @@ describe("M8 dashboard domain", () => {
     ).toBe("2026-10-25");
   });
 
-  it("validates and applies service, status and origin filters", () => {
+  it("validates and applies service, status, origin and assignment filters", () => {
     const filters = parseDashboardFilters({
       service: "DINNER",
       status: "CONFIRMED",
       origin: "PHONE",
+      assignment: "UNASSIGNED",
+      finalRoom: "ALL",
     });
     const rows = [
-      reservation({ origin: "PHONE" }),
-      reservation({ origin: "PUBLIC" }),
-      reservation({ origin: "PHONE", status: "CANCELLED" }),
+      source({ origin: "PHONE" }),
+      source({ origin: "PUBLIC" }),
+      source({ origin: "PHONE" }, assignment()),
+      source(
+        {
+          origin: "PHONE",
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-08-02T10:00:00.000Z"),
+        },
+        null,
+      ),
     ];
 
     expect(filterDashboardReservations(rows, filters)).toHaveLength(1);
     expect(() =>
-      parseDashboardFilters({ service: "INVALID", status: "ALL", origin: "ALL" }),
+      parseDashboardFilters({
+        service: "INVALID",
+        status: "ALL",
+        origin: "ALL",
+        assignment: "ALL",
+        finalRoom: "ALL",
+      }),
     ).toThrow();
   });
 
-  it("aggregates confirmed covers, requests, cancellations and preferred rooms", () => {
+  it("filters by final room without using the customer preference", () => {
     const rows = [
-      reservation(),
-      reservation({
-        origin: "PHONE",
-        partySize: 3,
-        preferences: "Sala storica M6",
-        allergies: "Dichiarazione storica M6",
+      source({ preferences: JSON.stringify({ roomCode: "sala-1" }) }, assignment()),
+      source({}, null),
+    ];
+
+    expect(
+      filterDashboardReservations(rows, {
+        service: "ALL",
+        status: "ALL",
+        origin: "ALL",
+        assignment: "ASSIGNED",
+        finalRoom: "sala-2",
       }),
-      reservation({
-        status: "CANCELLED",
-        cancelledAt: new Date("2026-08-02T10:00:00.000Z"),
-        partySize: 8,
+    ).toHaveLength(1);
+    expect(
+      filterDashboardReservations(rows, {
+        service: "ALL",
+        status: "ALL",
+        origin: "ALL",
+        assignment: "ALL",
+        finalRoom: "sala-1",
       }),
+    ).toHaveLength(0);
+  });
+
+  it("aggregates assignment counts and covers by final room, excluding cancelled rows", () => {
+    const rows = [
+      source({}, assignment()),
+      source({
+          origin: "PHONE",
+          partySize: 3,
+          preferences: "Sala storica M6",
+          allergies: "Dichiarazione storica M6",
+        }),
+      source(
+        {
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-08-02T10:00:00.000Z"),
+          partySize: 8,
+        },
+        assignment(),
+      ),
     ];
     const summary = aggregateDashboard(rows, rooms);
 
@@ -119,24 +196,50 @@ describe("M8 dashboard domain", () => {
     expect(summary.origins).toEqual({ PUBLIC: 1, PHONE: 1, STAFF: 0 });
     expect(summary.foodRequests).toBe(2);
     expect(summary.highChairs).toBe(1);
-    expect(summary.unassignedReservations).toBe(2);
-    expect(summary.preferredRoomCovers).toContainEqual({
-      label: "Sala storica M6",
-      covers: 3,
+    expect(summary.assignedReservations).toBe(1);
+    expect(summary.unassignedReservations).toBe(1);
+    expect(summary.unassignedCovers).toBe(3);
+    expect(summary.finalRoomCovers).toContainEqual({
+      code: "sala-2",
+      label: "Sala 2",
+      covers: 2,
     });
   });
 
-  it("parses legacy M6 preference and allergy text without throwing", () => {
+  it("keeps preference and final assignment distinct and projects grandfathering", () => {
     const row = toDashboardReservation(
-      reservation({
-        preferences: "Sala libera M6",
-        allergies: "Allergia testuale M6",
-      }),
+      source(
+        {
+          preferences: "Sala libera M6",
+          allergies: "Allergia testuale M6",
+        },
+        assignment({
+          room: {
+            id: "00000000-0000-4000-8000-000000000101",
+            code: "sala-2",
+            name: "Sala 2",
+            isActive: false,
+          },
+          internalNotesPresent: true,
+        }),
+      ),
       new Map(rooms.map((room) => [room.code, room.name])),
+      {
+        LUNCH: new Map(),
+        DINNER: new Map([
+          ["00000000-0000-4000-8000-000000000101", false],
+        ]),
+      },
     );
 
     expect(row.preferredRoom).toBe("Sala libera M6");
     expect(row.allergies).toBe("Allergia testuale M6");
+    expect(row.assignment).toMatchObject({
+      roomName: "Sala 2",
+      internalNotesPresent: true,
+      hasInactiveReferences: true,
+      hasUnavailableRoomReference: true,
+    });
     expect(row.updatedAt).toBe("2026-08-01T10:00:00.000Z");
   });
 });

@@ -6,6 +6,7 @@ import {
   aggregateDashboard,
   dashboardFiltersSchema,
   filterDashboardReservations,
+  restaurantToday,
   resolveDashboardDate,
   shiftLocalDate,
   toDashboardReservation,
@@ -17,6 +18,7 @@ import {
 import {
   readDashboardContext,
   readDashboardReservations,
+  readDashboardRoomAvailability,
 } from "@/modules/dashboard/infrastructure/dashboard-repository";
 
 export interface DashboardDayView {
@@ -59,6 +61,8 @@ export async function getDashboardDay(input: {
   rawService?: unknown;
   rawStatus?: unknown;
   rawOrigin?: unknown;
+  rawAssignment?: unknown;
+  rawFinalRoom?: unknown;
   now?: Date;
 }): Promise<DashboardDayView> {
   const context = await readDashboardContext(input.restaurantId);
@@ -74,10 +78,18 @@ export async function getDashboardDay(input: {
     service: input.rawService ?? "ALL",
     status: input.rawStatus ?? "ALL",
     origin: input.rawOrigin ?? "ALL",
+    assignment: input.rawAssignment ?? "ALL",
+    finalRoom: input.rawFinalRoom ?? "ALL",
   });
   const filters: DashboardFilters = parsedFilters.success
     ? parsedFilters.data
-    : { service: "ALL", status: "ALL", origin: "ALL" };
+    : {
+        service: "ALL",
+        status: "ALL",
+        origin: "ALL",
+        assignment: "ALL",
+        finalRoom: "ALL",
+      };
 
   const allReservations = await readDashboardReservations({
     restaurantId: input.restaurantId,
@@ -101,6 +113,11 @@ export async function getDashboardDay(input: {
     now,
     includePersistentLoad: true,
   });
+  const roomAvailability = await readDashboardRoomAvailability({
+    restaurantId: input.restaurantId,
+    localDate,
+    now,
+  });
   const filtered = filterDashboardReservations(allReservations, filters);
   const roomsByCode = new Map(
     context.rooms.map((room) => [room.code, room.name]),
@@ -116,7 +133,13 @@ export async function getDashboardDay(input: {
     invalidQuery: !dateWasValid || !parsedFilters.success,
     rooms: context.rooms,
     reservations: filtered.map((reservation) =>
-      toDashboardReservation(reservation, roomsByCode),
+      toDashboardReservation(
+        reservation,
+        roomsByCode,
+        localDate < restaurantToday(now, context.timezone)
+          ? null
+          : roomAvailability,
+      ),
     ),
     summary: aggregateDashboard(filtered, context.rooms),
     availability: {

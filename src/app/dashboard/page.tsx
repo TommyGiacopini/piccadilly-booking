@@ -1,9 +1,13 @@
 import Link from "next/link";
 
+import { ReservationAssignmentPanel } from "@/app/dashboard/reservation-assignment-panel";
 import { ReservationActions } from "@/app/dashboard/reservation-actions";
 import type { AvailabilityResult } from "@/modules/availability/domain/types";
 import { getDashboardDay } from "@/modules/dashboard/application/dashboard-query";
-import type { DashboardReservation } from "@/modules/dashboard/domain/dashboard-domain";
+import type {
+  DashboardFilters,
+  DashboardReservation,
+} from "@/modules/dashboard/domain/dashboard-domain";
 import { requireAuthenticatedUser } from "@/server/auth/authorization";
 
 export const dynamic = "force-dynamic";
@@ -29,13 +33,15 @@ function italianDate(localDate: string): string {
 
 function dashboardHref(
   date: string,
-  filters: { service: string; status: string; origin: string },
+  filters: DashboardFilters,
 ): string {
   const query = new URLSearchParams({
     date,
     service: filters.service,
     status: filters.status,
     origin: filters.origin,
+    assignment: filters.assignment,
+    finalRoom: filters.finalRoom,
   });
   return `/dashboard?${query.toString()}`;
 }
@@ -127,6 +133,8 @@ export default async function DashboardPage({
     rawService: single(query.service),
     rawStatus: single(query.status),
     rawOrigin: single(query.origin),
+    rawAssignment: single(query.assignment),
+    rawFinalRoom: single(query.finalRoom),
   });
   const summaryCards = [
     ["Prenotazioni confermate", dashboard.summary.confirmedReservations],
@@ -139,7 +147,9 @@ export default async function DashboardPage({
     ["Seggioloni", dashboard.summary.highChairs],
     ["Passeggini", dashboard.summary.strollers],
     ["Accessibilità", dashboard.summary.accessibilityRequests],
+    ["Assegnate", dashboard.summary.assignedReservations],
     ["Da assegnare", dashboard.summary.unassignedReservations],
+    ["Coperti da assegnare", dashboard.summary.unassignedCovers],
   ] as const;
 
   return (
@@ -213,6 +223,8 @@ export default async function DashboardPage({
             <input name="service" type="hidden" value={dashboard.filters.service} />
             <input name="status" type="hidden" value={dashboard.filters.status} />
             <input name="origin" type="hidden" value={dashboard.filters.origin} />
+            <input name="assignment" type="hidden" value={dashboard.filters.assignment} />
+            <input name="finalRoom" type="hidden" value={dashboard.filters.finalRoom} />
             <button className="rounded-xl bg-zinc-950 px-4 py-2.5 font-bold text-white focus:outline-none focus:ring-4 focus:ring-orange-200" type="submit">
               Vai
             </button>
@@ -225,7 +237,7 @@ export default async function DashboardPage({
           </Link>
         </nav>
 
-        <form className="mt-5 grid gap-3 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:grid-cols-4" method="get">
+        <form className="mt-5 grid gap-3 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-6" method="get">
           <input name="date" type="hidden" value={dashboard.localDate} />
           <label className="text-sm font-bold text-zinc-700">
             Servizio
@@ -252,28 +264,45 @@ export default async function DashboardPage({
               <option value="STAFF">Staff</option>
             </select>
           </label>
+          <label className="text-sm font-bold text-zinc-700">
+            Assegnazione
+            <select className="mt-1 block w-full rounded-xl border border-zinc-300 px-3 py-2.5 focus:border-orange-500 focus:outline-none focus:ring-4 focus:ring-orange-100" data-testid="assignment-status-filter" defaultValue={dashboard.filters.assignment} name="assignment">
+              <option value="ALL">Tutte</option>
+              <option value="UNASSIGNED">Da assegnare</option>
+              <option value="ASSIGNED">Assegnate</option>
+            </select>
+          </label>
+          <label className="text-sm font-bold text-zinc-700">
+            Sala definitiva
+            <select className="mt-1 block w-full rounded-xl border border-zinc-300 px-3 py-2.5 focus:border-orange-500 focus:outline-none focus:ring-4 focus:ring-orange-100" data-testid="final-room-filter" defaultValue={dashboard.filters.finalRoom} name="finalRoom">
+              <option value="ALL">Tutte</option>
+              {dashboard.rooms.map((room) => (
+                <option key={room.code} value={room.code}>{room.name}</option>
+              ))}
+            </select>
+          </label>
           <button className="self-end rounded-xl bg-orange-500 px-5 py-2.5 font-black text-white hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-200" type="submit">
             Applica filtri
           </button>
         </form>
 
-        <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" aria-label="Riepilogo giornata">
+        <section className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7" aria-label="Riepilogo giornata">
           {summaryCards.map(([label, value]) => (
-            <article className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm" key={label}>
+            <article className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm" data-summary-label={label} key={label}>
               <p className="text-2xl font-black text-zinc-950">{value}</p>
               <p className="mt-1 text-xs font-bold leading-4 text-zinc-500">{label}</p>
             </article>
           ))}
         </section>
 
-        <section className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-5">
-          <h2 className="font-black text-orange-950">Coperti per sala preferita</h2>
+        <section className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-5" data-testid="final-room-covers">
+          <h2 className="font-black text-orange-950">Coperti per sala definitiva</h2>
           <p className="mt-1 text-sm text-orange-900">
-            È una preferenza, non la sala definitiva. L’assegnazione arriverà in M10.
+            Conteggio operativo delle sole prenotazioni confermate con assegnazione attiva.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
-            {dashboard.summary.preferredRoomCovers.map((room) => (
-              <span className="rounded-full bg-white px-3 py-1.5 text-sm font-bold text-zinc-800" key={room.label}>
+            {dashboard.summary.finalRoomCovers.map((room) => (
+              <span className="rounded-full bg-white px-3 py-1.5 text-sm font-bold text-zinc-800" key={room.code}>
                 {room.label}: {room.covers}
               </span>
             ))}
@@ -308,6 +337,7 @@ export default async function DashboardPage({
                         ? "border-zinc-300 bg-zinc-100 opacity-75"
                         : "border-zinc-200 bg-white"
                     }`}
+                    data-reservation-id={reservation.id}
                     key={reservation.id}
                   >
                     <div className="flex items-start justify-between gap-4">
@@ -333,8 +363,8 @@ export default async function DashboardPage({
                         <dd className="font-bold text-zinc-950">{originLabel(reservation.origin)}</dd>
                       </div>
                       <div>
-                        <dt className="font-bold text-zinc-500">Sala preferita</dt>
-                        <dd className="font-bold text-zinc-950">{reservation.preferredRoom} <span className="font-normal text-zinc-500">(non definitiva)</span></dd>
+                        <dt className="font-bold text-zinc-500">Preferenza cliente</dt>
+                        <dd className="font-bold text-zinc-950" data-testid="customer-room-preference">{reservation.preferredRoom} <span className="font-normal text-zinc-500">(non definitiva)</span></dd>
                       </div>
                       <div>
                         <dt className="font-bold text-zinc-500">Telefono</dt>
@@ -372,6 +402,50 @@ export default async function DashboardPage({
                         Override capacità: {reservation.overrideReason}
                       </p>
                     ) : null}
+
+                    <section className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4" data-testid="assignment-summary">
+                      <p className="text-xs font-black tracking-wider text-zinc-500 uppercase">
+                        Assegnazione definitiva
+                      </p>
+                      {reservation.assignment ? (
+                        <div className="mt-2 space-y-1 text-sm text-zinc-800">
+                          <p className="font-black" data-testid="final-room-name">
+                            {reservation.assignment.roomName}
+                          </p>
+                          <p className="font-bold" data-testid="assigned-table-names">
+                            {reservation.assignment.tableCount === 1 ? "Tavolo" : "Tavoli"}: {reservation.assignment.tableNames.join(", ")}
+                          </p>
+                          {reservation.assignment.internalNotesPresent ? (
+                            <p className="font-bold text-violet-800">Note interne presenti</p>
+                          ) : null}
+                          {reservation.assignment.hasInactiveReferences || reservation.assignment.hasUnavailableRoomReference ? (
+                            <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-2 font-bold text-amber-950" data-testid="assignment-grandfathering-warning">
+                              Riferimento grandfathered:
+                              {reservation.assignment.hasInactiveReferences ? " sala o tavolo inattivo" : ""}
+                              {reservation.assignment.hasInactiveReferences && reservation.assignment.hasUnavailableRoomReference ? ";" : ""}
+                              {reservation.assignment.hasUnavailableRoomReference ? " sala indisponibile per il servizio" : ""}.
+                            </p>
+                          ) : null}
+                          {reservation.status === "CANCELLED" ? (
+                            <p className="font-bold text-zinc-600">Storico, escluso dai conteggi operativi.</p>
+                          ) : null}
+                        </div>
+                      ) : reservation.status === "CONFIRMED" ? (
+                        <p className="mt-2 inline-flex rounded-full bg-red-100 px-3 py-1 text-sm font-black text-red-800" data-testid="unassigned-badge">
+                          DA ASSEGNARE
+                        </p>
+                      ) : (
+                        <p className="mt-2 text-sm font-bold text-zinc-500">
+                          Nessuna assegnazione storica.
+                        </p>
+                      )}
+                    </section>
+
+                    <ReservationAssignmentPanel
+                      cancelled={reservation.status === "CANCELLED"}
+                      hasAssignment={reservation.assignment !== null}
+                      reservationId={reservation.id}
+                    />
 
                     <ReservationActions
                       cancelled={reservation.status === "CANCELLED"}
