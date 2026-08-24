@@ -16,6 +16,10 @@ export const dashboardFiltersSchema = z
     service: z.enum(["ALL", "LUNCH", "DINNER"]).default("ALL"),
     status: z.enum(["ALL", "CONFIRMED", "CANCELLED"]).default("ALL"),
     origin: z.enum(["ALL", "PUBLIC", "PHONE", "STAFF"]).default("ALL"),
+    assignment: z.enum(["ALL", "UNASSIGNED", "ASSIGNED"]).default("ALL"),
+    finalRoom: z
+      .enum(["ALL", "sala-1", "sala-2", "sala-3", "galleria", "terrazzo"])
+      .default("ALL"),
   })
   .strict();
 
@@ -55,6 +59,40 @@ export interface DashboardReservation {
   overrideReason: string | null;
   createdAt: string;
   updatedAt: string;
+  assignment: DashboardAssignmentSummary | null;
+}
+
+export interface DashboardAssignmentSource {
+  room: {
+    id: string;
+    code: string;
+    name: string;
+    isActive: boolean;
+  };
+  tables: {
+    id: string;
+    name: string;
+    displayOrder: number;
+    isActive: boolean;
+  }[];
+  internalNotesPresent: boolean;
+}
+
+export interface DashboardReservationSource {
+  reservation: StoredReservation;
+  assignment: DashboardAssignmentSource | null;
+}
+
+export interface DashboardAssignmentSummary {
+  roomCode: string;
+  roomName: string;
+  roomIsActive: boolean;
+  roomIsAvailableForService: boolean | null;
+  tableNames: string[];
+  tableCount: number;
+  internalNotesPresent: boolean;
+  hasInactiveReferences: boolean;
+  hasUnavailableRoomReference: boolean;
 }
 
 export interface DashboardSummary {
@@ -66,9 +104,16 @@ export interface DashboardSummary {
   highChairs: number;
   strollers: number;
   accessibilityRequests: number;
+  assignedReservations: number;
   unassignedReservations: number;
-  preferredRoomCovers: { label: string; covers: number }[];
+  unassignedCovers: number;
+  finalRoomCovers: { code: string; label: string; covers: number }[];
 }
+
+export type DashboardRoomAvailability = Record<
+  "LUNCH" | "DINNER",
+  ReadonlyMap<string, boolean>
+>;
 
 export function restaurantToday(now: Date, timezone: string): string {
   return getZonedDateTimeParts(now, timezone).date;
@@ -99,16 +144,26 @@ export function parseDashboardFilters(input: unknown): DashboardFilters {
 }
 
 export function filterDashboardReservations(
-  reservations: readonly StoredReservation[],
+  reservations: readonly DashboardReservationSource[],
   filters: DashboardFilters,
-): StoredReservation[] {
-  return reservations.filter(
-    (reservation) =>
+): DashboardReservationSource[] {
+  return reservations.filter(({ reservation, assignment }) => {
+    const isOperationallyUnassigned =
+      reservation.status === "CONFIRMED" && assignment === null;
+
+    return (
       (filters.service === "ALL" ||
         reservation.serviceType === filters.service) &&
       (filters.status === "ALL" || reservation.status === filters.status) &&
-      (filters.origin === "ALL" || reservation.origin === filters.origin),
-  );
+      (filters.origin === "ALL" || reservation.origin === filters.origin) &&
+      (filters.assignment === "ALL" ||
+        (filters.assignment === "UNASSIGNED"
+          ? isOperationallyUnassigned
+          : assignment !== null)) &&
+      (filters.finalRoom === "ALL" ||
+        assignment?.room.code === filters.finalRoom)
+    );
+  });
 }
 
 function roomLabel(
@@ -125,11 +180,26 @@ function roomLabel(
 }
 
 export function toDashboardReservation(
-  reservation: StoredReservation,
+  source: DashboardReservationSource,
   roomsByCode: ReadonlyMap<string, string>,
+  roomAvailability: DashboardRoomAvailability | null,
 ): DashboardReservation {
+  const { reservation } = source;
   const preferences = parsePublicPreferences(reservation.preferences);
   const allergyData = parsePublicAllergies(reservation.allergies);
+  const assignment = source.assignment;
+  const assignmentRoomAvailability = assignment
+    ? (roomAvailability?.[reservation.serviceType].get(assignment.room.id) ??
+      null)
+    : null;
+  const sortedTables = assignment
+    ? [...assignment.tables].sort(
+        (left, right) =>
+          left.displayOrder - right.displayOrder ||
+          left.name.localeCompare(right.name, "it") ||
+          left.id.localeCompare(right.id),
+      )
+    : [];
 
   return {
     id: reservation.id,
@@ -158,52 +228,71 @@ export function toDashboardReservation(
     overrideReason: reservation.capacityOverrideReason,
     createdAt: reservation.createdAt.toISOString(),
     updatedAt: reservation.updatedAt.toISOString(),
+    assignment: assignment
+      ? {
+          roomCode: assignment.room.code,
+          roomName: assignment.room.name,
+          roomIsActive: assignment.room.isActive,
+          roomIsAvailableForService: assignmentRoomAvailability,
+          tableNames: sortedTables.map((table) => table.name),
+          tableCount: sortedTables.length,
+          internalNotesPresent: assignment.internalNotesPresent,
+          hasInactiveReferences:
+            !assignment.room.isActive ||
+            sortedTables.some((table) => !table.isActive),
+          hasUnavailableRoomReference:
+            assignmentRoomAvailability === false,
+        }
+      : null,
   };
 }
 
 export function aggregateDashboard(
-  reservations: readonly StoredReservation[],
+  reservations: readonly DashboardReservationSource[],
   rooms: readonly DashboardRoom[],
 ): DashboardSummary {
   const confirmed = reservations.filter(
-    (reservation) => reservation.status === "CONFIRMED",
+    ({ reservation }) => reservation.status === "CONFIRMED",
   );
-  const roomsByCode = new Map(rooms.map((room) => [room.code, room.name]));
+  const assigned = confirmed.filter(({ assignment }) => assignment !== null);
+  const unassigned = confirmed.filter(({ assignment }) => assignment === null);
   const roomTotals = new Map<string, number>();
 
-  for (const reservation of confirmed) {
-    const label = roomLabel(reservation, roomsByCode);
-    roomTotals.set(label, (roomTotals.get(label) ?? 0) + reservation.partySize);
+  for (const { reservation, assignment } of assigned) {
+    if (!assignment) continue;
+    roomTotals.set(
+      assignment.room.code,
+      (roomTotals.get(assignment.room.code) ?? 0) + reservation.partySize,
+    );
   }
 
-  const configuredRoomNames = new Set(rooms.map((room) => room.name));
   const configuredTotals = rooms.map((room) => ({
+    code: room.code,
     label: room.name,
-    covers: roomTotals.get(room.name) ?? 0,
+    covers: roomTotals.get(room.code) ?? 0,
   }));
-  const extraTotals = [...roomTotals.entries()]
-    .filter(([label]) => !configuredRoomNames.has(label))
-    .sort(([left], [right]) => left.localeCompare(right, "it"))
-    .map(([label, covers]) => ({ label, covers }));
 
   return {
     confirmedReservations: confirmed.length,
     confirmedCovers: confirmed.reduce(
-      (total, reservation) => total + reservation.partySize,
+      (total, { reservation }) => total + reservation.partySize,
       0,
     ),
     cancellations: reservations.filter(
-      (reservation) => reservation.status === "CANCELLED",
+      ({ reservation }) => reservation.status === "CANCELLED",
     ).length,
     origins: {
-      PUBLIC: confirmed.filter((reservation) => reservation.origin === "PUBLIC")
-        .length,
-      PHONE: confirmed.filter((reservation) => reservation.origin === "PHONE")
-        .length,
-      STAFF: confirmed.filter((reservation) => reservation.origin === "STAFF")
-        .length,
+      PUBLIC: confirmed.filter(
+        ({ reservation }) => reservation.origin === "PUBLIC",
+      ).length,
+      PHONE: confirmed.filter(
+        ({ reservation }) => reservation.origin === "PHONE",
+      ).length,
+      STAFF: confirmed.filter(
+        ({ reservation }) => reservation.origin === "STAFF",
+      ).length,
     },
-    foodRequests: confirmed.filter((reservation) => {
+    foodRequests: confirmed.filter(({ reservation }) => {
       const allergyData = parsePublicAllergies(reservation.allergies);
       return (
         allergyData.celiac ||
@@ -212,17 +301,22 @@ export function aggregateDashboard(
         allergyData.legacyText !== null
       );
     }).length,
-    highChairs: confirmed.filter(
-      (reservation) => parsePublicPreferences(reservation.preferences).highChair,
+    highChairs: confirmed.filter(({ reservation }) =>
+      parsePublicPreferences(reservation.preferences).highChair,
     ).length,
-    strollers: confirmed.filter(
-      (reservation) => parsePublicPreferences(reservation.preferences).stroller,
+    strollers: confirmed.filter(({ reservation }) =>
+      parsePublicPreferences(reservation.preferences).stroller,
     ).length,
     accessibilityRequests: confirmed.filter(
-      (reservation) =>
+      ({ reservation }) =>
         parsePublicPreferences(reservation.preferences).accessibility,
     ).length,
-    unassignedReservations: confirmed.length,
-    preferredRoomCovers: [...configuredTotals, ...extraTotals],
+    assignedReservations: assigned.length,
+    unassignedReservations: unassigned.length,
+    unassignedCovers: unassigned.reduce(
+      (total, { reservation }) => total + reservation.partySize,
+      0,
+    ),
+    finalRoomCovers: configuredTotals,
   };
 }

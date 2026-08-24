@@ -177,7 +177,7 @@ Gestisce:
 
 Non effettua assegnazione automatica o combinazione automatica dei tavoli.
 
-M10-A mantiene in questo modulo dominio, repository e servizio delle assegnazioni. `ReservationAssignment` è separata dalla prenotazione e possiede una relazione esplicita con i tavoli; `clearedAt` distingue lo stato attivo dalla rimozione logica. La preferenza resta nel dominio Reservations e viene soltanto letta nel contesto Staff/Admin. M10-B espone inoltre un comando interno di clear per reschedule, usabile dentro la transazione Reservations già aperta senza invocare la route e senza incrementare una seconda volta la versione.
+M10-A mantiene in questo modulo dominio, repository e servizio delle assegnazioni. `ReservationAssignment` è separata dalla prenotazione e possiede una relazione esplicita con i tavoli; `clearedAt` distingue lo stato attivo dalla rimozione logica. La preferenza resta nel dominio Reservations e viene soltanto letta nel contesto Staff/Admin. M10-B espone inoltre un comando interno di clear per reschedule, usabile dentro la transazione Reservations già aperta senza invocare la route e senza incrementare una seconda volta la versione. M10-C estende il read model Dashboard con una lettura tenant-scoped dell'assegnazione attiva e una proiezione SQL fissa della sola espressione `internal_notes IS NOT NULL`, eseguite nello stesso snapshot `REPEATABLE READ`; il testo delle note resta escluso dal percorso lista. Le due letture della disponibilità pranzo/cena restano fisse, il catalogo completo sala/tavoli viene caricato on demand dalla GET M10-A e il componente React non accede a Prisma.
 
 ### Identity
 
@@ -460,7 +460,9 @@ L'assegnazione può avvenire in qualsiasi momento. Le 17:30 sono un riferimento 
 
 M10-A, approvata tecnicamente da Work, espone una lettura strettamente read-only e comandi espliciti di assegnazione/riassegnazione/rimozione per Staff e Admin. Le correzioni storiche verificano riferimenti attivi senza ricostruire disponibilità passate; per servizi correnti o futuri una nuova sala deve essere effettivamente disponibile. I posti dei tavoli non bloccano e lo stesso tavolo può essere riutilizzato da prenotazioni diverse.
 
-M10-B integra reschedule, cancellazione e impatto delle configurazioni. Data, servizio o orario modificati rimuovono atomicamente l'assegnazione; gli altri campi la conservano. La cancellazione la conserva come storia ma la esclude dagli impatti. Il motore M9-D conta una prenotazione una sola volta, richiede conferma su assegnazioni future coinvolte e preserva i riferimenti come grandfathered. La dashboard di assegnazione resta M10-C.
+M10-B integra reschedule, cancellazione e impatto delle configurazioni. Data, servizio o orario modificati rimuovono atomicamente l'assegnazione; gli altri campi la conservano. La cancellazione la conserva come storia ma la esclude dagli impatti. Il motore M9-D conta una prenotazione una sola volta, richiede conferma su assegnazioni future coinvolte e preserva i riferimenti come grandfathered.
+
+M10-C implementa nel working tree la dashboard operativa: preferenza e collocazione finale sono proiezioni distinte, `DA ASSEGNARE` deriva dall'assenza dell'assegnazione attiva, filtri e riepiloghi sono calcolati server-side e le cancellate non entrano nei conteggi operativi. Il pannello usa esclusivamente GET/PUT/DELETE M10-A, mostra min/max posti come informazione, conserva riferimenti grandfathered e, su `VERSION_CONFLICT`, non ripete la scelta umana ma richiede una rilettura esplicita.
 
 ### 12.6 Esportazioni
 

@@ -74,7 +74,7 @@ async function strictJson(request: Request): Promise<unknown> {
 function assignmentFailure(error: unknown): Response {
   if (error instanceof ReservationAssignmentError) {
     return noStoreJson(
-      { error: error.publicMessage },
+      { error: error.publicMessage, code: error.code },
       reservationAssignmentErrorStatus(error.code),
     );
   }

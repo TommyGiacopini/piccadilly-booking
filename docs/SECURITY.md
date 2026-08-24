@@ -252,6 +252,12 @@ Le disattivazioni di sale/tavoli e l'indisponibilità per servizio riusano auten
 
 L'ordine globale dei lock è prenotazione, configurazione tenant, capacità. I flussi configurazione non acquisiscono lock prenotazione: ricalcolo serializzabile e fingerprint impediscono cicli e stati parziali, mentre il lock configurazione condiviso impedisce a una nuova assegnazione di usare riferimenti divenuti invalidi.
 
+## 9.4 Sicurezza della dashboard M10-C
+
+La dashboard M10-C riceve il tenant esclusivamente dall'utente autenticato riletto server-side. Il read model filtra le prenotazioni per `restaurantId` prima di includere l'assegnazione e proietta soltanto sala finale, nomi dei tavoli e stato dei riferimenti. La presenza delle note deriva da una query tenant-scoped fissa che seleziona esclusivamente `internal_notes IS NOT NULL`, nello stesso snapshot `REPEATABLE READ` della lista: il testo non viene trasferito al processo dashboard e viene letto on demand soltanto dalla GET M10-A per Staff/Admin. Il numero delle query non dipende dalle prenotazioni; le letture di disponibilità restano fisse per pranzo e cena e non materializzano `ServiceInstance`.
+
+Il componente client non riceve tenant, attore o correlation ID, non accede a Prisma e non mantiene uno stato autorevole. PUT e DELETE continuano a usare versione, same-origin e validazione strict delle API M10-A. `VERSION_CONFLICT` non attiva retry automatici: la scelta locale viene respinta, lo stato corrente deve essere ricaricato e l'operatore deve rivalutarlo. Sale o tavoli grandfathered restano visibili, ma le opzioni inattive o indisponibili che non appartengono all'assegnazione corrente sono disabilitate anche nel client; il server resta l'autorità finale.
+
 ## 10. Segreti e configurazione
 
 - `.env` e varianti con segreti sono esclusi da Git.

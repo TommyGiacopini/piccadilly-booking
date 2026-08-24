@@ -571,17 +571,17 @@ M8 e M9.
 
 La dashboard distingue chiaramente preferenza, sala definitiva e non assegnate.
 
-**Checkpoint M10-A — fondazione server-side, approvata tecnicamente da Work**
+**Checkpoint M10-A — fondazione server-side, approvata tecnicamente da Work e merged su `main`**
 
 M10-A formalizza D-037 e ADR 011, introduce una sola migrazione additiva per assegnazione e tavoli, dominio/repository/servizio nel modulo Rooms, API Staff/Admin `GET`/`PUT`/`DELETE`, audit prenotazione minimizzato, tenant isolation, autorizzazione, concorrenza e test PostgreSQL. Non modifica reschedule, cancellazione, configurazione sale/tavoli o superfici pubbliche; non aggiunge UI o Playwright. M10-A non completa M10.
 
-**Checkpoint M10-B — integrazioni lifecycle**
+**Checkpoint M10-B — integrazioni lifecycle, approvata tecnicamente da Work e merged su `main`**
 
 M10-B applica la rimozione logica atomica su cambio data/servizio/orario con singolo incremento versione, audit `UPDATED`/`UNASSIGNED` correlato e motivazione canonica. Modifiche agli altri campi e cancellazioni conservano l'assegnazione; le cancellate sono escluse dagli impatti operativi. Il protocollo M9-D include disattivazione sala, disattivazione tavolo e indisponibilità per data/servizio, con conteggi minimizzati, conferma, fingerprint ricalcolato, `IMPACT_CHANGED`, audit atomico e grandfathering. Non aggiunge schema né una UI di assegnazione e non completa M10.
 
-**Checkpoint M10-C — operatività visuale (rinviato)**
+**Checkpoint M10-C — operatività visuale implementata nel working tree, in attesa di Quality Gate**
 
-M10-C realizzerà dashboard, modali di assegnazione, filtri `DA ASSEGNARE`, indicatori, riepiloghi e azioni browser con i relativi test Playwright. Non appartiene a M10-A o M10-B.
+M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEGNARE`/assegnate e sala definitiva, indicatori dei coperti non assegnati e per sala finale. Il pannello responsive riusa le API M10-A per prima assegnazione, riassegnazione, note e clear, mostra posti informativi e riferimenti grandfathered e richiede una rilettura esplicita sui conflitti di versione. I test unitari, PostgreSQL e Playwright appartengono al working tree corrente. La tranche non è ancora approvata o merged e M10 non è dichiarata completa.
 
 ### M11 — Esportazioni PDF ed Excel
 

@@ -247,7 +247,7 @@ Riferimento: `docs/adr/006-audit-architecture-minimization.md`.
 
 ### D-037 — Fondazione dell'assegnazione manuale di sala e tavoli
 
-M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; M10-C introdurrà la UI operativa. M10-A e M10-B non concludono M10.
+M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; entrambe sono merged su `main` con la PR #11. M10-C implementa nel working tree la UI operativa e resta in attesa di Quality Gate. M10-A e M10-B non concludono M10 e l'implementazione locale di M10-C non equivale ad approvazione o merge.
 
 Le decisioni vincolanti approvate sono formalizzate come segue:
 
@@ -268,7 +268,7 @@ Solo prenotazioni confermate ricevono nuove assegnazioni; le cancellate vengono 
 
 M10-B rimuove atomicamente l'assegnazione quando cambiano data, servizio o orario, con un solo incremento della versione della prenotazione e un audit `UNASSIGNED` nella stessa transazione e con lo stesso correlation ID dell'aggiornamento. La conserva per modifiche a persone, preferenza, contatti, esigenze e note e conserva storicamente l'ultima assegnazione alla cancellazione, senza esporla al cliente.
 
-Disattivazioni di sale o tavoli e indisponibilità per data/servizio riusano il protocollo M9-D: la preview minimizzata conteggia una sola volta le prenotazioni confermate correnti o future con assegnazione attiva pertinente, richiede conferma quando esiste impatto e usa un fingerprint opaco ricalcolato nella transazione. Un fingerprint obsoleto produce `IMPACT_CHANGED` senza mutazione o audit. L'applicazione della configurazione preserva assegnazioni, tavoli, note e `clearedAt` secondo grandfathering. M10-C realizzerà dashboard, filtri, indicatori e comandi UI di assegnazione.
+Disattivazioni di sale o tavoli e indisponibilità per data/servizio riusano il protocollo M9-D: la preview minimizzata conteggia una sola volta le prenotazioni confermate correnti o future con assegnazione attiva pertinente, richiede conferma quando esiste impatto e usa un fingerprint opaco ricalcolato nella transazione. Un fingerprint obsoleto produce `IMPACT_CHANGED` senza mutazione o audit. L'applicazione della configurazione preserva assegnazioni, tavoli, note e `clearedAt` secondo grandfathering. M10-C presenta questi riferimenti senza perderli, usa un read model tenant-scoped senza N+1 per prenotazione e delega ogni mutazione alle API M10-A con versione ottimistica.
 
 Riferimento: `docs/adr/011-manual-room-table-assignment.md`.
 
