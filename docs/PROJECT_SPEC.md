@@ -646,7 +646,7 @@ La cancellazione Staff o pubblica conserva l'ultima assegnazione, inclusi tavoli
 
 Disattivazione globale di una sala, disattivazione di un tavolo e indisponibilità della sala per data/servizio includono nel protocollo M9-D le sole prenotazioni confermate correnti o future con assegnazione attiva pertinente. La preview espone soltanto conteggi e classificazioni, richiede conferma quando necessario e usa un fingerprint opaco ricalcolato nella transazione. La configurazione applicata preserva le assegnazioni come grandfathered; prenotazioni cancellate, storiche, assegnazioni rimosse e altri tenant non partecipano all'impatto.
 
-M10-A e M10-B sono state merged su `main` con la PR #11. M10-C implementa nel working tree la superficie operativa Staff/Admin: la dashboard distingue preferenza e sala definitiva, deriva `DA ASSEGNARE`, filtra per stato e sala finale, calcola i coperti sulle assegnazioni attive e usa le API M10-A per assegnazione, riassegnazione e clear. La tranche resta in attesa di Quality Gate e non conclude M10 fino alla review e alla successiva chiusura Git autorizzata.
+M10-A e M10-B sono state merged su `main` con la PR #11. M10-C, approvata da Work e merged su `main` con la PR #12, completa la superficie operativa Staff/Admin: la dashboard distingue preferenza e sala definitiva, deriva `DA ASSEGNARE`, filtra per stato e sala finale, calcola i coperti sulle assegnazioni attive e usa le API M10-A per assegnazione, riassegnazione e clear. Con questa chiusura M10 è completata e merged su `main`; M11 è la milestone successiva e non è ancora iniziata.
 
 
 
