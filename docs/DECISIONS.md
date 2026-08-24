@@ -247,7 +247,7 @@ Riferimento: `docs/adr/006-audit-architecture-minimization.md`.
 
 ### D-037 — Fondazione dell'assegnazione manuale di sala e tavoli
 
-M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; entrambe sono merged su `main` con la PR #11. M10-C implementa nel working tree la UI operativa e resta in attesa di Quality Gate. M10-A e M10-B non concludono M10 e l'implementazione locale di M10-C non equivale ad approvazione o merge.
+M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; entrambe sono merged su `main` con la PR #11. M10-C implementa la UI operativa, è approvata da Work ed è merged su `main` con la PR #12. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è la milestone successiva e non è ancora iniziata.
 
 Le decisioni vincolanti approvate sono formalizzate come segue:
 

@@ -579,9 +579,9 @@ M10-A formalizza D-037 e ADR 011, introduce una sola migrazione additiva per ass
 
 M10-B applica la rimozione logica atomica su cambio data/servizio/orario con singolo incremento versione, audit `UPDATED`/`UNASSIGNED` correlato e motivazione canonica. Modifiche agli altri campi e cancellazioni conservano l'assegnazione; le cancellate sono escluse dagli impatti operativi. Il protocollo M9-D include disattivazione sala, disattivazione tavolo e indisponibilità per data/servizio, con conteggi minimizzati, conferma, fingerprint ricalcolato, `IMPACT_CHANGED`, audit atomico e grandfathering. Non aggiunge schema né una UI di assegnazione e non completa M10.
 
-**Checkpoint M10-C — operatività visuale implementata nel working tree, in attesa di Quality Gate**
+**Checkpoint M10-C — operatività visuale approvata da Work e merged su `main` con la PR #12**
 
-M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEGNARE`/assegnate e sala definitiva, indicatori dei coperti non assegnati e per sala finale. Il pannello responsive riusa le API M10-A per prima assegnazione, riassegnazione, note e clear, mostra posti informativi e riferimenti grandfathered e richiede una rilettura esplicita sui conflitti di versione. I test unitari, PostgreSQL e Playwright appartengono al working tree corrente. La tranche non è ancora approvata o merged e M10 non è dichiarata completa.
+M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEGNARE`/assegnate e sala definitiva, indicatori dei coperti non assegnati e per sala finale. Il pannello responsive riusa le API M10-A per prima assegnazione, riassegnazione, note e clear, mostra posti informativi e riferimenti grandfathered e richiede una rilettura esplicita sui conflitti di versione. I test unitari, PostgreSQL e Playwright coprono il checkpoint approvato. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è la milestone successiva e non è ancora iniziata.
 
 ### M11 — Esportazioni PDF ed Excel
 
