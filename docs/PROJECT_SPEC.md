@@ -646,7 +646,7 @@ La cancellazione Staff o pubblica conserva l'ultima assegnazione, inclusi tavoli
 
 Disattivazione globale di una sala, disattivazione di un tavolo e indisponibilità della sala per data/servizio includono nel protocollo M9-D le sole prenotazioni confermate correnti o future con assegnazione attiva pertinente. La preview espone soltanto conteggi e classificazioni, richiede conferma quando necessario e usa un fingerprint opaco ricalcolato nella transazione. La configurazione applicata preserva le assegnazioni come grandfathered; prenotazioni cancellate, storiche, assegnazioni rimosse e altri tenant non partecipano all'impatto.
 
-M10-A e M10-B sono state merged su `main` con la PR #11. M10-C, approvata da Work e merged su `main` con la PR #12, completa la superficie operativa Staff/Admin: la dashboard distingue preferenza e sala definitiva, deriva `DA ASSEGNARE`, filtra per stato e sala finale, calcola i coperti sulle assegnazioni attive e usa le API M10-A per assegnazione, riassegnazione e clear. Con questa chiusura M10 è completata e merged su `main`; M11 è la milestone successiva e non è ancora iniziata.
+M10-A e M10-B sono state merged su `main` con la PR #11. M10-C, approvata da Work e merged su `main` con la PR #12, completa la superficie operativa Staff/Admin: la dashboard distingue preferenza e sala definitiva, deriva `DA ASSEGNARE`, filtra per stato e sala finale, calcola i coperti sulle assegnazioni attive e usa le API M10-A per assegnazione, riassegnazione e clear. Con questa chiusura M10 è completata e merged su `main`; M11 è implementata nel working tree dedicato ed è in attesa di Quality Gate Work.
 
 
 
@@ -654,45 +654,31 @@ M10-A e M10-B sono state merged su `main` con la PR #11. M10-C, approvata da Wor
 
 
 
-Il PDF A4 deve essere diviso nel seguente ordine:
+M11 genera on demand un PDF A4 landscape per una sola data locale. Include entrambi i servizi, esclusivamente prenotazioni `CONFIRMED`, e non è influenzato dai filtri dashboard diversi dalla data. Il documento deve essere diviso nel seguente ordine:
 
 
 
-1\. Sala 1;
+1\. `DA ASSEGNARE`;
 
-2\. Sala 2;
+2\. Sala 1;
 
-3\. Sala 3;
+3\. Sala 2;
 
-4\. Galleria;
+4\. Sala 3;
 
-5\. Terrazzo.
+5\. Galleria;
 
-
-
-All'interno di ogni sala, ordinare le prenotazioni dalla più vecchia alla più recente in base al momento di prenotazione.
+6\. Terrazzo.
 
 
 
-Colonne:
+Tutte le sezioni compaiono anche quando sono vuote. `DA ASSEGNARE` comprende assegnazioni assenti o rimosse logicamente; un'assegnazione attiva resta valida nell'export anche quando sala o tavoli sono stati successivamente disattivati o resi indisponibili. All'interno di ogni sezione, ordinare le prenotazioni dalla più vecchia alla più recente in base al momento di prenotazione e usare l'ID come tie-breaker deterministico.
 
 
 
-\- nome;
+La riga principale contiene servizio, ora di arrivo, nome e cognome, persone, telefono, preferenza di sala, sala definitiva, tavoli definitivi e momento di creazione. I dettagli includono esigenze alimentari e operative, ricorrenza, note prenotazione e note interne dell'assegnazione. Preferenza del cliente e collocazione definitiva restano sempre distinte. Email, identificativi, token, hash, consensi, override e dati audit sono esclusi.
 
-\- cognome;
-
-\- numero ospiti;
-
-\- ora di arrivo;
-
-\- sala;
-
-\- data e ora della prenotazione;
-
-\- note;
-
-\- telefono.
+Il PDF è multipagina, ripete sezione e intestazioni tabella dopo un page break, applica wrapping ai testi lunghi e mostra il numero pagina. Una giornata vuota restituisce comunque HTTP 200 e un PDF valido con tutte le sei sezioni.
 
 
 
@@ -704,21 +690,25 @@ PostgreSQL rimane la fonte ufficiale.
 
 
 
-Il sistema deve poter esportare un file `.xlsx` con:
+M11 genera file `.xlsx` on demand nelle modalità `DAY`, `MONTH` e `RANGE`, esclusivamente dalle prenotazioni `CONFIRMED`. Il sistema esporta:
 
 
 
-\- un foglio per ogni giornata;
+\- un foglio `YYYY-MM-DD` per ogni giornata richiesta, anche vuota;
 
-\- giorno corrente facilmente raggiungibile;
+\- un solo giorno per `DAY`;
 
-\- dati consultabili;
+\- tutti i giorni calendario del mese per `MONTH`;
 
-\- possibilità di scaricare una singola giornata.
+\- un intervallo inclusivo di massimo 31 giorni calendario per `RANGE`.
+
+I fogli sono ordinati cronologicamente. Ogni foglio ha esattamente 24 colonne operative: data, servizio, ora arrivo, anagrafica essenziale, persone, telefono, origine, preferenza, stato assegnazione, sala/tavoli finali, esigenze, note e creazione. Data, ora e data/ora sono celle Excel tipizzate; l'intestazione è bloccata, filtrabile e dotata di larghezze esplicite.
+
+I valori controllabili dall'utente che iniziano con `=`, `+`, `-`, `@`, tab, carriage return o line feed vengono neutralizzati come stringhe. Il workbook non contiene formule, hyperlink, collegamenti esterni, macro o celle unite.
 
 
 
-La dashboard web deve restare lo strumento principale per modificare i dati.
+La dashboard web resta lo strumento principale e unico per modificare i dati. PostgreSQL resta la fonte ufficiale; PDF e Excel non sono persistiti sul server e non sono reimportabili.
 
 
 

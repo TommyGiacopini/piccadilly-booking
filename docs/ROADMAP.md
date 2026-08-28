@@ -585,6 +585,8 @@ M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEG
 
 ### M11 — Esportazioni PDF ed Excel
 
+**Stato: IN CORSO / IMPLEMENTATA NEL WORKING TREE — IN ATTESA DI QUALITY GATE**
+
 **Obiettivo**
 
 Produrre documenti operativi senza alterare la fonte dati.
@@ -613,6 +615,8 @@ M8 e M10.
 - file leggibili e coerenti con PostgreSQL;
 - errori di generazione non modificano prenotazioni;
 - accesso limitato a Staff/Admin.
+
+Il working tree M11 usa un read model dedicato `REPEATABLE READ`, rendering PDFKit/ExcelJS fuori transazione, buffer in memoria e audit `EXPORT` separato prima della risposta. Gli output includono soltanto `CONFIRMED`, distinguono preferenza e assegnazione finale, conservano riferimenti grandfathered e non materializzano `ServiceInstance`. RANGE è limitato a 31 giorni; valgono i cap 2.000/20.000 righe e 25 MiB. Lo stato non implica approvazione, merge o completamento della milestone.
 
 **Test obbligatori**
 

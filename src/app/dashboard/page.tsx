@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { ExportPanel } from "@/app/dashboard/export-panel";
 import { ReservationAssignmentPanel } from "@/app/dashboard/reservation-assignment-panel";
 import { ReservationActions } from "@/app/dashboard/reservation-actions";
 import type { AvailabilityResult } from "@/modules/availability/domain/types";
@@ -236,6 +237,8 @@ export default async function DashboardPage({
             Giorno successivo →
           </Link>
         </nav>
+
+        <ExportPanel dashboardDate={dashboard.localDate} />
 
         <form className="mt-5 grid gap-3 rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-6" method="get">
           <input name="date" type="hidden" value={dashboard.localDate} />

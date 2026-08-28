@@ -4,6 +4,7 @@ export const AUDIT_CATEGORIES = [
   "AUTHENTICATION",
   "IDENTITY",
   "CONFIGURATION",
+  "EXPORT",
 ] as const;
 
 export const AUDIT_OUTCOMES = ["SUCCESS", "FAILURE", "BLOCKED"] as const;
@@ -40,6 +41,8 @@ export const AUDIT_ACTIONS = [
   "PUBLIC_CONTACTS_UPDATED",
   "PUBLIC_CONTENT_UPDATED",
   "MANAGEMENT_LINK_DURATION_UPDATED",
+  "PDF_EXPORT_REQUESTED",
+  "EXCEL_EXPORT_REQUESTED",
 ] as const;
 
 const auditEventHeaderSchema = z

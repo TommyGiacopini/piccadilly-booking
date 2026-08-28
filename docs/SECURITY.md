@@ -285,13 +285,15 @@ Il componente client non riceve tenant, attore o correlation ID, non accede a Pr
 
 ## 12. Esportazioni
 
-- Solo Staff e Admin possono esportare.
-- PDF ed Excel contengono dati personali e usano HTTPS e `no-store`.
-- I nomi file non contengono dati personali.
-- Nessun file permanente viene lasciato sul filesystem del server.
-- L'audit registra utente, tipo, periodo e momento dell'esportazione, non il contenuto completo.
-- Le formule Excel provenienti da input utente devono essere neutralizzate per prevenire formula injection.
-- I limiti massimi dell'intervallo esportabile saranno definiti prima di M11.
+- Le route POST Node sono riservate a Staff e Admin con sessione valida, account attivo, `disabledAt` nullo e `mustChangePassword=false`; applicano same-origin e JSON Zod strict. Tenant, attore, ruolo, correlation ID, conteggi e filename derivano dal server e non sono accettati dal client.
+- Ogni query e relazione è tenant-scoped. Il read model rilegge l'attore e usa uno snapshot `REPEATABLE READ` strettamente read-only; non acquisisce lock, non materializza `ServiceInstance` e non esegue business write.
+- PDF ed Excel contengono PII operative e devono viaggiare su HTTPS con `Cache-Control: private, no-store`, `Pragma: no-cache` e `X-Content-Type-Options: nosniff`. I nomi file sono ASCII deterministici e non contengono PII.
+- I file includono soltanto prenotazioni `CONFIRMED`. Sono esclusi email, UUID, tenant, versione, token, hash, consensi, audit, autore assignment, override e motivazioni override. Le note interne sono incluse soltanto negli export protetti Staff/Admin e non nei metadata PDF o audit.
+- Ogni stringa destinata a Excel che inizia con `=`, `+`, `-`, `@`, tab, carriage return o line feed viene prefissata con apostrofo e scritta come cella stringa. Il generatore non imposta formule, hyperlink, external link, macro o celle unite.
+- Il range Excel è calendar-based, inclusivo e massimo 31 giorni. I cap server-side sono 2.000 prenotazioni PDF, 20.000 prenotazioni Excel e 25 MiB per buffer. Un superamento restituisce un errore senza file e produce audit FAILURE soltanto per una richiesta autenticata e semanticamente valida.
+- PDFKit/ExcelJS renderizzano fuori dalla transazione e raccolgono tutto in memoria. Nessun file temporaneo o permanente viene lasciato sul filesystem. L'audit SUCCESS viene completato prima della risposta; se fallisce il buffer viene scartato. Un fallimento di generazione tenta un solo audit FAILURE e non apre loop di audit.
+- L'audit `EXPORT` conserva soltanto formato, modalità, periodo, numero giorni e, per SUCCESS, numero prenotazioni; per FAILURE sostituisce il conteggio con un codice allow-listed. Entità e stati sono nulli. La proiezione M9-F riapplica la stessa allow-list anche ai JSON legacy ostili.
+- Noto Sans viene caricato soltanto dal server dall'asset locale, senza fetch runtime o font di sistema. La provenienza è il repository ufficiale `google/fonts`, commit `ec626514f79f831f1ab848a82114a0ce7e2d6372`, con licenza OFL e SHA-256 registrato accanto all'asset.
 
 ## 13. Logging e osservabilità
 

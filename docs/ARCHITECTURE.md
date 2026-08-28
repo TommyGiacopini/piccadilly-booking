@@ -189,7 +189,9 @@ Registra eventi append-only con attore, origine, timestamp, entità, azione e va
 
 ### Exports
 
-Costruisce modelli di sola lettura per PDF e Excel. Non espone modelli Prisma direttamente ai generatori.
+Il modulo `exports` separa regole pure di periodo, classificazione, ordinamento e sicurezza delle celle; orchestrazione applicativa; read model Prisma; adapter PDFKit/ExcelJS e loader del font server-side. I generatori ricevono DTO immutabili e non modelli Prisma. Next.js espone route POST Node sottili e la dashboard usa un componente client non autorevole.
+
+Ogni richiesta legge l'intero periodo in una sola transazione `REPEATABLE READ`: rilegge l'attore, deriva il tenant, acquisisce contesto ristorante, sale, prenotazioni `CONFIRMED`, assegnazioni e tavoli con query bounded. Non materializza `ServiceInstance`, non usa lock e non scrive. Il rendering avviene fuori transazione, interamente in memoria; dopo i controlli su righe e byte una breve transazione separata rilegge l'attore e registra l'audit. Soltanto dopo audit SUCCESS il buffer viene restituito.
 
 ### Notifications
 
@@ -301,7 +303,7 @@ Il modello completo è documentato ora; ogni tabella sarà creata nella mileston
 
 M10-A crea `reservation_assignments` e `reservation_assignment_tables`. Esiste una sola riga di assegnazione per prenotazione; la junction usa chiavi composte che legano tenant, assegnazione, sala finale e tavolo della stessa sala. La rimozione valorizza `cleared_at` e non elimina l'entità. Una riattivazione riusa la riga esistente. Non vengono collegate prenotazioni e istanze servizio e non viene eseguito backfill.
 
-I due registri audit restano separati. M9-F li unisce mediante una proiezione applicativa di sola lettura: `UNION ALL` parametrizzata, tenant filter in ciascun ramo, ordinamento globale deterministico e paginazione keyset. Il dettaglio trasforma gli stati con allow-list positive e non espone raw JSON. Ogni evento è scritto nella stessa transazione della mutazione, usa campi a whitelist e non serializza indiscriminatamente modelli Prisma. Riferimenti: ADR 006 e D-036.
+I due registri audit restano separati. M9-F li unisce mediante una proiezione applicativa di sola lettura: `UNION ALL` parametrizzata, tenant filter in ciascun ramo, ordinamento globale deterministico e paginazione keyset. Il dettaglio trasforma gli stati con allow-list positive e non espone raw JSON. Ogni evento relativo a una mutazione è scritto nella stessa transazione della mutazione, usa campi a whitelist e non serializza indiscriminatamente modelli Prisma. Gli export, essendo read-only, scrivono invece `AuditEvent` in una transazione breve successiva al rendering e prima della risposta. Riferimenti: ADR 006, D-036 e D-038.
 
 ### 8.4 Dati da non inserire direttamente in `reservations`
 
@@ -462,7 +464,7 @@ M10-A, approvata tecnicamente da Work, espone una lettura strettamente read-only
 
 M10-B integra reschedule, cancellazione e impatto delle configurazioni. Data, servizio o orario modificati rimuovono atomicamente l'assegnazione; gli altri campi la conservano. La cancellazione la conserva come storia ma la esclude dagli impatti. Il motore M9-D conta una prenotazione una sola volta, richiede conferma su assegnazioni future coinvolte e preserva i riferimenti come grandfathered.
 
-M10-C, approvata da Work e merged su `main` con la PR #12, completa la dashboard operativa: preferenza e collocazione finale sono proiezioni distinte, `DA ASSEGNARE` deriva dall'assenza dell'assegnazione attiva, filtri e riepiloghi sono calcolati server-side e le cancellate non entrano nei conteggi operativi. Il pannello usa esclusivamente GET/PUT/DELETE M10-A, mostra min/max posti come informazione, conserva riferimenti grandfathered e, su `VERSION_CONFLICT`, non ripete la scelta umana ma richiede una rilettura esplicita. Con M10-A e M10-B già merged su `main` con la PR #11, M10 è completata e merged; M11 è la milestone successiva e non è ancora iniziata.
+M10-C, approvata da Work e merged su `main` con la PR #12, completa la dashboard operativa: preferenza e collocazione finale sono proiezioni distinte, `DA ASSEGNARE` deriva dall'assenza dell'assegnazione attiva, filtri e riepiloghi sono calcolati server-side e le cancellate non entrano nei conteggi operativi. Il pannello usa esclusivamente GET/PUT/DELETE M10-A, mostra min/max posti come informazione, conserva riferimenti grandfathered e, su `VERSION_CONFLICT`, non ripete la scelta umana ma richiede una rilettura esplicita. Con M10-A e M10-B già merged su `main` con la PR #11, M10 è completata e merged; M11 è implementata nel working tree dedicato ed è in attesa di Quality Gate Work.
 
 ### 12.6 Esportazioni
 
@@ -475,7 +477,7 @@ Il PDF presenta nell'ordine:
 5. Galleria;
 6. Terrazzo.
 
-Dentro ogni sezione le prenotazioni sono ordinate per momento di creazione.
+Dentro ogni sezione le prenotazioni `CONFIRMED` sono ordinate per momento di creazione e UUID. Assegnazioni assenti o con `clearedAt` valorizzato confluiscono in `DA ASSEGNARE`; riferimenti attivi poi disabilitati o indisponibili restano nella sezione finale per grandfathering. Tutte le sezioni compaiono anche vuote. Il PDF A4 landscape include pranzo e cena, righe e dettagli operativi, wrapping, intestazioni ripetute e pagine numerate.
 
 Excel supporta:
 
@@ -483,7 +485,9 @@ Excel supporta:
 - mese, con un foglio per giorno;
 - intervallo selezionato, con un foglio per giorno.
 
-Non esiste un workbook permanente destinato a crescere indefinitamente.
+`MONTH` include ogni giorno del mese e `RANGE` è inclusivo fino a 31 giorni calendar-based. Ogni foglio `YYYY-MM-DD`, anche vuoto, contiene le 24 colonne M11, intestazione frozen e filtro; date e orari sono celle tipizzate. Tutti i testi controllabili dall'utente attraversano la neutralizzazione formula injection e il workbook non produce formule, hyperlink o external link.
+
+Le due route `/api/staff/exports/pdf` e `/api/staff/exports/excel` applicano sessione Staff/Admin, stato account, cambio password e same-origin prima del JSON strict. PDFKit ed ExcelJS completano il buffer fuori dalla transazione di lettura; i cap sono 2.000/20.000 prenotazioni e 25 MiB. Il servizio scrive audit `EXPORT` SUCCESS/FAILURE con metadata minimizzati in una transazione separata e non restituisce il file se l'audit SUCCESS fallisce. Nessun file temporaneo o permanente viene creato e non esiste un workbook destinato a crescere indefinitamente. Riferimenti: D-038 e ADR 006.
 
 ## 13. Notifiche
 
