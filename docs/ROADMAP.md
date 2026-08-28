@@ -581,11 +581,11 @@ M10-B applica la rimozione logica atomica su cambio data/servizio/orario con sin
 
 **Checkpoint M10-C — operatività visuale approvata da Work e merged su `main` con la PR #12**
 
-M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEGNARE`/assegnate e sala definitiva, indicatori dei coperti non assegnati e per sala finale. Il pannello responsive riusa le API M10-A per prima assegnazione, riassegnazione, note e clear, mostra posti informativi e riferimenti grandfathered e richiede una rilettura esplicita sui conflitti di versione. I test unitari, PostgreSQL e Playwright coprono il checkpoint approvato. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è la milestone successiva e non è ancora iniziata.
+M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEGNARE`/assegnate e sala definitiva, indicatori dei coperti non assegnati e per sala finale. Il pannello responsive riusa le API M10-A per prima assegnazione, riassegnazione, note e clear, mostra posti informativi e riferimenti grandfathered e richiede una rilettura esplicita sui conflitti di versione. I test unitari, PostgreSQL e Playwright coprono il checkpoint approvato. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è la milestone successiva e non è ancora iniziata.
 
 ### M11 — Esportazioni PDF ed Excel
 
-**Stato: IN CORSO / IMPLEMENTATA NEL WORKING TREE — IN ATTESA DI QUALITY GATE**
+**Stato: COMPLETATA / APPROVATA DA WORK / MERGED SU MAIN CON PR #14**
 
 **Obiettivo**
 
@@ -616,7 +616,7 @@ M8 e M10.
 - errori di generazione non modificano prenotazioni;
 - accesso limitato a Staff/Admin.
 
-Il working tree M11 usa un read model dedicato `REPEATABLE READ`, rendering PDFKit/ExcelJS fuori transazione, buffer in memoria e audit `EXPORT` separato prima della risposta. Gli output includono soltanto `CONFIRMED`, distinguono preferenza e assegnazione finale, conservano riferimenti grandfathered e non materializzano `ServiceInstance`. RANGE è limitato a 31 giorni; valgono i cap 2.000/20.000 righe e 25 MiB. Lo stato non implica approvazione, merge o completamento della milestone.
+M11 usa un read model dedicato `REPEATABLE READ`, rendering PDFKit/ExcelJS fuori transazione, buffer in memoria e audit `EXPORT` separato prima della risposta. Gli output includono soltanto `CONFIRMED`, distinguono preferenza e assegnazione finale, conservano riferimenti grandfathered e non materializzano `ServiceInstance`. RANGE è limitato a 31 giorni; valgono i cap 2.000/20.000 righe e 25 MiB. La milestone è stata approvata da Work e squash-merged su `main` con la PR #14 (`5d4825f2dfa022bea2a16ebbde15c08862d0b85c`).
 
 **Test obbligatori**
 
@@ -633,6 +633,8 @@ Il working tree M11 usa un read model dedicato `REPEATABLE READ`, rendering PDFK
 PDF e Excel sono esportazioni riproducibili della dashboard.
 
 ### M12 — Outbox e provider simulati
+
+**Stato: NON INIZIATA**
 
 **Obiettivo**
 
