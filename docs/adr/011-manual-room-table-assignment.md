@@ -1,6 +1,6 @@
 # ADR 011 — Assegnazione manuale di sala e tavoli
 
-**Stato:** accettato; M10-A e M10-B merged su `main` con la PR #11; M10-C approvata da Work e merged su `main` con la PR #12; M10 completata; M11 non iniziata
+**Stato:** accettato; M10-A e M10-B merged su `main` con la PR #11; M10-C approvata da Work e merged su `main` con la PR #12; M10 completata; M11 approvata da Work e squash-merged su `main` con la PR #14; M12 non iniziata
 **Data:** 13 agosto 2026
 
 ## Contesto
