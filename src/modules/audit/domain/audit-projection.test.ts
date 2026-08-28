@@ -205,4 +205,119 @@ describe("positive detail allow-list", () => {
     ]));
     expect(JSON.stringify(content)).not.toContain(sentinel);
   });
+
+  it("projects export events through a strict metadata allow-list", () => {
+    const sentinel = "M11-EXPORT-SENSITIVE-SENTINEL";
+    const detail = projectAuditDetail({
+      ...reservationRow({
+        source: "ADMINISTRATIVE",
+        sourceRank: 2,
+        category: "EXPORT",
+        action: "EXCEL_EXPORT_REQUESTED",
+        actorKind: "USER",
+        actorUserId: ids.actor,
+        actorDisplayName: "demo.staff",
+        actorRole: "STAFF",
+        entityType: null,
+        entityId: null,
+      }),
+      previousState: { customerName: sentinel },
+      newState: { phone: sentinel },
+      metadata: {
+        format: "EXCEL",
+        mode: "RANGE",
+        fromDate: "2026-08-01",
+        toDate: "2026-08-31",
+        dayCount: 31,
+        reservationCount: 42,
+        filename: sentinel,
+        customerEmail: sentinel,
+        nested: { secret: sentinel },
+      },
+    });
+
+    expect(detail).toMatchObject({
+      category: "EXPORT",
+      action: "EXCEL_EXPORT_REQUESTED",
+      outcome: "SUCCESS",
+      previousState: [],
+      newState: [],
+    });
+    expect(detail?.metadata.map(({ key, value }) => ({ key, value }))).toEqual([
+      { key: "format", value: "EXCEL" },
+      { key: "mode", value: "RANGE" },
+      { key: "fromDate", value: "2026-08-01" },
+      { key: "toDate", value: "2026-08-31" },
+      { key: "dayCount", value: 31 },
+      { key: "reservationCount", value: 42 },
+    ]);
+    expect(JSON.stringify(detail)).not.toContain(sentinel);
+  });
+
+  it.each([
+    {
+      label: "SUCCESS containing a hostile failureCode",
+      outcome: "SUCCESS",
+      metadata: { reservationCount: 42, failureCode: "GENERATION_FAILED" },
+      expectedSpecific: [{ key: "reservationCount", value: 42 }],
+    },
+    {
+      label: "FAILURE containing a hostile reservationCount",
+      outcome: "FAILURE",
+      metadata: { reservationCount: 42, failureCode: "EXPORT_TOO_LARGE" },
+      expectedSpecific: [{ key: "failureCode", value: "EXPORT_TOO_LARGE" }],
+    },
+    {
+      label: "SUCCESS containing both outcome-specific fields",
+      outcome: "SUCCESS",
+      metadata: { reservationCount: 7, failureCode: "EXPORT_RANGE_TOO_LARGE" },
+      expectedSpecific: [{ key: "reservationCount", value: 7 }],
+    },
+    {
+      label: "legacy BLOCKED export containing both fields",
+      outcome: "BLOCKED",
+      metadata: { reservationCount: 99, failureCode: "GENERATION_FAILED" },
+      expectedSpecific: [],
+    },
+  ] as const)("uses outcome-specific export metadata for $label", ({ outcome, metadata, expectedSpecific }) => {
+    const sentinel = "M11-CROSSED-METADATA-SENTINEL";
+    const detail = projectAuditDetail({
+      ...reservationRow({
+        source: "ADMINISTRATIVE",
+        sourceRank: 2,
+        category: "EXPORT",
+        action: "PDF_EXPORT_REQUESTED",
+        outcome,
+        actorKind: "USER",
+        actorUserId: ids.actor,
+        actorDisplayName: "demo.staff",
+        actorRole: "STAFF",
+        entityType: null,
+        entityId: null,
+      }),
+      previousState: { raw: sentinel },
+      newState: { raw: sentinel },
+      metadata: {
+        format: "PDF",
+        mode: "DAY",
+        fromDate: "2026-08-24",
+        toDate: "2026-08-24",
+        dayCount: 1,
+        ...metadata,
+        filename: sentinel,
+        customerPhone: sentinel,
+        arbitrary: { secret: sentinel },
+      },
+    });
+
+    expect(detail?.metadata.map(({ key, value }) => ({ key, value }))).toEqual([
+      { key: "format", value: "PDF" },
+      { key: "mode", value: "DAY" },
+      { key: "fromDate", value: "2026-08-24" },
+      { key: "toDate", value: "2026-08-24" },
+      { key: "dayCount", value: 1 },
+      ...expectedSpecific,
+    ]);
+    expect(JSON.stringify(detail)).not.toContain(sentinel);
+  });
 });

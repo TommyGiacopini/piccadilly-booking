@@ -247,7 +247,7 @@ Riferimento: `docs/adr/006-audit-architecture-minimization.md`.
 
 ### D-037 — Fondazione dell'assegnazione manuale di sala e tavoli
 
-M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; entrambe sono merged su `main` con la PR #11. M10-C implementa la UI operativa, è approvata da Work ed è merged su `main` con la PR #12. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è la milestone successiva e non è ancora iniziata.
+M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; entrambe sono merged su `main` con la PR #11. M10-C implementa la UI operativa, è approvata da Work ed è merged su `main` con la PR #12. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è implementata nel working tree dedicato ed è in attesa di Quality Gate Work.
 
 Le decisioni vincolanti approvate sono formalizzate come segue:
 
@@ -272,14 +272,24 @@ Disattivazioni di sale o tavoli e indisponibilità per data/servizio riusano il 
 
 Riferimento: `docs/adr/011-manual-room-table-assignment.md`.
 
+### D-038 — Esportazioni operative PDF ed Excel M11
+
+M11 genera proiezioni read-only on demand da PostgreSQL e non persiste file. PDFKit `0.19.1` produce PDF A4 landscape per un solo giorno; ExcelJS `4.4.0` produce workbook `DAY`, `MONTH` o `RANGE` con un foglio cronologico per ogni giorno calendario richiesto, inclusi quelli vuoti. Il range massimo è di 31 giorni inclusivi, calcolati per calendario; i limiti sono 2.000 prenotazioni PDF, 20.000 prenotazioni Excel e 25 MiB per ciascun buffer. Non esistono workbook permanente, import, CSV, job o coda di generazione.
+
+Un read model dedicato apre una singola transazione `REPEATABLE READ`, rilegge Staff/Admin e tenant, acquisisce ristorante, sale, prenotazioni `CONFIRMED`, assegnazioni attive e tavoli dell'intero periodo con query bounded. La classificazione è `DA ASSEGNARE`, Sala 1, Sala 2, Sala 3, Galleria, Terrazzo; assegnazioni rimosse sono non assegnate, mentre riferimenti attivi grandfathered restano esportabili. La lettura non materializza `ServiceInstance`, non usa lock e non scrive. PDFKit/ExcelJS renderizzano solo dopo la chiusura della transazione.
+
+Il buffer completo viene validato prima della risposta. L'audit `EXPORT` è scritto in una breve transazione successiva, dopo aver riletto l'attore: `PDF_EXPORT_REQUESTED` o `EXCEL_EXPORT_REQUESTED`, outcome `SUCCESS` o `FAILURE`, entità e stati nulli, metadata esclusivamente allow-listed. Un errore dell'audit SUCCESS elimina l'esito applicativo e nessun file viene restituito; un fallimento di generazione tenta un solo audit FAILURE. Questa è un'eccezione deliberata alla regola di atomicità mutazione/audit: l'export non modifica stato di business e l'evento registra la richiesta completata o fallita.
+
+Le route POST Node.js sono riservate a Staff/Admin attivi, same-origin e senza cambio password obbligatorio; accettano JSON strict che non include tenant, attore, ruolo, correlation ID o filename. I file usano `private, no-store`, `nosniff`, lunghezza e nome ASCII deterministico. Noto Sans è incorporato da un asset server-side del repository ufficiale `google/fonts` al commit vincolato. L'Excel contiene esattamente 24 colonne, celle temporali tipizzate e neutralizzazione preventiva della formula injection; non contiene formule, hyperlink, collegamenti esterni, macro o celle unite.
+
+La proiezione M9-F include categoria `EXPORT` e le due azioni con outcome SUCCESS/FAILURE, preserva il tenant filter e mostra soltanto i metadata autorizzati. PDF ed Excel includono i dati operativi espressamente previsti, comprese le note interne per Staff/Admin, ma escludono email, identificativi, token, hash, consensi, override e dati audit.
+
 ## 3. Decisioni reversibili
 
 Le seguenti scelte possono cambiare senza alterare il dominio, purché il cambiamento venga testato e documentato:
 
 - libreria concreta per autenticazione e sessioni;
 - libreria Argon2id concreta;
-- generatore PDF;
-- libreria Excel;
 - libreria i18n oppure dizionari interni;
 - provider email;
 - modalità concreta di esecuzione del worker;
@@ -318,7 +328,6 @@ Questi punti non bloccano la documentazione corrente, ma devono essere decisi pr
 - librerie concrete e versioni da installare in ciascuna milestone;
 - provider e procedure definitive di backup coerenti con RPO/RTO;
 - RPO/RTO specifici dei singoli componenti esterni;
-- limiti massimi pratici dell'intervallo Excel per tempo di generazione e dimensione del file;
 - criteri di retention o revoca per token scaduti e record tecnici di rate limiting.
 
 ## 6. Modifica delle decisioni

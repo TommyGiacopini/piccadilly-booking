@@ -116,6 +116,8 @@ const actionLabels: Record<AuditListAction, string> = {
   PUBLIC_CONTACTS_UPDATED: "Contatti pubblici aggiornati",
   PUBLIC_CONTENT_UPDATED: "Contenuti pubblici aggiornati",
   MANAGEMENT_LINK_DURATION_UPDATED: "Durata link aggiornata",
+  PDF_EXPORT_REQUESTED: "Esportazione PDF richiesta",
+  EXCEL_EXPORT_REQUESTED: "Esportazione Excel richiesta",
 };
 
 function parseListHeader(row: AuditListDatabaseRow): AuditListItemDto | null {
@@ -345,6 +347,31 @@ const publicContentRules = [
   rule("keys", "Chiavi", enumArrayParser(PUBLIC_CONTENT_KEYS)),
 ] as const;
 const durationRules = [rule("managementLinkDurationHours", "Durata link (ore)", positiveCount)] as const;
+const exportCommonMetadataRules = [
+  rule("format", "Formato", scalarParser(z.enum(["PDF", "EXCEL"]))),
+  rule("mode", "Modalità", scalarParser(z.enum(["DAY", "MONTH", "RANGE"]))),
+  rule("fromDate", "Data iniziale", localDate),
+  rule("toDate", "Data finale", localDate),
+  rule("dayCount", "Giorni", positiveCount),
+] as const;
+const exportSuccessMetadataRules = [
+  ...exportCommonMetadataRules,
+  rule("reservationCount", "Prenotazioni", count),
+] as const;
+const exportFailureMetadataRules = [
+  ...exportCommonMetadataRules,
+  rule(
+    "failureCode",
+    "Codice errore",
+    scalarParser(
+      z.enum([
+        "GENERATION_FAILED",
+        "EXPORT_TOO_LARGE",
+        "EXPORT_RANGE_TOO_LARGE",
+      ]),
+    ),
+  ),
+] as const;
 const impactRules = [
   rule("reservationCount", "Prenotazioni coinvolte", count),
   rule("covers", "Coperti coinvolti", count),
@@ -402,6 +429,8 @@ const stateRulesByAction: Record<AuditAction, readonly FieldRule[]> = {
   PUBLIC_CONTACTS_UPDATED: publicContactRules,
   PUBLIC_CONTENT_UPDATED: publicContentRules,
   MANAGEMENT_LINK_DURATION_UPDATED: durationRules,
+  PDF_EXPORT_REQUESTED: [],
+  EXCEL_EXPORT_REQUESTED: [],
 };
 
 function getPath(root: unknown, path: string): unknown {
@@ -444,7 +473,15 @@ function contentChangeFields(metadata: unknown): AuditDetailFieldDto[] {
     : [];
 }
 
-function metadataRules(action: AuditListAction): readonly FieldRule[] {
+function metadataRules(
+  action: AuditListAction,
+  outcome: AuditListItemDto["outcome"],
+): readonly FieldRule[] {
+  if (action === "PDF_EXPORT_REQUESTED" || action === "EXCEL_EXPORT_REQUESTED") {
+    if (outcome === "SUCCESS") return exportSuccessMetadataRules;
+    if (outcome === "FAILURE") return exportFailureMetadataRules;
+    return exportCommonMetadataRules;
+  }
   if (action.startsWith("USER_") || action === "PASSWORD_CHANGED") return identityMetadataRules;
   if (action === "PUBLIC_CONTENT_UPDATED") return [];
   if (action === "PUBLIC_CONTACTS_UPDATED") {
@@ -473,7 +510,7 @@ export function projectAuditDetail(record: AuditDetailDatabaseRecord): AuditDeta
     ? []
     : header.action === "PUBLIC_CONTENT_UPDATED"
       ? contentChangeFields(record.metadata)
-      : sanitizeFields(record.metadata, metadataRules(header.action));
+      : sanitizeFields(record.metadata, metadataRules(header.action, header.outcome));
   return {
     ...header,
     previousState: sanitizeFields(record.previousState, stateRules),
