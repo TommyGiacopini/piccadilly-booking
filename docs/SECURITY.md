@@ -271,17 +271,20 @@ Il componente client non riceve tenant, attore o correlation ID, non accede a Pr
 
 ## 11. Notifiche
 
-- Sviluppo e staging usano esclusivamente mock.
-- Un kill switch impedisce di selezionare provider reali fuori produzione.
-- WhatsApp usa in produzione soltanto Meta Cloud API ufficiale.
+- M12 contiene esclusivamente `SimulatedWhatsAppProvider` e `SimulatedEmailProvider`; non esistono classi, modalità, URL, SDK, segreti o trasporti di provider reali.
+- Un gate statico circoscritto al modulo Notifications vieta fetch, HTTP/HTTPS request, SMTP, socket esterne, SDK provider, URL esterni e configurazioni Meta.
 - Nessuna automazione WhatsApp Web.
 - L'email è facoltativa e può essere fallback o parallela.
 - Il gruppo WhatsApp è opzionale e non è una dipendenza del flusso interno.
 - L'outbox viene salvata nella stessa transazione dell'evento di business.
-- Il worker invia dopo il commit.
-- Retry idempotenti evitano duplicati.
-- Payload e log vengono minimizzati.
+- Il worker invia dopo il commit. Ogni call riceve un `AbortSignal` creato server-side e una deadline iniettabile di 30 secondi; timeout e shutdown interrompono bounded l'attesa senza persistere errori raw.
+- Il processing è bounded a cinque leg concorrenti e non avvia nuove call dopo lo shutdown. Prima del claim, uno sweep `FOR UPDATE SKIP LOCKED` terminalizza al massimo 100 leg pending scadute senza provider, attempt o fallback.
+- La destination è presente soltanto sulla singola leg. Il payload contiene esclusivamente nome, ristorante, data, servizio, orario e persone; non contiene cognome, note, esigenze, assegnazione, consensi, token o link personale.
+- Retry e replay usano una chiave senza PII; la receipt simulata non contiene destination o payload e rileva conflitti di hash.
+- Errori inattesi vengono convertiti in failure code allow-listed. Non vengono persistiti messaggi liberi, stack, SQL, payload o destination negli attempt e nei log.
+- Il warning dashboard espone soltanto `Notifica non consegnata` o `Notifica consegnata soltanto su un canale`, senza destination, payload, provider reference, attempt o errore raw.
 - Un errore permanente viene mostrato alla dashboard senza invalidare la prenotazione.
+- M12 non implementa retention. Una policy approvata di retention/redazione per outbox, attempt e receipt è obbligatoria prima di M14 e della produzione.
 
 ## 12. Esportazioni
 

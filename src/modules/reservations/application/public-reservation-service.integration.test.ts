@@ -205,6 +205,34 @@ function tokenFromPath(path: string): string {
   return token;
 }
 
+async function withRejectedPublicNotificationInsert(
+  callback: () => Promise<void>,
+): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    CREATE FUNCTION m12_test_reject_public_notification() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      RAISE EXCEPTION 'synthetic M12 public notification failure';
+    END;
+    $$
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TRIGGER m12_test_reject_public_notification_trigger
+    BEFORE INSERT ON notification_outbox
+    FOR EACH ROW EXECUTE FUNCTION m12_test_reject_public_notification()
+  `);
+  try {
+    await callback();
+  } finally {
+    await prisma.$executeRawUnsafe(
+      "DROP TRIGGER IF EXISTS m12_test_reject_public_notification_trigger ON notification_outbox",
+    );
+    await prisma.$executeRawUnsafe(
+      "DROP FUNCTION IF EXISTS m12_test_reject_public_notification()",
+    );
+  }
+}
+
 async function expectNoPublicCreationArtifacts(): Promise<void> {
   await expect(
     prisma.serviceInstance.count({ where: { restaurantId } }),
@@ -247,6 +275,9 @@ describe.sequential("M7 public booking with real PostgreSQL", () => {
     await prisma.restaurantBookingSettings.create({
       data: { restaurantId, ...bookingSettingsData() },
     });
+    await prisma.restaurantNotificationSettings.create({
+      data: { restaurantId, strategy: "WHATSAPP_ONLY" },
+    });
     await prisma.weeklyServiceSchedule.createMany({ data: weeklySchedules() });
     await prisma.room.create({
       data: {
@@ -260,6 +291,9 @@ describe.sequential("M7 public booking with real PostgreSQL", () => {
   });
 
   beforeEach(async () => {
+    await prisma.notificationSimulationReceipt.deleteMany({ where: { restaurantId } });
+    await prisma.notificationAttempt.deleteMany({ where: { restaurantId } });
+    await prisma.notificationOutbox.deleteMany({ where: { restaurantId } });
     await prisma.reservationAuditEvent.deleteMany({ where: { restaurantId } });
     await prisma.reservation.deleteMany({ where: { restaurantId } });
     await prisma.serviceRoomAvailability.deleteMany({ where: { restaurantId } });
@@ -274,11 +308,15 @@ describe.sequential("M7 public booking with real PostgreSQL", () => {
   });
 
   afterAll(async () => {
+    await prisma.notificationSimulationReceipt.deleteMany({ where: { restaurantId } });
+    await prisma.notificationAttempt.deleteMany({ where: { restaurantId } });
+    await prisma.notificationOutbox.deleteMany({ where: { restaurantId } });
     await prisma.reservationAuditEvent.deleteMany({ where: { restaurantId } });
     await prisma.reservation.deleteMany({ where: { restaurantId } });
     await prisma.serviceRoomAvailability.deleteMany({ where: { restaurantId } });
     await prisma.serviceInstance.deleteMany({ where: { restaurantId } });
     await prisma.publicReservationRateLimit.deleteMany({ where: { restaurantId } });
+    await prisma.restaurantNotificationSettings.delete({ where: { restaurantId } });
     await prisma.restaurant.delete({ where: { id: restaurantId } });
     await prisma.$disconnect();
 
@@ -560,6 +598,42 @@ describe.sequential("M7 public booking with real PostgreSQL", () => {
     const audit = await prisma.reservationAuditEvent.findMany({ where: { restaurantId }, orderBy: { createdAt: "asc" } });
     expect(audit.map((event) => event.action)).toEqual(["CREATED", "UPDATED"]);
     expect(audit[1]?.previousState).not.toEqual(audit[1]?.newState);
+  });
+
+  it("keeps public create, update and cancellation atomic with their notification outbox", async () => {
+    await withRejectedPublicNotificationInsert(async () => {
+      await expect(serviceCreate()).rejects.toThrow(
+        "synthetic M12 public notification failure",
+      );
+    });
+    await expectNoPublicCreationArtifacts();
+    await expect(prisma.notificationOutbox.count({ where: { restaurantId } })).resolves.toBe(0);
+
+    const created = await serviceCreate();
+    const rawToken = tokenFromPath(created.managementPath);
+    const storedBefore = await prisma.reservation.findFirstOrThrow({ where: { restaurantId } });
+    const auditBefore = await prisma.reservationAuditEvent.findMany({ where: { restaurantId }, orderBy: { createdAt: "asc" } });
+    const outboxBefore = await prisma.notificationOutbox.findMany({ where: { restaurantId }, orderBy: { createdAt: "asc" } });
+    expect(outboxBefore).toHaveLength(2);
+    expect(new Set([auditBefore[0]?.correlationId, ...outboxBefore.map((row) => row.originCorrelationId)])).toEqual(new Set([auditBefore[0]?.correlationId]));
+
+    await withRejectedPublicNotificationInsert(async () => {
+      await expect(updateManagedPublicReservation({ restaurantId, rawToken, rawPayload: updatePayload(), now: earlyNow })).rejects.toThrow(
+        "synthetic M12 public notification failure",
+      );
+    });
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: storedBefore.id } })).toEqual(storedBefore);
+    expect(await prisma.reservationAuditEvent.findMany({ where: { restaurantId }, orderBy: { createdAt: "asc" } })).toEqual(auditBefore);
+    expect(await prisma.notificationOutbox.findMany({ where: { restaurantId }, orderBy: { createdAt: "asc" } })).toEqual(outboxBefore);
+
+    await withRejectedPublicNotificationInsert(async () => {
+      await expect(cancelManagedPublicReservation({ restaurantId, rawToken, now: earlyNow })).rejects.toThrow(
+        "synthetic M12 public notification failure",
+      );
+    });
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: storedBefore.id } })).toEqual(storedBefore);
+    expect(await prisma.reservationAuditEvent.findMany({ where: { restaurantId }, orderBy: { createdAt: "asc" } })).toEqual(auditBefore);
+    expect(await prisma.notificationOutbox.findMany({ where: { restaurantId }, orderBy: { createdAt: "asc" } })).toEqual(outboxBefore);
   });
 
   it.each([6, 12])(

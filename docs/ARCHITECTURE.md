@@ -195,7 +195,13 @@ Ogni richiesta legge l'intero periodo in una sola transazione `REPEATABLE READ`:
 
 ### Notifications
 
-Definisce interfacce astratte per WhatsApp ed email, outbox, tentativi, retry e strategia di fallback o invio parallelo.
+Il modulo è diviso in `domain`, `application` e `infrastructure`. Il dominio contiene eventi, payload/template V1, strategie, reminder, idempotenza SHA-256, state machine e retry senza Prisma o framework. L'application contiene porte per provider, clock, sleeper, writer transazionale e repository worker. L'infrastructure implementa writer Prisma transaction-scoped, claim PostgreSQL, receipt persistenti, provider simulati, composizione e CLI.
+
+I sei mutation path Reservations generano il correlation ID prima della transazione `SERIALIZABLE` e lo riusano per audit e outbox. Mutazione, audit, supersede/cancel e nuove leg condividono il commit. Un errore outbox provoca rollback business; nessun provider viene chiamato in tale transazione.
+
+Il worker terminalizza prima del claim fino a 100 leg `PENDING` scadute, con ordinamento deterministico e `FOR UPDATE SKIP LOCKED`, senza creare attempt o fallback. Recupera poi le lease scadute e acquisisce fino a 25 leg globali, massimo 5 per tenant, tramite una breve transazione `FOR UPDATE SKIP LOCKED`. La lease dura due minuti. L'attempt viene aperto in una seconda transazione breve, il provider simulato viene chiamato senza lock o transazione aperta e la finalizzazione usa una terza transazione breve condizionata dal lease token. Receipt persistenti per `(restaurantId, idempotencyKey)` rendono logico l'exactly-once simulato anche dopo crash; l'esecuzione tecnica resta at-least-once.
+
+Ogni provider call riceve un `AbortSignal` creato dal worker e ha una deadline applicativa iniettabile di 30 secondi, inferiore alla lease; timeout e shutdown abortiscono il provider. Il batch elabora al massimo cinque leg contemporaneamente, così i canali paralleli restano indipendenti, e dopo lo shutdown non avvia le leg claimed ancora in coda. `completedAt`, expiry e backoff 1/5/15 minuti sono calcolati dal clock dopo la conclusione della call. Fallback email e terminalizzazione WhatsApp condividono la stessa transazione. Le leg parallele hanno lease, retry e idempotenza indipendenti. Il read model dashboard esegue una sola query bounded tenant-scoped e proietta soltanto warning minimizzati del gruppo rilevante più recente.
 
 ## 6. Regole di dipendenza
 
@@ -445,16 +451,18 @@ Il repository di dettaglio seleziona un singolo record per sorgente, UUID e tena
 4. ricalcolo della capacità escludendo la prenotazione corrente;
 5. clear logico dell'assegnazione attiva soltanto se cambia data, servizio o orario;
 6. singolo incremento versione e audit atomici; `UPDATED` precede `UNASSIGNED` e condivide il correlation ID;
-7. evento di notifica dopo il commit.
+7. audit, supersede e nuovi intent di notifica nello stesso commit della mutazione;
+8. provider simulato eseguito dal worker dopo il commit.
 
 ### 12.4 Cancellazione
 
 1. autorizzazione e controllo cutoff;
 2. lock prenotazione, configurazione tenant e capacità e cambio stato a `CANCELLED`;
 3. conservazione dell'ultima assegnazione senza `UNASSIGNED`;
-4. audit atomico della cancellazione;
+4. audit, cancellazione/supersede delle leg non terminali e nuovo evento `RESERVATION_CANCELLED` nello stesso commit;
 5. disponibilità dei coperti immediatamente ripristinata dopo il commit;
-6. nessuna eliminazione fisica.
+6. provider eseguito soltanto dal worker dopo il commit;
+7. nessuna eliminazione fisica.
 
 ### 12.5 Assegnazione
 
@@ -464,7 +472,7 @@ M10-A, approvata tecnicamente da Work, espone una lettura strettamente read-only
 
 M10-B integra reschedule, cancellazione e impatto delle configurazioni. Data, servizio o orario modificati rimuovono atomicamente l'assegnazione; gli altri campi la conservano. La cancellazione la conserva come storia ma la esclude dagli impatti. Il motore M9-D conta una prenotazione una sola volta, richiede conferma su assegnazioni future coinvolte e preserva i riferimenti come grandfathered.
 
-M10-C, approvata da Work e merged su `main` con la PR #12, completa la dashboard operativa: preferenza e collocazione finale sono proiezioni distinte, `DA ASSEGNARE` deriva dall'assenza dell'assegnazione attiva, filtri e riepiloghi sono calcolati server-side e le cancellate non entrano nei conteggi operativi. Il pannello usa esclusivamente GET/PUT/DELETE M10-A, mostra min/max posti come informazione, conserva riferimenti grandfathered e, su `VERSION_CONFLICT`, non ripete la scelta umana ma richiede una rilettura esplicita. Con M10-A e M10-B già merged su `main` con la PR #11, M10 è completata e merged; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è la milestone successiva e non è ancora iniziata.
+M10-C, approvata da Work e merged su `main` con la PR #12, completa la dashboard operativa: preferenza e collocazione finale sono proiezioni distinte, `DA ASSEGNARE` deriva dall'assenza dell'assegnazione attiva, filtri e riepiloghi sono calcolati server-side e le cancellate non entrano nei conteggi operativi. Il pannello usa esclusivamente GET/PUT/DELETE M10-A, mostra min/max posti come informazione, conserva riferimenti grandfathered e, su `VERSION_CONFLICT`, non ripete la scelta umana ma richiede una rilettura esplicita. Con M10-A e M10-B già merged su `main` con la PR #11, M10 è completata e merged; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è implementata nel working tree ed è in attesa di Quality Gate Work.
 
 ### 12.6 Esportazioni
 

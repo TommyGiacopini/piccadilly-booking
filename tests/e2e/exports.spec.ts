@@ -60,6 +60,7 @@ async function createReservation(
       animals: false,
       notes: `Fixture export M11 ${e2eRunId}`,
       verbalConsentConfirmed: true,
+      sendWhatsAppConfirmation: true,
       capacityOverride: false,
       capacityOverrideReason: null,
     },

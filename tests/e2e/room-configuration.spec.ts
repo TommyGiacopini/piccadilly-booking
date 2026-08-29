@@ -129,7 +129,7 @@ test.describe.serial("M9-D sale e tavoli", () => {
     await apply(page.request, { ...proposal, isAvailable: true });
     let reservation: { id: string; status: string; version: number } | undefined;
     try {
-      const created = await page.request.post("/api/staff/reservations", { headers: { origin, "Idempotency-Key": crypto.randomUUID() }, data: { localDate: date, serviceType: service, arrivalTime: "19:00", partySize: 2, roomCode: "sala-1", customerFirstName: e2eReservationFirstName, customerLastName: "Room", customerPhone: "+39000000000", customerEmail: null, highChair: false, stroller: false, accessibility: false, children: false, celiac: false, allergies: null, intolerances: null, celebration: null, animals: false, notes: null, verbalConsentConfirmed: true, capacityOverride: false, capacityOverrideReason: null } });
+      const created = await page.request.post("/api/staff/reservations", { headers: { origin, "Idempotency-Key": crypto.randomUUID() }, data: { localDate: date, serviceType: service, arrivalTime: "19:00", partySize: 2, roomCode: "sala-1", customerFirstName: e2eReservationFirstName, customerLastName: "Room", customerPhone: "+39000000000", customerEmail: null, highChair: false, stroller: false, accessibility: false, children: false, celiac: false, allergies: null, intolerances: null, celebration: null, animals: false, notes: null, verbalConsentConfirmed: true, sendWhatsAppConfirmation: true, capacityOverride: false, capacityOverrideReason: null } });
       expect(created.ok(), await created.text()).toBe(true);
       reservation = (await created.json()).reservation as { id: string; status: string; version: number };
       const impact = await apply(page.request, proposal);

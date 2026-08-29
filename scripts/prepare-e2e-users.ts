@@ -54,11 +54,13 @@ export async function prepareE2eTenant(
           rooms: { include: { diningTables: true } },
           publicSettings: true,
           publicContents: true,
+          notificationSettings: true,
         },
       });
       if (
         !template?.bookingSettings ||
         !template.publicSettings ||
+        !template.notificationSettings ||
         template.rooms.length === 0 ||
         template.weeklySchedules.length === 0
       ) {
@@ -83,6 +85,12 @@ export async function prepareE2eTenant(
             template.bookingSettings.dinnerModificationCutoff,
           managementLinkDurationHours:
             template.bookingSettings.managementLinkDurationHours,
+        },
+      });
+      await transaction.restaurantNotificationSettings.create({
+        data: {
+          restaurantId,
+          strategy: "WHATSAPP_ONLY",
         },
       });
       await transaction.weeklyServiceSchedule.createMany({

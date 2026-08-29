@@ -45,6 +45,22 @@ La notifica a un numero interno è indipendente dall'eventuale gruppo WhatsApp. 
 
 Retry e richieste al provider devono essere idempotenti. Nessun token provider o contenuto sensibile completo viene scritto nei log.
 
+## Estensione vincolante M12
+
+Ogni riga outbox è una singola delivery leg e conserva tenant, reservation/version, event group/type, origine, attore facoltativo, canale, strategy snapshot, sola destination della leg, payload V1 minimizzato, scheduling/expiry, stato, conteggi, policy retry, chiave SHA-256, correlation ID e lease. `NotificationAttempt` è append-oriented e non contiene destination, payload o messaggio. `NotificationSimulationReceipt`, con chiave primaria `(restaurantId, idempotencyKey)`, non contiene PII e dimostra l'idempotenza persistente.
+
+Gli stati ammessi sono `PENDING → CLAIMED`, `PENDING → CANCELLED` e, da `CLAIMED`, `SUCCEEDED`, `PENDING`, `DEAD` o `CANCELLED`. I terminali sono immutabili. Un cancel osservato prima della provider call evita l'invio; se arriva durante la call, un successo resta `SUCCEEDED` e un fallimento diventa `CANCELLED` senza retry. Questa è una limitazione fisica inevitabile: una chiamata già iniziata non può essere ritirata.
+
+Prima del claim, uno sweep PostgreSQL breve usa `FOR UPDATE SKIP LOCKED` e ordine expiry/creazione/UUID per terminalizzare al massimo 100 leg `PENDING` scadute con `DEAD/EXPIRED`, senza provider call, attempt o fallback. Il claim usa lo stesso meccanismo di lock, ordinamento per disponibilità/scheduling/creazione/UUID, batch 25, massimo 5 leg per tenant e lease di due minuti. Un gruppo lifecycle successivo non supera un precedente già `CLAIMED`; un reminder futuro non blocca gli eventi immediati. Una lease scaduta senza attempt torna pending; con attempt incompleto marca `ABANDONED/WORKER_INTERRUPTED` e poi requeue o cancel deterministicamente.
+
+La provider call avviene fuori dalla transaction e fuori dal row lock: claim, apertura attempt e finalize sono transazioni brevi separate. La porta riceve un `AbortSignal` creato server-side; una deadline applicativa iniettabile di 30 secondi abortisce realmente il provider e classifica il timeout come transient sanitizzato. SIGINT/SIGTERM abortiscono le call iniziate, non avviano quelle claimed ancora in coda e lasciano attempt incompleti recuperabili dalla lease. Il batch processa al massimo cinque leg contemporaneamente, mantenendo indipendenti i canali paralleli. Il retry V1 usa 1, 5 e 15 minuti dal `completedAt` letto dopo la call, massimo quattro attempt, senza jitter. Timeout è transient; permanent non viene ritentato; completion o retry uguale o oltre expiry rende la leg dead.
+
+Con fallback, WhatsApp esaurisce i transient retry, mentre un permanent crea subito la leg email; la creazione email e la terminalizzazione primary sono atomiche. Email mancante produce una leg `DEAD/DESTINATION_UNAVAILABLE` senza attempt. In parallelo le due leg nascono atomicamente, se disponibili, e hanno claim/retry indipendenti; l'esito globale è derivato senza tabella gruppo.
+
+La receipt garantisce: stessa chiave e stesso payload hash restituiscono la medesima provider reference e `deduplicated=true`; hash differente produce `IDEMPOTENCY_CONFLICT`. Dopo crash fra receipt e finalize, la lease recovery abbandona l'attempt, il replay riusa la receipt e completa l'outbox con una sola receipt. La garanzia è at-least-once tecnica ed exactly-once logica nel simulatore, non exactly-once fisica per i provider reali futuri.
+
+M12 contiene esclusivamente simulatori WhatsApp/email con default success deterministico e nessun I/O di rete. Non introduce retention: policy di retention/redazione e validazione dei provider reali sono gate obbligatori prima di M14/produzione.
+
 ## Conseguenze
 
 ### Positive

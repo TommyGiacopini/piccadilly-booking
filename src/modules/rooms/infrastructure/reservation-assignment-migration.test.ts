@@ -33,11 +33,13 @@ const previousMigrationHashes: Record<string, string> = {
     "AE1CCC3D7AF2787E890D2996389A2C5790ABFF82C51C35440A5D46F179311D65",
   "20260813123000_add_public_settings_and_content":
     "C2CA01936D3E09749D7F1A59CEE709902FA5AD8EFD356B6CCB2AB23C8E305521",
+  "20260813190000_add_reservation_assignments":
+    "8C8D1E9D7E9AD185B85A008072F68C1DCE8F457250FDE0751059D831CB771A04",
 };
 
 describe("M10-A additive migration", () => {
-  it("adds exactly one migration and leaves all eleven predecessors byte-identical", () => {
-    expect(migrationNames).toHaveLength(12);
+  it("preserves the M10 migration and all eleven predecessors after additive M12", () => {
+    expect(migrationNames).toHaveLength(13);
     expect(assignmentMigrations).toHaveLength(1);
 
     for (const [name, expectedHash] of Object.entries(

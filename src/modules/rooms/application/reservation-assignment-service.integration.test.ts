@@ -409,6 +409,12 @@ describe.sequential(
           { restaurantId: otherRestaurantId, ...bookingSettingsData() },
         ],
       });
+      await prisma.restaurantNotificationSettings.createMany({
+        data: [
+          { restaurantId, strategy: "WHATSAPP_ONLY" },
+          { restaurantId: otherRestaurantId, strategy: "WHATSAPP_ONLY" },
+        ],
+      });
       await prisma.weeklyServiceSchedule.createMany({
         data: [
           ...weeklySchedules(restaurantId),
@@ -567,6 +573,15 @@ describe.sequential(
 
     beforeEach(async () => {
       const tenant = { in: [restaurantId, otherRestaurantId] };
+      await prisma.notificationSimulationReceipt.deleteMany({
+        where: { restaurantId: tenant },
+      });
+      await prisma.notificationAttempt.deleteMany({
+        where: { restaurantId: tenant },
+      });
+      await prisma.notificationOutbox.deleteMany({
+        where: { restaurantId: tenant },
+      });
       await prisma.reservationAssignmentTable.deleteMany({
         where: { restaurantId: tenant },
       });
@@ -627,6 +642,15 @@ describe.sequential(
 
     afterAll(async () => {
       const tenant = { in: [restaurantId, otherRestaurantId] };
+      await prisma.notificationSimulationReceipt.deleteMany({
+        where: { restaurantId: tenant },
+      });
+      await prisma.notificationAttempt.deleteMany({
+        where: { restaurantId: tenant },
+      });
+      await prisma.notificationOutbox.deleteMany({
+        where: { restaurantId: tenant },
+      });
       await prisma.reservationAssignmentTable.deleteMany({
         where: { restaurantId: tenant },
       });
@@ -701,6 +725,9 @@ describe.sequential(
       await prisma.restaurantBookingSettings.deleteMany({
         where: { restaurantId: tenant },
       });
+      await prisma.restaurantNotificationSettings.deleteMany({
+        where: { restaurantId: tenant },
+      });
       await prisma.restaurant.deleteMany({ where: { id: tenant } });
       await prisma.$disconnect();
       if (originalAppEnvironment === undefined) {
@@ -713,6 +740,55 @@ describe.sequential(
       } else {
         process.env.AUTH_RATE_LIMIT_SECRET = originalAuthRateLimitSecret;
       }
+    });
+
+    it("does not emit lifecycle notifications or replace reminders for assignment-only version increments", async () => {
+      const reservation = await createReservation();
+      const reminder = await prisma.notificationOutbox.create({
+        data: {
+          restaurantId,
+          reservationId: reservation.id,
+          eventGroupId: randomUUID(),
+          reservationVersion: 1,
+          eventType: "RESERVATION_REMINDER",
+          source: "STAFF",
+          actorUserId: staffId,
+          channel: "WHATSAPP",
+          strategy: "WHATSAPP_ONLY",
+          destination: reservation.customerPhone,
+          payloadVersion: 1,
+          payload: {
+            schemaVersion: 1,
+            templateKey: "RESERVATION_REMINDER",
+            templateVersion: 1,
+            locale: "IT",
+            params: {
+              customerFirstName: reservation.customerFirstName,
+              restaurantName: "M10-A Restaurant Fixture",
+              localDate: futureDate,
+              serviceType: "DINNER",
+              arrivalTime: "19:00",
+              partySize: reservation.partySize,
+            },
+          },
+          scheduledAt: new Date("2099-06-16T14:00:00.000Z"),
+          availableAt: new Date("2099-06-16T14:00:00.000Z"),
+          expiresAt: new Date("2099-06-16T17:00:00.000Z"),
+          idempotencyKey: "a".repeat(64),
+          originCorrelationId: randomUUID(),
+        },
+      });
+
+      const assigned = await putReservationAssignment({
+        actor: staffActor,
+        reservationId: reservation.id,
+        rawPayload: putPayload(1),
+        now,
+      });
+
+      expect(assigned.reservationVersion).toBe(2);
+      await expect(prisma.notificationOutbox.findMany({ where: { reservationId: reservation.id } })).resolves.toEqual([reminder]);
+      await expect(prisma.notificationOutbox.count({ where: { reservationId: reservation.id, eventType: "RESERVATION_UPDATED" } })).resolves.toBe(0);
     });
 
     it("allows Staff first assignment and exposes preference, seats and minimized audit without materializing", async () => {

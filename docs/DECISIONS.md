@@ -247,7 +247,7 @@ Riferimento: `docs/adr/006-audit-architecture-minimization.md`.
 
 ### D-037 — Fondazione dell'assegnazione manuale di sala e tavoli
 
-M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; entrambe sono merged su `main` con la PR #11. M10-C implementa la UI operativa, è approvata da Work ed è merged su `main` con la PR #12. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è la milestone successiva e non è ancora iniziata.
+M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; entrambe sono merged su `main` con la PR #11. M10-C implementa la UI operativa, è approvata da Work ed è merged su `main` con la PR #12. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è implementata nel working tree ed è in attesa di Quality Gate Work.
 
 Le decisioni vincolanti approvate sono formalizzate come segue:
 
@@ -283,6 +283,18 @@ Il buffer completo viene validato prima della risposta. L'audit `EXPORT` è scri
 Le route POST Node.js sono riservate a Staff/Admin attivi, same-origin e senza cambio password obbligatorio; accettano JSON strict che non include tenant, attore, ruolo, correlation ID o filename. I file usano `private, no-store`, `nosniff`, lunghezza e nome ASCII deterministico. Noto Sans è incorporato da un asset server-side del repository ufficiale `google/fonts` al commit vincolato. L'Excel contiene esattamente 24 colonne, celle temporali tipizzate e neutralizzazione preventiva della formula injection; non contiene formule, hyperlink, collegamenti esterni, macro o celle unite.
 
 La proiezione M9-F include categoria `EXPORT` e le due azioni con outcome SUCCESS/FAILURE, preserva il tenant filter e mostra soltanto i metadata autorizzati. PDF ed Excel includono i dati operativi espressamente previsti, comprese le note interne per Staff/Admin, ma escludono email, identificativi, token, hash, consensi, override e dati audit.
+
+### D-039 — Outbox e provider simulati M12
+
+M12 introduce un transactional outbox in cui ogni riga rappresenta una delivery leg per canale. Reservation, audit, supersede/cancel e pianificazione condividono la transazione `SERIALIZABLE`; la persistenza outbox fallita annulla la mutazione, mentre ogni fallimento provider successivo al commit lascia invariato lo stato business. I sei mutation path usano un correlation ID generato server-side prima della transazione.
+
+La garanzia è intent durevole atomico, processing tecnico at-least-once ed exactly-once logico per leg tramite chiave SHA-256 e receipt simulata persistente. Un replay con la stessa chiave e lo stesso hash restituisce la medesima provider reference; un hash differente produce `IDEMPOTENCY_CONFLICT`. M12 non promette exactly-once fisico.
+
+Il worker usa batch globale 25, massimo 5 leg per tenant, lease di due minuti e `FOR UPDATE SKIP LOCKED` in transazioni brevi. Prima del claim uno sweep concorrente e idempotente terminalizza al massimo 100 leg `PENDING` scadute, senza attempt o fallback. Provider e renderer operano fuori transazione; fino a cinque leg vengono processate contemporaneamente. Ogni call riceve un `AbortSignal` server-side e una deadline iniettabile esatta di 30 secondi, usata anche per rendere bounded lo shutdown senza avviare task queued. Gli attempt sono append-oriented; lease scadute abbandonano l'attempt incompleto e requeue/cancel sono condizionati dal lease token. I retry V1 sono 1, 5 e 15 minuti dal completamento reale della call, massimo quattro attempt, senza jitter; completion o retry uguale o oltre expiry terminalizza con `EXPIRED`.
+
+La strategia persistita per ristorante viene copiata su ogni leg: WhatsApp soltanto, WhatsApp con fallback email, oppure parallelo. Il fallback nasce atomicamente con la terminalizzazione del primary; le leg parallele sono indipendenti. Il flag telefonico sopprime soltanto la confirmation WhatsApp iniziale e partecipa all'idempotenza della richiesta. Il reminder a esattamente tre ore è incluso, a meno di tre ore è escluso.
+
+M12 include soltanto provider simulati deterministici, senza rete, SDK, segreti o selezione reale. Payload, failure e warning dashboard sono minimizzati. Non esiste un job di retention: la relativa policy è un gate obbligatorio prima di M14/produzione. Riferimento: ADR 005.
 
 ## 3. Decisioni reversibili
 

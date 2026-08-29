@@ -253,6 +253,15 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
   });
 
   beforeEach(async () => {
+    await prisma.notificationSimulationReceipt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationAttempt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationOutbox.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
     await prisma.serviceRoomAvailability.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -325,6 +334,15 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
   });
 
   afterAll(async () => {
+    await prisma.notificationSimulationReceipt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationAttempt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationOutbox.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
     await prisma.serviceRoomAvailability.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -357,6 +375,124 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
       where: { id: { in: [restaurantId, otherRestaurantId] } },
     });
     await prisma.$disconnect();
+  });
+
+  it("projects tenant-scoped latest notification health without delivery details", async () => {
+    const ownReservations = await prisma.reservation.findMany({
+      where: { restaurantId, status: "CONFIRMED" },
+      orderBy: { id: "asc" },
+    });
+    const otherReservation = await prisma.reservation.findFirstOrThrow({
+      where: { restaurantId: otherRestaurantId },
+    });
+    const partialId = ownReservations[0]!.id;
+    const deadId = ownReservations[1]!.id;
+    const common = {
+      source: "PHONE" as const,
+      actorUserId: userId,
+      strategy: "WHATSAPP_AND_EMAIL_PARALLEL" as const,
+      payloadVersion: 1,
+      payload: {
+        schemaVersion: 1,
+        templateKey: "RESERVATION_UPDATED",
+        templateVersion: 1,
+        locale: "IT",
+        params: {
+          customerFirstName: "Cliente",
+          restaurantName: "M10-C Demo",
+          localDate,
+          serviceType: "DINNER",
+          arrivalTime: "19:00",
+          partySize: 2,
+        },
+      },
+      scheduledAt: now,
+      availableAt: now,
+      expiresAt: new Date(now.getTime() + 86_400_000),
+      attemptCount: 1,
+      maxAttempts: 4,
+      retryPolicyVersion: 1,
+      originCorrelationId: randomUUID(),
+      terminalAt: now,
+    };
+    const partialGroup = randomUUID();
+    await prisma.notificationOutbox.createMany({
+      data: [
+        {
+          ...common,
+          restaurantId,
+          reservationId: partialId,
+          eventGroupId: randomUUID(),
+          reservationVersion: 1,
+          eventType: "RESERVATION_CONFIRMED",
+          channel: "WHATSAPP",
+          destination: "+39000000000",
+          status: "DEAD",
+          terminalFailureCode: "RETRY_EXHAUSTED",
+          idempotencyKey: "1".repeat(64),
+          createdAt: new Date(now.getTime() - 10_000),
+        },
+        {
+          ...common,
+          restaurantId,
+          reservationId: partialId,
+          eventGroupId: partialGroup,
+          reservationVersion: 2,
+          eventType: "RESERVATION_UPDATED",
+          channel: "WHATSAPP",
+          destination: "+39000000000",
+          status: "SUCCEEDED",
+          terminalFailureCode: null,
+          idempotencyKey: "2".repeat(64),
+        },
+        {
+          ...common,
+          restaurantId,
+          reservationId: partialId,
+          eventGroupId: partialGroup,
+          reservationVersion: 2,
+          eventType: "RESERVATION_UPDATED",
+          channel: "EMAIL",
+          destination: "fake@example.invalid",
+          status: "DEAD",
+          terminalFailureCode: "SIMULATED_PERMANENT_FAILURE",
+          idempotencyKey: "3".repeat(64),
+        },
+        {
+          ...common,
+          restaurantId,
+          reservationId: deadId,
+          eventGroupId: randomUUID(),
+          reservationVersion: 1,
+          eventType: "RESERVATION_CONFIRMED",
+          channel: "WHATSAPP",
+          destination: "+39000000000",
+          status: "DEAD",
+          terminalFailureCode: "RETRY_EXHAUSTED",
+          idempotencyKey: "4".repeat(64),
+        },
+        {
+          ...common,
+          restaurantId: otherRestaurantId,
+          reservationId: otherReservation.id,
+          actorUserId: otherUserId,
+          eventGroupId: randomUUID(),
+          reservationVersion: 1,
+          eventType: "RESERVATION_CONFIRMED",
+          channel: "WHATSAPP",
+          destination: "+39000000000",
+          status: "DEAD",
+          terminalFailureCode: "RETRY_EXHAUSTED",
+          idempotencyKey: "5".repeat(64),
+        },
+      ],
+    });
+
+    const dashboard = await getDashboardDay({ restaurantId, rawDate: localDate, now });
+    expect(dashboard.reservations.find((row) => row.id === partialId)?.notificationHealth).toBe("PARTIAL_SUCCESS");
+    expect(dashboard.reservations.find((row) => row.id === deadId)?.notificationHealth).toBe("NOT_DELIVERED");
+    expect(JSON.stringify(dashboard.reservations.map((row) => row.notificationHealth))).not.toMatch(/destination|payload|provider|attempt/iu);
+    expect(dashboard.reservations.some((row) => row.id === otherReservation.id)).toBe(false);
   });
 
   it("projects assignment state, keeps preference separate and aggregates final rooms", async () => {

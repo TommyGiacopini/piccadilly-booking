@@ -87,12 +87,68 @@ enum PublicContentKey {
   MANAGEMENT_PAGE_INTRO
 }
 
+enum NotificationEventType {
+  RESERVATION_CONFIRMED
+  RESERVATION_UPDATED
+  RESERVATION_CANCELLED
+  RESERVATION_REMINDER
+}
+
+enum NotificationChannel {
+  WHATSAPP
+  EMAIL
+}
+
+enum NotificationStrategy {
+  WHATSAPP_ONLY
+  WHATSAPP_WITH_EMAIL_FALLBACK
+  WHATSAPP_AND_EMAIL_PARALLEL
+}
+
+enum NotificationOutboxStatus {
+  PENDING
+  CLAIMED
+  SUCCEEDED
+  DEAD
+  CANCELLED
+}
+
+enum NotificationAttemptOutcome {
+  SUCCESS
+  TRANSIENT_FAILURE
+  PERMANENT_FAILURE
+  ABANDONED
+}
+
+enum NotificationProviderKind {
+  SIMULATED_WHATSAPP
+  SIMULATED_EMAIL
+}
+
+enum NotificationFailureCode {
+  SIMULATED_TRANSIENT_FAILURE
+  SIMULATED_PERMANENT_FAILURE
+  SIMULATED_TIMEOUT
+  DESTINATION_UNAVAILABLE
+  PROVIDER_UNAVAILABLE
+  PROVIDER_TIMEOUT
+  IDEMPOTENCY_CONFLICT
+  RETRY_EXHAUSTED
+  EXPIRED
+  WORKER_INTERRUPTED
+}
+
+enum NotificationCancellationReason {
+  SUPERSEDED
+  RESERVATION_CANCELLED
+}
+
 model Restaurant {
-  id                          String                       @id @default(uuid()) @db.Uuid
+  id                          String                          @id @default(uuid()) @db.Uuid
   name                        String
   timezone                    String
-  createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt                   DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt                   DateTime                        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                   DateTime                        @updatedAt @map("updated_at") @db.Timestamptz(3)
   users                       User[]
   rooms                       Room[]
   weeklySchedules             WeeklyServiceSchedule[]
@@ -107,6 +163,10 @@ model Restaurant {
   serviceInstances            ServiceInstance[]
   publicSettings              RestaurantPublicSettings?
   publicContents              PublicContent[]
+  notificationSettings        RestaurantNotificationSettings?
+  notificationOutbox          NotificationOutbox[]
+  notificationAttempts        NotificationAttempt[]
+  notificationReceipts        NotificationSimulationReceipt[]
 
   @@map("restaurants")
 }
@@ -123,6 +183,16 @@ model RestaurantPublicSettings {
 
   @@index([restaurantId], map: "restaurant_public_settings_restaurant_idx")
   @@map("restaurant_public_settings")
+}
+
+model RestaurantNotificationSettings {
+  restaurantId String               @id @map("restaurant_id") @db.Uuid
+  strategy     NotificationStrategy @default(WHATSAPP_ONLY)
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  restaurant   Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+
+  @@map("restaurant_notification_settings")
 }
 
 model PublicContent {
@@ -302,6 +372,7 @@ model User {
   auditEvents            AuditEvent[]            @relation("AuditEventActor")
   initialAssignments     ReservationAssignment[] @relation("ReservationAssignmentAssignedBy")
   updatedAssignments     ReservationAssignment[] @relation("ReservationAssignmentUpdatedBy")
+  notificationOutbox     NotificationOutbox[]    @relation("NotificationOutboxActor")
 
   @@unique([restaurantId, username], map: "users_restaurant_id_username_key")
   @@unique([restaurantId, id], map: "users_restaurant_id_id_key")
@@ -372,6 +443,7 @@ model Reservation {
   managementToken        ReservationManagementToken?
   auditEvents            ReservationAuditEvent[]
   assignment             ReservationAssignment?
+  notificationOutbox     NotificationOutbox[]
 
   @@unique([restaurantId, id], map: "reservations_restaurant_id_id_key")
   @@index([restaurantId, localDate, serviceType, status, arrivalTime], map: "reservations_capacity_lookup_idx")
@@ -508,4 +580,90 @@ model AuditEvent {
   @@index([restaurantId, category, action, createdAt], map: "audit_events_category_action_idx")
   @@index([actorUserId, createdAt], map: "audit_events_actor_created_idx")
   @@map("audit_events")
+}
+
+model NotificationOutbox {
+  id                  String                          @id @default(uuid()) @db.Uuid
+  restaurantId        String                          @map("restaurant_id") @db.Uuid
+  reservationId       String                          @map("reservation_id") @db.Uuid
+  eventGroupId        String                          @map("event_group_id") @db.Uuid
+  reservationVersion  Int                             @map("reservation_version")
+  eventType           NotificationEventType           @map("event_type")
+  source              ReservationOrigin
+  actorUserId         String?                         @map("actor_user_id") @db.Uuid
+  channel             NotificationChannel
+  strategy            NotificationStrategy
+  destination         String?                         @db.VarChar(254)
+  payloadVersion      Int                             @default(1) @map("payload_version") @db.SmallInt
+  payload             Json                            @db.JsonB
+  scheduledAt         DateTime                        @map("scheduled_at") @db.Timestamptz(3)
+  availableAt         DateTime                        @map("available_at") @db.Timestamptz(3)
+  expiresAt           DateTime                        @map("expires_at") @db.Timestamptz(3)
+  status              NotificationOutboxStatus        @default(PENDING)
+  attemptCount        Int                             @default(0) @map("attempt_count")
+  maxAttempts         Int                             @default(4) @map("max_attempts")
+  retryPolicyVersion  Int                             @default(1) @map("retry_policy_version") @db.SmallInt
+  idempotencyKey      String                          @map("idempotency_key") @db.Char(64)
+  originCorrelationId String                          @map("origin_correlation_id") @db.Uuid
+  claimedAt           DateTime?                       @map("claimed_at") @db.Timestamptz(3)
+  leaseToken          String?                         @map("lease_token") @db.Uuid
+  leaseExpiresAt      DateTime?                       @map("lease_expires_at") @db.Timestamptz(3)
+  cancelRequestedAt   DateTime?                       @map("cancel_requested_at") @db.Timestamptz(3)
+  cancellationReason  NotificationCancellationReason? @map("cancellation_reason")
+  terminalAt          DateTime?                       @map("terminal_at") @db.Timestamptz(3)
+  terminalFailureCode NotificationFailureCode?        @map("terminal_failure_code")
+  createdAt           DateTime                        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  restaurant          Restaurant                      @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  reservation         Reservation                     @relation(fields: [restaurantId, reservationId], references: [restaurantId, id], onDelete: Restrict, map: "notification_outbox_restaurant_reservation_fkey")
+  actorUser           User?                           @relation("NotificationOutboxActor", fields: [restaurantId, actorUserId], references: [restaurantId, id], onDelete: Restrict, map: "notification_outbox_restaurant_actor_fkey")
+  attempts            NotificationAttempt[]
+  simulationReceipt   NotificationSimulationReceipt?
+
+  @@unique([restaurantId, id], map: "notification_outbox_restaurant_id_key")
+  @@unique([restaurantId, idempotencyKey], map: "notification_outbox_restaurant_idempotency_key")
+  @@unique([restaurantId, reservationId, reservationVersion, eventType, channel], map: "notification_outbox_logical_delivery_key")
+  @@index([status, availableAt, scheduledAt, createdAt, id], map: "notification_outbox_work_eligibility_idx")
+  @@index([status, leaseExpiresAt], map: "notification_outbox_lease_recovery_idx")
+  @@index([restaurantId, reservationId, createdAt], map: "notification_outbox_restaurant_reservation_created_idx")
+  @@index([restaurantId, eventGroupId, status], map: "notification_outbox_restaurant_group_status_idx")
+  @@map("notification_outbox")
+}
+
+model NotificationAttempt {
+  id                   String                      @id @default(uuid()) @db.Uuid
+  restaurantId         String                      @map("restaurant_id") @db.Uuid
+  outboxId             String                      @map("outbox_id") @db.Uuid
+  attemptNumber        Int                         @map("attempt_number")
+  providerKind         NotificationProviderKind    @map("provider_kind")
+  attemptCorrelationId String                      @map("attempt_correlation_id") @db.Uuid
+  startedAt            DateTime                    @map("started_at") @db.Timestamptz(3)
+  completedAt          DateTime?                   @map("completed_at") @db.Timestamptz(3)
+  outcome              NotificationAttemptOutcome?
+  failureCode          NotificationFailureCode?    @map("failure_code")
+  providerReference    String?                     @map("provider_reference") @db.VarChar(96)
+  deduplicated         Boolean?
+  createdAt            DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  restaurant           Restaurant                  @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  outbox               NotificationOutbox          @relation(fields: [restaurantId, outboxId], references: [restaurantId, id], onDelete: Restrict, map: "notification_attempts_restaurant_outbox_fkey")
+
+  @@unique([restaurantId, outboxId, attemptNumber], map: "notification_attempts_logical_attempt_key")
+  @@index([restaurantId, outboxId, createdAt], map: "notification_attempts_restaurant_outbox_created_idx")
+  @@map("notification_attempts")
+}
+
+model NotificationSimulationReceipt {
+  restaurantId      String                   @map("restaurant_id") @db.Uuid
+  idempotencyKey    String                   @map("idempotency_key") @db.Char(64)
+  outboxId          String                   @map("outbox_id") @db.Uuid
+  providerKind      NotificationProviderKind @map("provider_kind")
+  payloadHash       String                   @map("payload_hash") @db.Char(64)
+  providerReference String                   @map("provider_reference") @db.VarChar(96)
+  createdAt         DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  restaurant        Restaurant               @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  outbox            NotificationOutbox       @relation(fields: [restaurantId, outboxId], references: [restaurantId, id], onDelete: Restrict, map: "notification_simulation_receipts_restaurant_outbox_fkey")
+
+  @@id([restaurantId, idempotencyKey], map: "notification_simulation_receipts_pkey")
+  @@unique([restaurantId, outboxId], map: "notification_simulation_receipts_restaurant_outbox_key")
+  @@map("notification_simulation_receipts")
 }

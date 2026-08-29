@@ -24,6 +24,10 @@ import {
 
 type CleanupTransaction = Prisma.TransactionClient;
 type CleanupStep =
+  | "notification-receipts"
+  | "notification-attempts"
+  | "notification-outbox"
+  | "notification-settings"
   | "login-rate-limits"
   | "assignment-tables"
   | "assignments"
@@ -68,6 +72,10 @@ interface E2ePurgeContext {
 
 const TABLE_FINGERPRINTS = [
   ["restaurants", "id <> $1::uuid"],
+  ["restaurant_notification_settings", "restaurant_id <> $1::uuid"],
+  ["notification_outbox", "restaurant_id <> $1::uuid"],
+  ["notification_attempts", "restaurant_id <> $1::uuid"],
+  ["notification_simulation_receipts", "restaurant_id <> $1::uuid"],
   ["restaurant_public_settings", "restaurant_id <> $1::uuid"],
   ["public_contents", "restaurant_id <> $1::uuid"],
   ["rooms", "restaurant_id <> $1::uuid"],
@@ -102,6 +110,10 @@ const TABLE_FINGERPRINTS = [
 
 function emptyDeletedCounts(): Record<CleanupStep, number> {
   return {
+    "notification-receipts": 0,
+    "notification-attempts": 0,
+    "notification-outbox": 0,
+    "notification-settings": 0,
     "login-rate-limits": 0,
     "assignment-tables": 0,
     assignments: 0,
@@ -295,6 +307,10 @@ async function countRunRows(
     await transaction.reservation.count({ where: { restaurantId } }),
     await transaction.reservationAssignment.count({ where: { restaurantId } }),
     await transaction.reservationAssignmentTable.count({ where: { restaurantId } }),
+    await transaction.notificationSimulationReceipt.count({ where: { restaurantId } }),
+    await transaction.notificationAttempt.count({ where: { restaurantId } }),
+    await transaction.notificationOutbox.count({ where: { restaurantId } }),
+    await transaction.restaurantNotificationSettings.count({ where: { restaurantId } }),
     await transaction.reservationAuditEvent.count({ where: { restaurantId } }),
     await transaction.auditEvent.count({ where: { restaurantId } }),
     await transaction.publicReservationRateLimit.count({ where: { restaurantId } }),
@@ -345,6 +361,23 @@ export async function purgeE2eRun(
         deleted[step] = (await operation()).count;
         await options.afterStep?.(step);
       }
+
+      await remove("notification-receipts", () =>
+        transaction.notificationSimulationReceipt.deleteMany({
+          where: { restaurantId },
+        }),
+      );
+      await remove("notification-attempts", () =>
+        transaction.notificationAttempt.deleteMany({ where: { restaurantId } }),
+      );
+      await remove("notification-outbox", () =>
+        transaction.notificationOutbox.deleteMany({ where: { restaurantId } }),
+      );
+      await remove("notification-settings", () =>
+        transaction.restaurantNotificationSettings.deleteMany({
+          where: { restaurantId },
+        }),
+      );
 
       await remove("login-rate-limits", () =>
         loginRateLimitHashes.length === 0

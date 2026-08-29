@@ -116,6 +116,7 @@ const actionLabels: Record<AuditListAction, string> = {
   PUBLIC_CONTACTS_UPDATED: "Contatti pubblici aggiornati",
   PUBLIC_CONTENT_UPDATED: "Contenuti pubblici aggiornati",
   MANAGEMENT_LINK_DURATION_UPDATED: "Durata link aggiornata",
+  NOTIFICATION_STRATEGY_UPDATED: "Strategia notifiche aggiornata",
   PDF_EXPORT_REQUESTED: "Esportazione PDF richiesta",
   EXCEL_EXPORT_REQUESTED: "Esportazione Excel richiesta",
 };
@@ -257,6 +258,11 @@ const reservationRules = [
   rule("requests.celebrationPresent", "Ricorrenza presente", bool),
   rule("requests.animals", "Animali", bool),
   rule("requests.notesPresent", "Note presenti", bool),
+  rule(
+    "notification.confirmationWhatsAppRequested",
+    "Conferma WhatsApp richiesta",
+    bool,
+  ),
   rule("capacityOverride", "Override capacità", bool),
 ] as const;
 const reservationAssignmentRules = [
@@ -347,6 +353,19 @@ const publicContentRules = [
   rule("keys", "Chiavi", enumArrayParser(PUBLIC_CONTENT_KEYS)),
 ] as const;
 const durationRules = [rule("managementLinkDurationHours", "Durata link (ore)", positiveCount)] as const;
+const notificationStrategyRules = [
+  rule(
+    "strategy",
+    "Strategia",
+    scalarParser(
+      z.enum([
+        "WHATSAPP_ONLY",
+        "WHATSAPP_WITH_EMAIL_FALLBACK",
+        "WHATSAPP_AND_EMAIL_PARALLEL",
+      ]),
+    ),
+  ),
+] as const;
 const exportCommonMetadataRules = [
   rule("format", "Formato", scalarParser(z.enum(["PDF", "EXCEL"]))),
   rule("mode", "Modalità", scalarParser(z.enum(["DAY", "MONTH", "RANGE"]))),
@@ -429,6 +448,7 @@ const stateRulesByAction: Record<AuditAction, readonly FieldRule[]> = {
   PUBLIC_CONTACTS_UPDATED: publicContactRules,
   PUBLIC_CONTENT_UPDATED: publicContentRules,
   MANAGEMENT_LINK_DURATION_UPDATED: durationRules,
+  NOTIFICATION_STRATEGY_UPDATED: notificationStrategyRules,
   PDF_EXPORT_REQUESTED: [],
   EXCEL_EXPORT_REQUESTED: [],
 };

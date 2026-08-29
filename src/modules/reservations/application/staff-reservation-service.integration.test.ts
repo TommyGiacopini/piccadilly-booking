@@ -119,6 +119,7 @@ function phonePayload(overrides: Record<string, unknown> = {}) {
     animals: false,
     notes: "Nota esclusivamente fittizia M8",
     verbalConsentConfirmed: true,
+    sendWhatsAppConfirmation: true,
     capacityOverride: false,
     capacityOverrideReason: null,
     ...overrides,
@@ -141,6 +142,34 @@ function createPhone(
     now,
     config,
   });
+}
+
+async function withRejectedStaffNotificationInsert(
+  callback: () => Promise<void>,
+): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    CREATE FUNCTION m12_test_reject_staff_notification() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      RAISE EXCEPTION 'synthetic M12 staff notification failure';
+    END;
+    $$
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TRIGGER m12_test_reject_staff_notification_trigger
+    BEFORE INSERT ON notification_outbox
+    FOR EACH ROW EXECUTE FUNCTION m12_test_reject_staff_notification()
+  `);
+  try {
+    await callback();
+  } finally {
+    await prisma.$executeRawUnsafe(
+      "DROP TRIGGER IF EXISTS m12_test_reject_staff_notification_trigger ON notification_outbox",
+    );
+    await prisma.$executeRawUnsafe(
+      "DROP FUNCTION IF EXISTS m12_test_reject_staff_notification()",
+    );
+  }
 }
 
 function updatePayload(
@@ -220,6 +249,12 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
         { restaurantId: otherRestaurantId, ...bookingSettingsData() },
       ],
     });
+    await prisma.restaurantNotificationSettings.createMany({
+      data: [
+        { restaurantId, strategy: "WHATSAPP_ONLY" },
+        { restaurantId: otherRestaurantId, strategy: "WHATSAPP_ONLY" },
+      ],
+    });
     await prisma.weeklyServiceSchedule.createMany({
       data: [
         ...weeklySchedules(restaurantId),
@@ -274,6 +309,15 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
   });
 
   beforeEach(async () => {
+    await prisma.notificationSimulationReceipt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationAttempt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationOutbox.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
     await prisma.reservationAuditEvent.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -292,9 +336,22 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
         managementLinkDurationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS,
       },
     });
+    await prisma.restaurantNotificationSettings.update({
+      where: { restaurantId },
+      data: { strategy: "WHATSAPP_ONLY" },
+    });
   });
 
   afterAll(async () => {
+    await prisma.notificationSimulationReceipt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationAttempt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationOutbox.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
     await prisma.reservationAuditEvent.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -312,6 +369,9 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
     });
     await prisma.user.deleteMany({
       where: { id: { in: [staffId, adminId, otherStaffId] } },
+    });
+    await prisma.restaurantNotificationSettings.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
     await prisma.restaurant.deleteMany({
       where: { id: { in: [restaurantId, otherRestaurantId] } },
@@ -612,6 +672,98 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
         now,
       }),
     ).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+  });
+
+  it("keeps phone create, Staff update and Staff cancellation atomic with their notification outbox", async () => {
+    await withRejectedStaffNotificationInsert(async () => {
+      await expect(createPhone(staffActor)).rejects.toThrow(
+        "synthetic M12 staff notification failure",
+      );
+    });
+    await expect(prisma.reservation.count({ where: { restaurantId } })).resolves.toBe(0);
+    await expect(prisma.reservationAuditEvent.count({ where: { restaurantId } })).resolves.toBe(0);
+    await expect(prisma.notificationOutbox.count({ where: { restaurantId } })).resolves.toBe(0);
+
+    const created = await createPhone(staffActor);
+    const reservationBefore = await prisma.reservation.findUniqueOrThrow({ where: { id: created.reservation.id } });
+    const auditsBefore = await prisma.reservationAuditEvent.findMany({ where: { reservationId: created.reservation.id }, orderBy: { createdAt: "asc" } });
+    const outboxBefore = await prisma.notificationOutbox.findMany({ where: { reservationId: created.reservation.id }, orderBy: { createdAt: "asc" } });
+    expect(outboxBefore).toHaveLength(2);
+    expect(new Set([auditsBefore[0]?.correlationId, ...outboxBefore.map((row) => row.originCorrelationId)])).toEqual(new Set([auditsBefore[0]?.correlationId]));
+
+    await withRejectedStaffNotificationInsert(async () => {
+      await expect(updateStaffReservation({
+        actor: staffActor,
+        reservationId: created.reservation.id,
+        rawPayload: updatePayload(created.reservation, { customerPhone: "+39 000 000 0891" }),
+        now,
+      })).rejects.toThrow("synthetic M12 staff notification failure");
+    });
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: created.reservation.id } })).toEqual(reservationBefore);
+    expect(await prisma.reservationAuditEvent.findMany({ where: { reservationId: created.reservation.id }, orderBy: { createdAt: "asc" } })).toEqual(auditsBefore);
+    expect(await prisma.notificationOutbox.findMany({ where: { reservationId: created.reservation.id }, orderBy: { createdAt: "asc" } })).toEqual(outboxBefore);
+
+    await withRejectedStaffNotificationInsert(async () => {
+      await expect(cancelStaffReservation({
+        actor: staffActor,
+        reservationId: created.reservation.id,
+        rawPayload: { version: created.reservation.version },
+        now,
+      })).rejects.toThrow("synthetic M12 staff notification failure");
+    });
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: created.reservation.id } })).toEqual(reservationBefore);
+    expect(await prisma.reservationAuditEvent.findMany({ where: { reservationId: created.reservation.id }, orderBy: { createdAt: "asc" } })).toEqual(auditsBefore);
+    expect(await prisma.notificationOutbox.findMany({ where: { reservationId: created.reservation.id }, orderBy: { createdAt: "asc" } })).toEqual(outboxBefore);
+  });
+
+  it.each([
+    ["WHATSAPP_ONLY", []],
+    ["WHATSAPP_WITH_EMAIL_FALLBACK", []],
+    ["WHATSAPP_AND_EMAIL_PARALLEL", ["EMAIL"]],
+  ] as const)("applies phone confirmation opt-out under %s without suppressing reminders", async (strategy, confirmationChannels) => {
+    await prisma.restaurantNotificationSettings.update({
+      where: { restaurantId },
+      data: { strategy },
+    });
+    const created = await createPhone(staffActor, { sendWhatsAppConfirmation: false });
+    const rows = await prisma.notificationOutbox.findMany({
+      where: { reservationId: created.reservation.id },
+      orderBy: [{ eventType: "asc" }, { channel: "asc" }],
+    });
+    expect(rows.filter((row) => row.eventType === "RESERVATION_CONFIRMED").map((row) => row.channel)).toEqual(confirmationChannels);
+    expect(rows.filter((row) => row.eventType === "RESERVATION_REMINDER").map((row) => row.channel).sort()).toEqual(
+      strategy === "WHATSAPP_AND_EMAIL_PARALLEL" ? ["EMAIL", "WHATSAPP"] : ["WHATSAPP"],
+    );
+    const audit = await prisma.reservationAuditEvent.findFirstOrThrow({ where: { reservationId: created.reservation.id, action: "CREATED" } });
+    expect(audit.newState).toMatchObject({ notification: { confirmationWhatsAppRequested: false } });
+  });
+
+  it("keeps updates and cancellations enabled after phone confirmation opt-out", async () => {
+    const created = await createPhone(staffActor, { sendWhatsAppConfirmation: false });
+    const updated = await updateStaffReservation({
+      actor: staffActor,
+      reservationId: created.reservation.id,
+      rawPayload: updatePayload(created.reservation, { customerPhone: "+39 000 000 0892" }),
+      now,
+    });
+    await cancelStaffReservation({
+      actor: staffActor,
+      reservationId: created.reservation.id,
+      rawPayload: { version: updated.reservation.version },
+      now,
+    });
+    const eventTypes = await prisma.notificationOutbox.findMany({ where: { reservationId: created.reservation.id }, select: { eventType: true } });
+    expect(eventTypes.some((row) => row.eventType === "RESERVATION_CONFIRMED")).toBe(false);
+    expect(eventTypes.some((row) => row.eventType === "RESERVATION_UPDATED")).toBe(true);
+    expect(eventTypes.some((row) => row.eventType === "RESERVATION_CANCELLED")).toBe(true);
+    expect(eventTypes.some((row) => row.eventType === "RESERVATION_REMINDER")).toBe(true);
+  });
+
+  it("treats phone opt-in true and false as different idempotency requests", async () => {
+    const key = randomUUID();
+    await createPhone(staffActor, { sendWhatsAppConfirmation: false }, key);
+    await expect(createPhone(staffActor, { sendWhatsAppConfirmation: true }, key)).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    await expect(prisma.reservation.count({ where: { restaurantId } })).resolves.toBe(1);
   });
 
   it("preserves an existing override during a contact-only update", async () => {

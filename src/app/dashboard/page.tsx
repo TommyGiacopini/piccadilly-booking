@@ -406,6 +406,16 @@ export default async function DashboardPage({
                       </p>
                     ) : null}
 
+                    {reservation.notificationHealth === "NOT_DELIVERED" ? (
+                      <p className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-black text-red-800" data-testid="notification-not-delivered">
+                        Notifica non consegnata
+                      </p>
+                    ) : reservation.notificationHealth === "PARTIAL_SUCCESS" ? (
+                      <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-black text-amber-900" data-testid="notification-partial-success">
+                        Notifica consegnata soltanto su un canale
+                      </p>
+                    ) : null}
+
                     <section className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4" data-testid="assignment-summary">
                       <p className="text-xs font-black tracking-wider text-zinc-500 uppercase">
                         Assegnazione definitiva

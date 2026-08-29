@@ -133,6 +133,10 @@ export function ReservationCreateForm({
       animals: checked(formData, "animals"),
       notes: stringValue(formData, "notes"),
       verbalConsentConfirmed: checked(formData, "verbalConsentConfirmed"),
+      sendWhatsAppConfirmation: checked(
+        formData,
+        "sendWhatsAppConfirmation",
+      ),
       capacityOverride,
       capacityOverrideReason: capacityOverride
         ? stringValue(formData, "capacityOverrideReason")
@@ -300,6 +304,25 @@ export function ReservationCreateForm({
           <label className="text-sm font-bold text-zinc-800">Note<textarea className={fieldClassName} maxLength={1000} name="notes" rows={2} /></label>
         </div>
       </fieldset>
+
+      <section className="mt-6 rounded-2xl border border-sky-200 bg-sky-50 p-5">
+        <label className="flex items-start gap-3 text-sm font-black text-sky-950">
+          <input
+            className="mt-1 size-4 accent-sky-600"
+            defaultChecked
+            name="sendWhatsAppConfirmation"
+            type="checkbox"
+          />
+          <span>
+            Invia conferma WhatsApp
+            <span className="mt-1 block font-normal leading-5">
+              Riguarda solo la conferma WhatsApp iniziale. I promemoria futuri
+              restano previsti e, con invio parallelo, l’email può partire in
+              modo indipendente.
+            </span>
+          </span>
+        </label>
+      </section>
 
       <section className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
         <label className="flex items-start gap-3 text-sm font-bold text-emerald-950">

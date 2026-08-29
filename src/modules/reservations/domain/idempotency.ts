@@ -39,6 +39,18 @@ export function hashReservationRequest(
   return sha256(canonicalRequest(command));
 }
 
+export function hashPhoneReservationRequest(
+  command: CreateReservationCommand,
+  sendWhatsAppConfirmation: boolean,
+): string {
+  return sha256(
+    JSON.stringify({
+      reservation: canonicalRequest(command),
+      sendWhatsAppConfirmation,
+    }),
+  );
+}
+
 export function classifyIdempotencyRequest(
   storedRequestHash: string,
   currentRequestHash: string,

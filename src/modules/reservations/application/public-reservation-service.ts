@@ -77,6 +77,12 @@ import {
   resolveReservationConfig,
   type ReservationConfig,
 } from "@/shared/config/reservation-config";
+import {
+  planReservationCancelled,
+  planReservationCreated,
+  planReservationUpdated,
+} from "@/modules/notifications/application/enqueue-planner";
+import { createPrismaNotificationWriter } from "@/modules/notifications/infrastructure/prisma-notification-writer";
 
 export interface PublicCreateReservationResult {
   reservation: PublicReservationDto;
@@ -235,6 +241,7 @@ export async function createPublicReservation(input: {
     `public\u0000${idempotencyKey}`,
   );
   const requestHash = hashPublicReservationRequest(command);
+  const correlationId = randomUUID();
 
   return runReservationTransaction(async (client) => {
     await acquireIdempotencyLock(client, input.restaurantId, keyHash);
@@ -378,9 +385,19 @@ export async function createPublicReservation(input: {
       restaurantId: input.restaurantId,
       reservationId: reservation.id,
       action: "CREATED",
-      correlationId: randomUUID(),
+      correlationId,
       previousState: null,
       newState: reservationAuditSnapshot(reservation),
+    });
+    await planReservationCreated({
+      dependencies: {
+        writer: createPrismaNotificationWriter(client),
+        ids: { generate: randomUUID },
+      },
+      reservation,
+      actorUserId: null,
+      originCorrelationId: correlationId,
+      now,
     });
 
     return publicResult({
@@ -423,6 +440,7 @@ export async function updateManagedPublicReservation(input: {
   const { tokenHash } = parseToken(input.rawToken);
   const command = parseUpdateInput(input.rawPayload);
   const now = input.now ?? new Date();
+  const correlationId = randomUUID();
 
   return runReservationTransaction(async (client) => {
     await acquireManagementLock(client, tokenHash);
@@ -566,7 +584,6 @@ export async function updateManagedPublicReservation(input: {
         serviceType: command.serviceType,
       });
     }
-    const correlationId = randomUUID();
     await insertPublicAuditEvent(client, {
       restaurantId: input.restaurantId,
       reservationId: updated.id,
@@ -584,6 +601,17 @@ export async function updateManagedPublicReservation(input: {
         now: new Date(now.getTime() + 1),
       });
     }
+    await planReservationUpdated({
+      dependencies: {
+        writer: createPrismaNotificationWriter(client),
+        ids: { generate: randomUUID },
+      },
+      reservation: updated,
+      actorUserId: null,
+      originCorrelationId: correlationId,
+      now,
+      scheduleChanged,
+    });
 
     return toPublicReservationDto({
       reservation: updated,
@@ -600,6 +628,7 @@ export async function cancelManagedPublicReservation(input: {
 }): Promise<PublicReservationDto> {
   const { tokenHash } = parseToken(input.rawToken);
   const now = input.now ?? new Date();
+  const correlationId = randomUUID();
 
   return runReservationTransaction(async (client) => {
     await acquireManagementLock(client, tokenHash);
@@ -647,9 +676,19 @@ export async function cancelManagedPublicReservation(input: {
       restaurantId: input.restaurantId,
       reservationId: cancelled.id,
       action: "CANCELLED",
-      correlationId: randomUUID(),
+      correlationId,
       previousState: reservationAuditSnapshot(access.reservation),
       newState: reservationAuditSnapshot(cancelled),
+    });
+    await planReservationCancelled({
+      dependencies: {
+        writer: createPrismaNotificationWriter(client),
+        ids: { generate: randomUUID },
+      },
+      reservation: cancelled,
+      actorUserId: null,
+      originCorrelationId: correlationId,
+      now,
     });
 
     return toPublicReservationDto({
