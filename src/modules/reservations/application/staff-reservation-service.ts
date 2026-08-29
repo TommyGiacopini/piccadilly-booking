@@ -12,8 +12,8 @@ import {
 } from "@/modules/reservations/domain/management-time";
 import {
   classifyIdempotencyRequest,
+  hashPhoneReservationRequest,
   hashIdempotencyKey,
-  hashReservationRequest,
 } from "@/modules/reservations/domain/idempotency";
 import {
   parsePublicPreferences,
@@ -74,6 +74,12 @@ import {
   resolveReservationConfig,
   type ReservationConfig,
 } from "@/shared/config/reservation-config";
+import {
+  planReservationCancelled,
+  planReservationCreated,
+  planReservationUpdated,
+} from "@/modules/notifications/application/enqueue-planner";
+import { createPrismaNotificationWriter } from "@/modules/notifications/infrastructure/prisma-notification-writer";
 
 export interface StaffReservationMutationResult {
   reservation: StaffReservationDto;
@@ -266,12 +272,20 @@ function assertStaffSlot(input: {
 function staffAuditState(
   reservation: Parameters<typeof reservationAuditSnapshot>[0],
   overrideResult: CapacityOverrideAuditResult | null,
+  confirmationWhatsAppRequested?: boolean,
 ) {
   const snapshot = reservationAuditSnapshot(reservation);
-
-  return overrideResult
-    ? { ...snapshot, capacityOverrideResult: overrideResult }
-    : snapshot;
+  return {
+    ...snapshot,
+    ...(overrideResult ? { capacityOverrideResult: overrideResult } : {}),
+    ...(confirmationWhatsAppRequested === undefined
+      ? {}
+      : {
+          notification: {
+            confirmationWhatsAppRequested,
+          },
+        }),
+  };
 }
 
 function isSameStaffReservationState(input: {
@@ -338,7 +352,11 @@ export async function createPhoneReservation(input: {
     input.actor.restaurantId,
     `phone\u0000${parsed.idempotencyKey}`,
   );
-  const requestHash = hashReservationRequest(command);
+  const requestHash = hashPhoneReservationRequest(
+    command,
+    parsed.command.sendWhatsAppConfirmation,
+  );
+  const correlationId = randomUUID();
 
   return runReservationTransaction(async (client) => {
     await acquireIdempotencyLock(client, input.actor.restaurantId, keyHash);
@@ -443,12 +461,27 @@ export async function createPhoneReservation(input: {
       reservationId: reservation.id,
       action: "CREATED",
       actorOrigin: "PHONE",
-      correlationId: randomUUID(),
+      correlationId,
       previousState: null,
-      newState: staffAuditState(reservation, overrideResult),
+      newState: staffAuditState(
+        reservation,
+        overrideResult,
+        parsed.command.sendWhatsAppConfirmation,
+      ),
       capacityOverride: command.capacityOverride,
       capacityOverrideReason: command.capacityOverrideReason,
       createdAt: now,
+    });
+    await planReservationCreated({
+      dependencies: {
+        writer: createPrismaNotificationWriter(client),
+        ids: { generate: randomUUID },
+      },
+      reservation,
+      actorUserId: input.actor.id,
+      originCorrelationId: correlationId,
+      now,
+      sendWhatsAppConfirmation: parsed.command.sendWhatsAppConfirmation,
     });
 
     return {
@@ -485,6 +518,7 @@ export async function updateStaffReservation(input: {
 }): Promise<StaffReservationMutationResult> {
   const command = parseUpdateInput(input.rawPayload);
   const now = input.now ?? new Date();
+  const correlationId = randomUUID();
 
   if (Number.isNaN(now.getTime())) {
     throw validationError("La data di elaborazione non è valida.");
@@ -701,7 +735,6 @@ export async function updateStaffReservation(input: {
       }
     }
 
-    const correlationId = randomUUID();
     await insertAuthenticatedAuditEvent(client, {
       actor: input.actor,
       reservationId: updated.id,
@@ -729,6 +762,17 @@ export async function updateStaffReservation(input: {
         now: new Date(now.getTime() + 1),
       });
     }
+    await planReservationUpdated({
+      dependencies: {
+        writer: createPrismaNotificationWriter(client),
+        ids: { generate: randomUUID },
+      },
+      reservation: updated,
+      actorUserId: input.actor.id,
+      originCorrelationId: correlationId,
+      now,
+      scheduleChanged,
+    });
 
     return { reservation: toStaffReservationDto(updated), changed: true };
   });
@@ -742,6 +786,7 @@ export async function cancelStaffReservation(input: {
 }): Promise<StaffReservationMutationResult> {
   const command = parseCancelInput(input.rawPayload);
   const now = input.now ?? new Date();
+  const correlationId = randomUUID();
 
   if (Number.isNaN(now.getTime())) {
     throw validationError("La data di elaborazione non è valida.");
@@ -803,12 +848,22 @@ export async function cancelStaffReservation(input: {
       reservationId: cancelled.id,
       action: "CANCELLED",
       actorOrigin: "STAFF",
-      correlationId: randomUUID(),
+      correlationId,
       previousState: reservationAuditSnapshot(current),
       newState: reservationAuditSnapshot(cancelled),
       capacityOverride: false,
       capacityOverrideReason: null,
       createdAt: now,
+    });
+    await planReservationCancelled({
+      dependencies: {
+        writer: createPrismaNotificationWriter(client),
+        ids: { generate: randomUUID },
+      },
+      reservation: cancelled,
+      actorUserId: input.actor.id,
+      originCorrelationId: correlationId,
+      now,
     });
 
     return { reservation: toStaffReservationDto(cancelled), changed: true };

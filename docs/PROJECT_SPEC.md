@@ -458,11 +458,13 @@ Messaggi previsti:
 
 
 
-Se la prenotazione viene effettuata quando mancano meno di tre ore, non deve essere inviato il promemoria.
+Il reminder è pianificato tre ore assolute prima dell'istante della prenotazione nella timezone del ristorante. A esattamente tre ore viene creato ed è immediatamente processabile; a meno di tre ore non viene creato. Una prenotazione iniziata o passata non produce reminder.
 
 
 
-Durante lo sviluppo utilizzare un provider WhatsApp simulato.
+M12 usa esclusivamente provider WhatsApp ed email simulati e non contiene implementazioni di rete reali. Reservation, audit e intent outbox condividono il commit; il provider viene chiamato soltanto dopo il commit e un suo errore non annulla la prenotazione.
+
+Ogni delivery leg conserva un payload V1 minimizzato e stabile con versione schema/template, locale IT/EN, nome cliente, ristorante, data locale, servizio, orario e persone. La singola leg conserva soltanto la propria destination. Sono esclusi cognome, note, esigenze, preferenze, assegnazione, consensi, token, hash e link personale. I retry usano questo snapshot e non rileggono la reservation corrente.
 
 Strategie di canale principale, fallback e invio parallelo, outbox e provider simulati appartengono alla milestone M12; M9 gestisce soltanto i dati di contatto.
 
@@ -520,7 +522,7 @@ La prenotazione telefonica deve entrare nello stesso database e influire sulla d
 
 
 
-Deve essere presente un'opzione per inviare o non inviare la conferma WhatsApp.
+Deve essere presente l'opzione `Invia conferma WhatsApp`, selezionata per default. La disattivazione sopprime soltanto la confirmation WhatsApp iniziale: non è consenso marketing, non attiva il fallback, non sopprime reminder, aggiornamenti o cancellazioni e, nella strategia parallela, non sopprime l'email disponibile.
 
 
 
@@ -646,7 +648,7 @@ La cancellazione Staff o pubblica conserva l'ultima assegnazione, inclusi tavoli
 
 Disattivazione globale di una sala, disattivazione di un tavolo e indisponibilità della sala per data/servizio includono nel protocollo M9-D le sole prenotazioni confermate correnti o future con assegnazione attiva pertinente. La preview espone soltanto conteggi e classificazioni, richiede conferma quando necessario e usa un fingerprint opaco ricalcolato nella transazione. La configurazione applicata preserva le assegnazioni come grandfathered; prenotazioni cancellate, storiche, assegnazioni rimosse e altri tenant non partecipano all'impatto.
 
-M10-A e M10-B sono state merged su `main` con la PR #11. M10-C, approvata da Work e merged su `main` con la PR #12, completa la superficie operativa Staff/Admin: la dashboard distingue preferenza e sala definitiva, deriva `DA ASSEGNARE`, filtra per stato e sala finale, calcola i coperti sulle assegnazioni attive e usa le API M10-A per assegnazione, riassegnazione e clear. Con questa chiusura M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è la milestone successiva e non è ancora iniziata.
+M10-A e M10-B sono state merged su `main` con la PR #11. M10-C, approvata da Work e merged su `main` con la PR #12, completa la superficie operativa Staff/Admin: la dashboard distingue preferenza e sala definitiva, deriva `DA ASSEGNARE`, filtra per stato e sala finale, calcola i coperti sulle assegnazioni attive e usa le API M10-A per assegnazione, riassegnazione e clear. Con questa chiusura M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è implementata nel working tree ed è in attesa di Quality Gate Work.
 
 
 

@@ -14,6 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npm run build && npm run db:seed && node scripts/run-e2e.mjs",
+    "notifications:process-once": "tsx --conditions=react-server src/modules/notifications/infrastructure/worker-cli.ts --once",
+    "notifications:worker": "tsx --conditions=react-server src/modules/notifications/infrastructure/worker-cli.ts",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f postgres",

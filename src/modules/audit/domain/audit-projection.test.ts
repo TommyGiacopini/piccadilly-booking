@@ -136,6 +136,28 @@ describe("positive detail allow-list", () => {
     expect(serialized).not.toContain("capacityOverrideReason");
   });
 
+  it("projects only the minimized phone-confirmation request flag", () => {
+    const detail = projectAuditDetail({
+      ...reservationRow({ action: "CREATED" }),
+      previousState: null,
+      newState: {
+        notification: {
+          confirmationWhatsAppRequested: false,
+          provider: "must-not-be-visible",
+          destination: "+39000000000",
+        },
+      },
+      metadata: null,
+    });
+    expect(detail?.newState).toEqual([
+      {
+        key: "notification.confirmationWhatsAppRequested",
+        label: "Conferma WhatsApp richiesta",
+        value: false,
+      },
+    ]);
+  });
+
   it("does not expose authentication HMAC or arbitrary metadata", () => {
     const sentinel = "M9F-HMAC-SENTINEL";
     const record: AuditDetailDatabaseRecord = {

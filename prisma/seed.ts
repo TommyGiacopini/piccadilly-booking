@@ -52,10 +52,15 @@ type PublicConfigurationSeedClient = Pick<
   PrismaClient,
   "restaurantPublicSettings" | "publicContent"
 >;
+type NotificationConfigurationSeedClient = Pick<
+  PrismaClient,
+  "restaurantNotificationSettings"
+>;
 type SeedClient = RestaurantSeedClient &
   AuthenticationSeedClient &
   OperationalConfigurationSeedClient &
-  PublicConfigurationSeedClient;
+  PublicConfigurationSeedClient &
+  NotificationConfigurationSeedClient;
 
 export interface DemoUserPasswords {
   admin: string;
@@ -153,6 +158,19 @@ export async function seedDemoPublicConfiguration(
       orderBy: [{ locale: "asc" }, { contentKey: "asc" }],
     }),
   };
+}
+
+export async function seedDemoNotificationConfiguration(
+  client: NotificationConfigurationSeedClient,
+) {
+  return client.restaurantNotificationSettings.upsert({
+    where: { restaurantId: DEMO_RESTAURANT_ID },
+    update: {},
+    create: {
+      restaurantId: DEMO_RESTAURANT_ID,
+      strategy: "WHATSAPP_ONLY",
+    },
+  });
 }
 
 export async function seedDemoOperationalConfiguration(
@@ -349,8 +367,16 @@ export async function seedDemoData(
   const users = await seedDemoUsers(client, passwords);
   const configuration = await seedDemoOperationalConfiguration(client);
   const publicConfiguration = await seedDemoPublicConfiguration(client);
+  const notificationSettings =
+    await seedDemoNotificationConfiguration(client);
 
-  return { restaurant, ...users, ...configuration, ...publicConfiguration };
+  return {
+    restaurant,
+    ...users,
+    ...configuration,
+    ...publicConfiguration,
+    notificationSettings,
+  };
 }
 
 async function main(): Promise<void> {

@@ -5,6 +5,7 @@ const links = [
   { href: "/admin/users", label: "Utenti" },
   { href: "/admin/configuration", label: "Impostazioni" },
   { href: "/admin/public-settings", label: "Pubblico IT/EN" },
+  { href: "/admin/notification-settings", label: "Notifiche" },
   { href: "/admin/rooms", label: "Sale e tavoli" },
   { href: "/admin/schedules", label: "Orari settimanali" },
   { href: "/admin/special-dates", label: "Date speciali" },

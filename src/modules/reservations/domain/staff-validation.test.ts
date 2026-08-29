@@ -28,6 +28,7 @@ function phonePayload(overrides: Record<string, unknown> = {}) {
     animals: false,
     notes: null,
     verbalConsentConfirmed: true,
+    sendWhatsAppConfirmation: true,
     capacityOverride: false,
     capacityOverrideReason: null,
     ...overrides,
@@ -64,8 +65,13 @@ describe("M8 staff reservation validation", () => {
         phonePayload({ capacityOverride: true, capacityOverrideReason: "" }),
       ).success,
     ).toBe(false);
-    const { verbalConsentConfirmed, ...updatePayload } = phonePayload();
+    const {
+      verbalConsentConfirmed,
+      sendWhatsAppConfirmation,
+      ...updatePayload
+    } = phonePayload();
     expect(verbalConsentConfirmed).toBe(true);
+    expect(sendWhatsAppConfirmation).toBe(true);
     expect(
       staffUpdateReservationSchema.safeParse({ ...updatePayload, version: 0 })
         .success,

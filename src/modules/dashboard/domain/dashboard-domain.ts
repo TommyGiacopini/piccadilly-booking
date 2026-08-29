@@ -10,6 +10,8 @@ import {
   parsePublicPreferences,
 } from "@/modules/reservations/domain/public-validation";
 import type { StoredReservation } from "@/modules/reservations/domain/types";
+import { notificationGroupOutcome } from "@/modules/notifications/domain/notification-rules";
+import type { NotificationOutboxStatus } from "@/modules/notifications/domain/types";
 
 export const dashboardFiltersSchema = z
   .object({
@@ -60,7 +62,13 @@ export interface DashboardReservation {
   createdAt: string;
   updatedAt: string;
   assignment: DashboardAssignmentSummary | null;
+  notificationHealth: DashboardNotificationHealth;
 }
+
+export type DashboardNotificationHealth =
+  | "NOT_DELIVERED"
+  | "PARTIAL_SUCCESS"
+  | null;
 
 export interface DashboardAssignmentSource {
   room: {
@@ -81,6 +89,52 @@ export interface DashboardAssignmentSource {
 export interface DashboardReservationSource {
   reservation: StoredReservation;
   assignment: DashboardAssignmentSource | null;
+  notificationHealth?: DashboardNotificationHealth;
+}
+
+export interface DashboardNotificationHealthRow {
+  eventGroupId: string;
+  reservationVersion: number;
+  status: NotificationOutboxStatus;
+  createdAt: Date;
+}
+
+export function deriveLatestNotificationHealth(
+  rows: readonly DashboardNotificationHealthRow[],
+): DashboardNotificationHealth {
+  const groups = new Map<
+    string,
+    {
+      reservationVersion: number;
+      createdAt: Date;
+      statuses: NotificationOutboxStatus[];
+    }
+  >();
+  for (const row of rows) {
+    const existing = groups.get(row.eventGroupId);
+    if (existing) {
+      existing.statuses.push(row.status);
+      if (row.createdAt > existing.createdAt) existing.createdAt = row.createdAt;
+    } else {
+      groups.set(row.eventGroupId, {
+        reservationVersion: row.reservationVersion,
+        createdAt: row.createdAt,
+        statuses: [row.status],
+      });
+    }
+  }
+  const latest = [...groups.values()]
+    .filter((group) => notificationGroupOutcome(group.statuses) !== "CANCELLED")
+    .sort(
+      (left, right) =>
+        right.reservationVersion - left.reservationVersion ||
+        right.createdAt.getTime() - left.createdAt.getTime(),
+    )[0];
+  if (!latest) return null;
+  const outcome = notificationGroupOutcome(latest.statuses);
+  if (outcome === "FAILURE") return "NOT_DELIVERED";
+  if (outcome === "PARTIAL_SUCCESS") return "PARTIAL_SUCCESS";
+  return null;
 }
 
 export interface DashboardAssignmentSummary {
@@ -244,6 +298,7 @@ export function toDashboardReservation(
             assignmentRoomAvailability === false,
         }
       : null,
+    notificationHealth: source.notificationHealth ?? null,
   };
 }
 

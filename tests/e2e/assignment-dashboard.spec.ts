@@ -93,6 +93,7 @@ function staffPayload(input: {
     animals: false,
     notes: `Fixture M10-C ${e2eRunId}`,
     verbalConsentConfirmed: true,
+    sendWhatsAppConfirmation: true,
     capacityOverride: false,
     capacityOverrideReason: null,
   };

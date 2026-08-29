@@ -131,6 +131,7 @@ async function createPhoneFixture(
       animals: false,
       notes: null,
       verbalConsentConfirmed: true,
+      sendWhatsAppConfirmation: true,
       capacityOverride: false,
       capacityOverrideReason: null,
     },

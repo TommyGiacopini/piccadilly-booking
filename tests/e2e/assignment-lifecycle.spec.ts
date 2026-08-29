@@ -149,7 +149,11 @@ async function createStaffReservation(
 ): Promise<StaffReservation> {
   const response = await request.post("/api/staff/reservations", {
     headers: { origin, "Idempotency-Key": crypto.randomUUID() },
-    data: { ...input, verbalConsentConfirmed: true },
+    data: {
+      ...input,
+      verbalConsentConfirmed: true,
+      sendWhatsAppConfirmation: true,
+    },
   });
   expect(response.ok(), await response.text()).toBe(true);
   return (await response.json()).reservation as StaffReservation;

@@ -138,6 +138,7 @@ export const phoneReservationSchema = z
     verbalConsentConfirmed: z.literal(true, {
       error: "Conferma l'acquisizione del consenso verbale.",
     }),
+    sendWhatsAppConfirmation: z.boolean(),
   })
   .strict()
   .superRefine(validateOverride);

@@ -148,6 +148,7 @@ function phoneApiPayload(
     animals: false,
     notes: "Nota fittizia",
     verbalConsentConfirmed: true,
+    sendWhatsAppConfirmation: true,
     capacityOverride: false,
     capacityOverrideReason: null,
     ...overrides,
@@ -269,6 +270,12 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
         { restaurantId: otherRestaurantId, ...bookingSettingsData(6) },
       ],
     });
+    await prisma.restaurantNotificationSettings.createMany({
+      data: [
+        { restaurantId, strategy: "WHATSAPP_ONLY" },
+        { restaurantId: otherRestaurantId, strategy: "WHATSAPP_ONLY" },
+      ],
+    });
     await prisma.weeklyServiceSchedule.createMany({
       data: [
         ...weeklySchedules(restaurantId),
@@ -339,6 +346,15 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
   });
 
   beforeEach(async () => {
+    await prisma.notificationSimulationReceipt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationAttempt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationOutbox.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
     await prisma.reservationAuditEvent.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -354,6 +370,15 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
   });
 
   afterAll(async () => {
+    await prisma.notificationSimulationReceipt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationAttempt.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.notificationOutbox.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
     await prisma.reservationAuditEvent.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -370,6 +395,9 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
     await prisma.user.deleteMany({
+      where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
+    });
+    await prisma.restaurantNotificationSettings.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
     await prisma.restaurant.deleteMany({
@@ -819,9 +847,13 @@ describe.sequential("M6 reservation persistence with real PostgreSQL", () => {
       where: { id: created.reservation.id },
       select: { version: true },
     });
-    const { verbalConsentConfirmed: ignoredConsent, ...updateFields } =
-      phoneApiPayload();
+    const {
+      verbalConsentConfirmed: ignoredConsent,
+      sendWhatsAppConfirmation: ignoredNotification,
+      ...updateFields
+    } = phoneApiPayload();
     expect(ignoredConsent).toBe(true);
+    expect(ignoredNotification).toBe(true);
     const updateBody = { ...updateFields, version: createdRow.version };
     const context = { params: Promise.resolve({ id: created.reservation.id }) };
     const anonymous = await reservationPatch(

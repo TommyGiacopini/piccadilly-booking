@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   aggregateDashboard,
+  deriveLatestNotificationHealth,
   filterDashboardReservations,
   parseDashboardFilters,
   restaurantToday,
@@ -97,6 +98,38 @@ function assignment(
 }
 
 describe("M8 dashboard domain", () => {
+  it("derives minimized notification warnings from only the latest non-superseded group", () => {
+    const oldGroup = crypto.randomUUID();
+    const latestGroup = crypto.randomUUID();
+    expect(
+      deriveLatestNotificationHealth([
+        { eventGroupId: oldGroup, reservationVersion: 1, status: "DEAD", createdAt: new Date("2028-01-01T10:00:00.000Z") },
+        { eventGroupId: latestGroup, reservationVersion: 2, status: "SUCCEEDED", createdAt: new Date("2028-01-01T11:00:00.000Z") },
+      ]),
+    ).toBeNull();
+    expect(
+      deriveLatestNotificationHealth([
+        { eventGroupId: latestGroup, reservationVersion: 3, status: "DEAD", createdAt: new Date("2028-01-01T12:00:00.000Z") },
+      ]),
+    ).toBe("NOT_DELIVERED");
+  });
+
+  it("reports parallel partial delivery without exposing channel details", () => {
+    const group = crypto.randomUUID();
+    expect(
+      deriveLatestNotificationHealth([
+        { eventGroupId: group, reservationVersion: 4, status: "SUCCEEDED", createdAt: new Date("2028-01-01T12:00:00.000Z") },
+        { eventGroupId: group, reservationVersion: 4, status: "DEAD", createdAt: new Date("2028-01-01T12:00:00.000Z") },
+      ]),
+    ).toBe("PARTIAL_SUCCESS");
+  });
+
+  it("suppresses pending and fully cancelled groups", () => {
+    const group = crypto.randomUUID();
+    expect(deriveLatestNotificationHealth([{ eventGroupId: group, reservationVersion: 1, status: "PENDING", createdAt: new Date("2028-01-01T10:00:00.000Z") }])).toBeNull();
+    expect(deriveLatestNotificationHealth([{ eventGroupId: group, reservationVersion: 1, status: "CANCELLED", createdAt: new Date("2028-01-01T10:00:00.000Z") }])).toBeNull();
+  });
+
   it("uses the restaurant timezone for the current local day", () => {
     expect(
       restaurantToday(new Date("2026-08-10T22:30:00.000Z"), "Europe/Rome"),

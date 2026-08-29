@@ -5,7 +5,9 @@ import type {
   DashboardReservationSource,
   DashboardRoom,
   DashboardRoomAvailability,
+  DashboardNotificationHealthRow,
 } from "@/modules/dashboard/domain/dashboard-domain";
+import { deriveLatestNotificationHealth } from "@/modules/dashboard/domain/dashboard-domain";
 import { mapReservation } from "@/modules/reservations/infrastructure/reservation-repository";
 import { readEffectiveServiceRooms } from "@/modules/rooms/infrastructure/service-instance-repository";
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
@@ -120,6 +122,65 @@ export async function readDashboardReservationsWithClient(
           row.internalNotesPresent,
         ]),
       );
+      const reservationIds = reservations.map((reservation) => reservation.id);
+      const notificationRows =
+        reservationIds.length === 0
+          ? []
+          : await transaction.$queryRaw<
+              Array<
+                DashboardNotificationHealthRow & { reservationId: string }
+              >
+            >(Prisma.sql`
+              WITH notification_groups AS (
+                SELECT
+                  reservation_id,
+                  event_group_id,
+                  reservation_version,
+                  MAX(COALESCE(terminal_at, updated_at, created_at)) AS activity_at
+                FROM notification_outbox
+                WHERE restaurant_id = ${input.restaurantId}::uuid
+                  AND reservation_id IN (${Prisma.join(
+                    reservationIds.map(
+                      (reservationId) => Prisma.sql`${reservationId}::uuid`,
+                    ),
+                  )})
+                GROUP BY reservation_id, event_group_id, reservation_version
+                HAVING NOT BOOL_AND(status = 'CANCELLED')
+              ), ranked_groups AS (
+                SELECT
+                  reservation_id,
+                  event_group_id,
+                  reservation_version,
+                  activity_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY reservation_id
+                    ORDER BY reservation_version DESC, activity_at DESC, event_group_id DESC
+                  ) AS position
+                FROM notification_groups
+              )
+              SELECT
+                outbox.reservation_id AS "reservationId",
+                outbox.event_group_id AS "eventGroupId",
+                outbox.reservation_version AS "reservationVersion",
+                outbox.status,
+                ranked.activity_at AS "createdAt"
+              FROM ranked_groups AS ranked
+              INNER JOIN notification_outbox AS outbox
+                ON outbox.restaurant_id = ${input.restaurantId}::uuid
+                AND outbox.reservation_id = ranked.reservation_id
+                AND outbox.event_group_id = ranked.event_group_id
+              WHERE ranked.position = 1
+              ORDER BY outbox.reservation_id, outbox.channel, outbox.id
+            `);
+      const healthRowsByReservation = new Map<
+        string,
+        DashboardNotificationHealthRow[]
+      >();
+      for (const row of notificationRows) {
+        const rows = healthRowsByReservation.get(row.reservationId) ?? [];
+        rows.push(row);
+        healthRowsByReservation.set(row.reservationId, rows);
+      }
 
       return reservations.map((row) => ({
         reservation: mapReservation(row),
@@ -134,6 +195,9 @@ export async function readDashboardReservationsWithClient(
                   notePresenceByReservationId.get(row.id) === true,
               }
             : null,
+        notificationHealth: deriveLatestNotificationHealth(
+          healthRowsByReservation.get(row.id) ?? [],
+        ),
       }));
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
