@@ -581,7 +581,7 @@ M10-B applica la rimozione logica atomica su cambio data/servizio/orario con sin
 
 **Checkpoint M10-C — operatività visuale approvata da Work e merged su `main` con la PR #12**
 
-M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEGNARE`/assegnate e sala definitiva, indicatori dei coperti non assegnati e per sala finale. Il pannello responsive riusa le API M10-A per prima assegnazione, riassegnazione, note e clear, mostra posti informativi e riferimenti grandfathered e richiede una rilettura esplicita sui conflitti di versione. I test unitari, PostgreSQL e Playwright coprono il checkpoint approvato. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è implementata nel working tree ed è in attesa di Quality Gate Work.
+M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEGNARE`/assegnate e sala definitiva, indicatori dei coperti non assegnati e per sala finale. Il pannello responsive riusa le API M10-A per prima assegnazione, riassegnazione, note e clear, mostra posti informativi e riferimenti grandfathered e richiede una rilettura esplicita sui conflitti di versione. I test unitari, PostgreSQL e Playwright coprono il checkpoint approvato. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è stata successivamente approvata da Work e squash-merged su `main` con la PR #16; M13 è la milestone successiva e non è ancora iniziata.
 
 ### M11 — Esportazioni PDF ed Excel
 
@@ -634,7 +634,9 @@ PDF e Excel sono esportazioni riproducibili della dashboard.
 
 ### M12 — Outbox e provider simulati
 
-**Stato: IN CORSO / IMPLEMENTATA NEL WORKING TREE — IN ATTESA DI QUALITY GATE**
+**Stato: COMPLETATA / APPROVATA DA WORK / MERGED SU MAIN CON PR #16**
+
+M12 è stata approvata da Work dopo il Final Quality Gate post-fix e squash-merged su `main` tramite la PR #16. La baseline canonica post-M12 è `6b84fe7c5ab08a5d569620db89b70431a5a5d174`; i finding da `M12-QG-001` a `M12-QG-006` sono stati chiusi prima dell'approvazione.
 
 **Obiettivo**
 
