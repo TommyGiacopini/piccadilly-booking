@@ -27,8 +27,8 @@ describe("authentication request security", () => {
       headers: {
         host: "internal:4000",
         origin: "https://booking.example",
-        "x-forwarded-host": "booking.example",
-        "x-forwarded-proto": "https",
+        "x-forwarded-host": "evil.example, booking.example",
+        "x-forwarded-proto": "http, https",
       },
     });
 
@@ -42,7 +42,23 @@ describe("authentication request security", () => {
     const headers = new Headers({ "x-forwarded-for": "203.0.113.10, 10.0.0.1" });
 
     expect(resolveClientAddress(headers, false)).toBe("direct-client");
-    expect(resolveClientAddress(headers, true)).toBe("203.0.113.10");
+    expect(resolveClientAddress(headers, true)).toBe("10.0.0.1");
+  });
+
+  it("does not let a prepended forwarded address alter a trusted-hop rate-limit key", () => {
+    const secret = "test-rate-limit-secret-that-is-long-enough";
+    const cleanAddress = resolveClientAddress(
+      new Headers({ "x-forwarded-for": "198.51.100.8" }),
+      true,
+    );
+    const spoofedAddress = resolveClientAddress(
+      new Headers({ "x-forwarded-for": "203.0.113.99, 198.51.100.8" }),
+      true,
+    );
+    expect(spoofedAddress).toBe(cleanAddress);
+    expect(createRateLimitKeyHash("demo.admin", spoofedAddress, secret)).toBe(
+      createRateLimitKeyHash("demo.admin", cleanAddress, secret),
+    );
   });
 
   it("anonymizes the login rate-limit key", () => {

@@ -28,6 +28,7 @@ export async function createHealthResponse(
       status: databaseAvailable ? 200 : 503,
       headers: {
         "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
       },
     },
   );

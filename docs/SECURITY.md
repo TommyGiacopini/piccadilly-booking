@@ -318,11 +318,33 @@ Il componente client non riceve tenant, attore o correlation ID, non accede a Pr
 
 ### Staging personale
 
-- dati fittizi;
-- database separato;
-- provider mock obbligatori;
-- nessun backup o dump di produzione;
-- nessun collegamento al sito ufficiale.
+- dati fittizi e tenant demo esatto;
+- database separato e mai promosso a produzione;
+- provider simulati obbligatori, con kill gate su configurazioni Meta, Graph,
+  SMTP, SES, Resend, SendGrid, URL, token, API key e modalità `REAL`;
+- accesso HTTP Basic, con sole eccezioni `/api/health` e `/robots.txt`;
+- banner demo e direttive globali `noindex`, `nofollow`, `noarchive`;
+- cookie `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, senza `Domain`;
+- proxy fidato abilitato esplicitamente e ultimo hop delle liste forwarded come
+  valore autorevole;
+- health minimizzato, senza URL database, secret, stack o dettaglio migration;
+- seed e tooling vietati con `APP_ENV=production`, indipendentemente da
+  `NODE_ENV`;
+- fake-data scan su email `@example.test`, telefoni `+390000...`, nomi test
+  prefissati, hostname e destination;
+- cleanup solo per run ID confermato e controllo fingerprint PRE/POST sulle
+  righe non appartenenti al run;
+- nessun backup o dump di produzione e nessun collegamento al sito ufficiale.
+
+Le credenziali Basic e demo non compaiono nel Blueprint con valori in chiaro,
+nei log, negli URL o nel processo Playwright sotto forma di `DATABASE_URL`.
+Render provisioning e secret configuration non appartengono alla Fase A locale.
+La Fase A non usa autenticazione, token, API o workspace Render: certifica il
+JSON Schema ufficiale, i test permanenti del contratto e una review statica dei
+field documentati. La semantic validation e il conflict checking workspace-aware
+sono rinviati per contratto alla Fase C. In quella fase workspace e autenticazione
+saranno esclusivamente process-local e nessun identificativo o token verrà
+versionato, scritto in `.env` repository, loggato o incluso nelle evidence.
 
 ### Produzione
 

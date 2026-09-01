@@ -81,7 +81,7 @@ export function getSessionCookieOptions(
 ): SessionCookieOptions {
   return {
     httpOnly: true,
-    secure: appEnvironment === "production",
+    secure: appEnvironment === "staging" || appEnvironment === "production",
     sameSite: "lax",
     path: "/",
     expires,

@@ -541,10 +541,34 @@ Segreti e configurazione infrastrutturale restano nelle variabili d'ambiente. Le
 
 ### Staging personale
 
-- applicazione e database separati;
-- dati esclusivamente fittizi;
-- provider simulati obbligatori;
-- nessun collegamento al sito ufficiale.
+- Blueprint Render versionato con web Node, worker Node separato e PostgreSQL
+  dedicato in Frankfurt;
+- `APP_ENV=staging` come confine applicativo, indipendente dal legittimo
+  `NODE_ENV=production` di Render;
+- web con validazione fail-fast, bind `0.0.0.0:$PORT`, health PostgreSQL e
+  pre-deploy `migrate deploy` seguito dal seed fittizio;
+- worker senza HTTP e senza migration, avviato solo dopo la verifica delle
+  tredici migration applicate;
+- HTTP Basic esterno alle superfici applicative, banner demo, noindex globale e
+  cookie Secure;
+- dati esclusivamente fittizi e provider simulati obbligatori;
+- CLI run-scoped per verifica seed/notifiche, fake-data scan, fingerprint e
+  cleanup, senza endpoint operativi aggiuntivi;
+- suite Playwright remota priva di `DATABASE_URL`;
+- nessun collegamento al sito ufficiale, custom domain, disk persistente,
+  auto-deploy o promozione verso produzione.
+
+Il profilo M13 è una web instance `0.5c-512mb`, un worker `0.5c-512mb` e
+PostgreSQL `0.1c-256mb` con 1 GB. Il Blueprint è dichiarativo e riproducibile;
+provisioning e costo richiedono un'autorizzazione separata. Riferimento: D-040 e
+`docs/operations/staging-render.md`.
+
+Il confine di validazione della Fase A comprende JSON Schema ufficiale Render,
+test permanenti del contratto e review statica della specifica corrente. La
+validazione semantica e il conflict checking workspace-aware del Render CLI sono
+rinviati alla Fase C, dopo Quality Gate locale, pubblicazione Git, merge e
+autorizzazioni Controller separate per accesso e costo. La review statica non
+certifica permessi, disponibilità dei piani o conflitti del workspace.
 
 ### Produzione
 

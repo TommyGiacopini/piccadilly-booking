@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   serverExternalPackages: ["pdfkit", "exceljs"],
   async headers() {
-    return [
+    const routeHeaders: Awaited<ReturnType<NonNullable<NextConfig["headers"]>>> = [
       {
         source: "/dashboard/:path*",
         headers: [
@@ -34,6 +34,17 @@ const nextConfig: NextConfig = {
         ],
       },
     ];
+
+    if (process.env.APP_ENV === "staging") {
+      routeHeaders.unshift({
+        source: "/:path*",
+        headers: [
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+        ],
+      });
+    }
+
+    return routeHeaders;
   },
 };
 

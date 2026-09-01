@@ -34,6 +34,7 @@ describe("opaque session tokens", () => {
     const expires = new Date("2026-08-02T20:00:00.000Z");
 
     expect(getSessionCookieName("development")).toBe("piccadilly_session");
+    expect(getSessionCookieName("staging")).toBe("piccadilly_session");
     expect(getSessionCookieName("production")).toBe(
       "__Host-piccadilly_session",
     );
@@ -44,6 +45,12 @@ describe("opaque session tokens", () => {
       path: "/",
       expires,
       priority: "high",
+    });
+    expect(getSessionCookieOptions("staging", expires)).toMatchObject({
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
     });
     expect(getSessionCookieOptions("production", expires)).toMatchObject({
       httpOnly: true,
