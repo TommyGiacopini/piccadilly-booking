@@ -13,8 +13,12 @@ const ALLOWED_POST_LOGIN_PATHS = new Set([
   "/admin/users",
 ]);
 
-function firstForwardedValue(value: string | null): string | null {
-  return value?.split(",", 1)[0]?.trim() || null;
+function closestForwardedValue(value: string | null): string | null {
+  const values = value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return values?.at(-1) || null;
 }
 
 export function resolveSafePostLoginPath(value: unknown): string {
@@ -38,12 +42,12 @@ export function isSameOriginRequest(
   try {
     const requestUrl = new URL(request.url);
     const expectedHost = trustProxy
-      ? firstForwardedValue(request.headers.get("x-forwarded-host")) ||
+      ? closestForwardedValue(request.headers.get("x-forwarded-host")) ||
         request.headers.get("host") ||
         requestUrl.host
       : request.headers.get("host") || requestUrl.host;
     const expectedProtocol = trustProxy
-      ? firstForwardedValue(request.headers.get("x-forwarded-proto")) ||
+      ? closestForwardedValue(request.headers.get("x-forwarded-proto")) ||
         requestUrl.protocol.replace(":", "")
       : requestUrl.protocol.replace(":", "");
     const originUrl = new URL(origin);
@@ -65,7 +69,7 @@ export function resolveClientAddress(
     return "direct-client";
   }
 
-  const forwardedAddress = firstForwardedValue(headers.get("x-forwarded-for"));
+  const forwardedAddress = closestForwardedValue(headers.get("x-forwarded-for"));
   return forwardedAddress?.slice(0, 128) || "unknown-proxy-client";
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createHealthResponse } from "@/app/api/health/route";
 
@@ -14,6 +14,7 @@ describe("GET /api/health", () => {
       database: "ok",
     });
     expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
   });
 
   it("reports a controlled degraded response when the database is unavailable", async () => {
@@ -30,5 +31,17 @@ describe("GET /api/health", () => {
       database: "unavailable",
     });
     expect(JSON.stringify(body)).not.toContain("driver details");
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("reports APP_ENV staging independently from NODE_ENV production", async () => {
+    vi.stubEnv("APP_ENV", "staging");
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const response = await createHealthResponse(async () => [{ connected: 1 }]);
+      await expect(response.json()).resolves.toMatchObject({ environment: "staging" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

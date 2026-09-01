@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=20.9.0 <25"
   },
   "scripts": {
     "dev": "next dev -p 4000",
@@ -14,8 +14,16 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npm run build && npm run db:seed && node scripts/run-e2e.mjs",
+    "test:e2e:staging": "playwright test --config=playwright.staging.config.ts",
+    "staging:validate:web": "node scripts/validate-staging-web.mjs",
     "notifications:process-once": "tsx --conditions=react-server src/modules/notifications/infrastructure/worker-cli.ts --once",
     "notifications:worker": "tsx --conditions=react-server src/modules/notifications/infrastructure/worker-cli.ts",
+    "notifications:worker:staging": "node scripts/start-staging-worker.mjs",
+    "staging:verify-seed": "tsx --conditions=react-server scripts/staging-tooling-cli.ts verify-seed",
+    "staging:verify-run": "tsx --conditions=react-server scripts/staging-tooling-cli.ts verify-run",
+    "staging:fake-data-scan": "tsx --conditions=react-server scripts/staging-tooling-cli.ts fake-data-scan",
+    "staging:fingerprint": "tsx --conditions=react-server scripts/staging-tooling-cli.ts fingerprint",
+    "staging:cleanup-run": "tsx --conditions=react-server scripts/staging-tooling-cli.ts cleanup-run",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f postgres",

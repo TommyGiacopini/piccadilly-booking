@@ -683,7 +683,22 @@ La pipeline di notifica è verificata interamente con mock.
 
 ### M13 — Staging personale
 
-**Stato: NON INIZIATA**
+**Stato: IN CORSO / IMPLEMENTATA — IN ATTESA DI VALIDAZIONE REMOTA**
+
+La Fase A locale M13 introduce il Blueprint Render versionato, i contratti di
+startup web/worker, i controlli staging, il seed fittizio, le superfici di
+sicurezza, il tooling operativo run-scoped e la suite Playwright remota. Non
+sono state create risorse Render e non sono stati eseguiti deploy o test remoti.
+La Fase A valida il JSON Schema ufficiale, il contratto Blueprint permanente e
+la compatibilità statica con la specifica Render corrente. Formula canonica:
+“Official Render JSON Schema validation PASS; authenticated workspace-aware
+Render semantic validation deferred by contract to FASE C.”
+
+La Fase C eseguirà semantic validation, plan inspection e conflict checking con
+CLI autenticato e workspace process-local soltanto dopo Local Final Quality
+Gate Work, pubblicazione Git, merge e autorizzazioni Controller separate per
+accesso Render e costo. Validazione remota e provisioning restano quindi
+subordinati a tali gate.
 
 **Obiettivo**
 
@@ -775,6 +790,8 @@ M12 e M13.
 I provider sono pronti per essere configurati negli account del ristorante.
 
 ### M15 — Produzione, backup e consegna
+
+**Stato: NON AVVIATA**
 
 **Obiettivo**
 

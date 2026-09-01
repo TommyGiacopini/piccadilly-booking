@@ -97,6 +97,46 @@ export const DEMO_PUBLIC_CONTACTS = {
   whatsappNumber: "+390000000001",
 } as const;
 
+export function resolveDemoPublicContacts(
+  environment: Record<string, string | undefined> = process.env,
+) {
+  const appEnvironment = resolveAppEnvironment(environment.APP_ENV);
+
+  if (appEnvironment === "production") {
+    throw new Error("Demo data cannot be seeded in production.");
+  }
+
+  if (appEnvironment !== "staging") return DEMO_PUBLIC_CONTACTS;
+
+  let externalUrl: URL;
+  try {
+    externalUrl = new URL(environment.RENDER_EXTERNAL_URL ?? "");
+  } catch {
+    throw new Error(
+      "Staging demo URL must be an HTTPS onrender.com root URL.",
+    );
+  }
+
+  if (
+    externalUrl.protocol !== "https:" ||
+    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.onrender\.com$/.test(
+      externalUrl.hostname.toLowerCase(),
+    ) ||
+    externalUrl.username ||
+    externalUrl.password ||
+    (externalUrl.pathname !== "/" && externalUrl.pathname !== "") ||
+    externalUrl.search ||
+    externalUrl.hash
+  ) {
+    throw new Error(
+      "Staging demo URL must be an HTTPS onrender.com root URL.",
+    );
+  }
+
+  externalUrl.pathname = "/";
+  return { ...DEMO_PUBLIC_CONTACTS, publicBookingBaseUrl: externalUrl.toString() };
+}
+
 export const DEMO_PUBLIC_CONTENTS = {
   IT: {
     BOOKING_PAGE_TITLE: "Prenotazione dimostrativa Piccadilly",
@@ -130,9 +170,11 @@ export const DEMO_PUBLIC_CONTENTS = {
 
 export async function seedDemoPublicConfiguration(
   client: PublicConfigurationSeedClient,
+  contacts: typeof DEMO_PUBLIC_CONTACTS | ReturnType<typeof resolveDemoPublicContacts> =
+    DEMO_PUBLIC_CONTACTS,
 ) {
   await client.restaurantPublicSettings.createMany({
-    data: [{ restaurantId: DEMO_RESTAURANT_ID, ...DEMO_PUBLIC_CONTACTS }],
+    data: [{ restaurantId: DEMO_RESTAURANT_ID, ...contacts }],
     skipDuplicates: true,
   });
 
@@ -362,11 +404,16 @@ export async function seedDemoUsers(
 export async function seedDemoData(
   client: SeedClient,
   passwords: DemoUserPasswords,
+  publicContacts: ReturnType<typeof resolveDemoPublicContacts> =
+    DEMO_PUBLIC_CONTACTS,
 ) {
   const restaurant = await seedDemoRestaurant(client);
   const users = await seedDemoUsers(client, passwords);
   const configuration = await seedDemoOperationalConfiguration(client);
-  const publicConfiguration = await seedDemoPublicConfiguration(client);
+  const publicConfiguration = await seedDemoPublicConfiguration(
+    client,
+    publicContacts,
+  );
   const notificationSettings =
     await seedDemoNotificationConfiguration(client);
 
@@ -380,6 +427,8 @@ export async function seedDemoData(
 }
 
 async function main(): Promise<void> {
+  const passwords = resolveDemoUserPasswords();
+  const publicContacts = resolveDemoPublicContacts();
   const adapter = new PrismaPg({
     connectionString: resolveDatabaseUrl(process.env.DATABASE_URL),
     connectionTimeoutMillis: 5_000,
@@ -387,7 +436,7 @@ async function main(): Promise<void> {
   const client = new PrismaClient({ adapter, log: ["error"] });
 
   try {
-    await seedDemoData(client, resolveDemoUserPasswords());
+    await seedDemoData(client, passwords, publicContacts);
     console.info("Demo restaurant seed completed.");
   } finally {
     await client.$disconnect();

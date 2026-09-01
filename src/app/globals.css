@@ -22,6 +22,29 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+.staging-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 2px solid #111111;
+  background: #f97316;
+  color: #111111;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: center;
+  letter-spacing: 0.025em;
+}
+
+@media (min-width: 820px) {
+  .staging-banner {
+    padding: 0.65rem 1rem;
+    font-size: 0.875rem;
+  }
+}
+
 ::selection {
   background: var(--accent);
   color: #ffffff;

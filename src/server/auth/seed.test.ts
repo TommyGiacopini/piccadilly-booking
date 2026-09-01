@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 
 import {
   DEMO_PUBLIC_CONTACTS,
+  resolveDemoPublicContacts,
+  resolveDemoUserPasswords,
   seedDemoOperationalConfiguration,
   seedDemoPublicConfiguration,
   seedDemoUsers,
@@ -98,5 +100,46 @@ describe("M9-E public configuration seed", () => {
       expect.objectContaining({ skipDuplicates: true }),
     );
     expect(contentCreateMany.mock.calls[0]?.[0].data).toHaveLength(14);
+  });
+
+  it("derives the staging URL from Render and keeps the development fixture", () => {
+    expect(resolveDemoPublicContacts({ APP_ENV: "development" })).toEqual(
+      DEMO_PUBLIC_CONTACTS,
+    );
+    expect(
+      resolveDemoPublicContacts({
+        APP_ENV: "staging",
+        NODE_ENV: "production",
+        RENDER_EXTERNAL_URL: "https://piccadilly-m13.onrender.com",
+      }).publicBookingBaseUrl,
+    ).toBe("https://piccadilly-m13.onrender.com/");
+    expect(() =>
+      resolveDemoPublicContacts({
+        APP_ENV: "staging",
+        RENDER_EXTERNAL_URL: "https://piccadilly-m13.onrender.com/path",
+      }),
+    ).toThrow("HTTPS onrender.com root URL");
+  });
+
+  it("refuses demo seed credentials solely on APP_ENV=production", () => {
+    expect(() =>
+      resolveDemoUserPasswords({
+        APP_ENV: "production",
+        NODE_ENV: "development",
+        AUTH_DEMO_ADMIN_PASSWORD: "Seed-Admin-Password-2026",
+        AUTH_DEMO_STAFF_PASSWORD: "Seed-Staff-Password-2026",
+      }),
+    ).toThrow("cannot be seeded in production");
+    expect(
+      resolveDemoUserPasswords({
+        APP_ENV: "staging",
+        NODE_ENV: "production",
+        AUTH_DEMO_ADMIN_PASSWORD: "Seed-Admin-Password-2026",
+        AUTH_DEMO_STAFF_PASSWORD: "Seed-Staff-Password-2026",
+      }),
+    ).toEqual({
+      admin: "Seed-Admin-Password-2026",
+      staff: "Seed-Staff-Password-2026",
+    });
   });
 });

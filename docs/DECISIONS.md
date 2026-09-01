@@ -296,6 +296,57 @@ La strategia persistita per ristorante viene copiata su ogni leg: WhatsApp solta
 
 M12 include soltanto provider simulati deterministici, senza rete, SDK, segreti o selezione reale. Payload, failure e warning dashboard sono minimizzati. Non esiste un job di retention: la relativa policy è un gate obbligatorio prima di M14/produzione. Riferimento: ADR 005.
 
+### D-040 — Contratto dello staging personale M13
+
+Lo staging personale usa un Render Blueprint versionato con un servizio web
+Node, un background worker Node separato e un PostgreSQL dedicato, tutti in
+regione Frankfurt. Il profilo congelato è Hobby workspace, web e worker
+`0.5c-512mb`, database `0.1c-256mb`, storage 1 GB, una sola istanza per servizio,
+preview e auto-deploy disabilitati. Il costo indicativo complessivo è circa
+20,30 USD/mese; il file infrastrutturale non autorizza provisioning, deploy o
+attivazione del costo.
+
+`APP_ENV` è il confine applicativo canonico: `staging` resta staging anche quando
+Render imposta `NODE_ENV=production`; `APP_ENV=production` vieta sempre il seed
+demo. Il web valida fail-fast l'ambiente Render, il proxy fidato, l'URL HTTPS
+`*.onrender.com`, le configurazioni applicative e i secret obbligatori. Il
+pre-deploy applica le tredici migration versionate e poi il seed fittizio. Il
+worker non esegue migration: attende per massimo 120 secondi che tutte le
+tredici migration risultino applicate, quindi avvia senza modifiche il worker
+M12.
+
+Lo staging è protetto con HTTP Basic, esclusi soltanto health e robots, espone
+un banner demo, `noindex/nofollow/noarchive` globale e cookie di sessione
+`Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, senza `Domain`. Gli header
+forwarded usano l'ultimo valore, cioè l'hop più vicino al proxy fidato. Health
+verifica PostgreSQL senza esporre URL, stack o dettagli migration.
+
+Seed, test e tooling accettano esclusivamente il tenant demo, contatti fittizi,
+email `@example.test`, telefoni `+390000...` e provider simulati. Le operazioni
+di verifica, fingerprint e cleanup sono CLI senza endpoint HTTP, rifiutano la
+produzione e limitano il cleanup al run ID confermato, preservando un
+fingerprint delle righe non appartenenti al run. La suite Playwright remota non
+riceve `DATABASE_URL`.
+
+M13 non modifica schema o migration, non aggiunge dipendenze, non introduce
+provider reali, Redis, cron, disk persistenti, dominio custom o GitHub Actions.
+Le attività Render mutative richiedono una successiva autorizzazione Controller.
+ADR 004 resta invariato e autorevole per la separazione degli ambienti.
+
+Il Blueprint Validation Re-Gate classifica il requisito precedente come
+**EXTERNAL TOOLING CONTRACT DRIFT — NON-IMPLEMENTATION DEFECT**. In Fase A il
+contratto di validazione comprende soltanto JSON Schema ufficiale Render, test
+permanenti del Blueprint e review statica della specifica corrente. La formula
+canonica è: “Official Render JSON Schema validation PASS; authenticated
+workspace-aware Render semantic validation deferred by contract to FASE C.”
+
+Solo in Fase C, dopo Quality Gate locale, pubblicazione Git, merge e separate
+autorizzazioni Controller all'accesso Render e al costo, il CLI eseguirà la
+validazione autenticata con workspace process-local, exit code 0, `valid=true`,
+ispezione del plan, semantic validation e conflict checking prima di qualunque
+creazione o sincronizzazione. Workspace ID e token non sono versionati,
+hardcoded o inclusi nelle evidence.
+
 ## 3. Decisioni reversibili
 
 Le seguenti scelte possono cambiare senza alterare il dominio, purché il cambiamento venga testato e documentato:
