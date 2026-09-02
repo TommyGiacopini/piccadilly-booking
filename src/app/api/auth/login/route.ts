@@ -6,9 +6,9 @@ import { normalizeUsername } from "@/server/auth/password";
 import { cleanupExpiredLoginRateLimits } from "@/server/auth/rate-limit";
 import {
   createRateLimitKeyHash,
-  isSameOriginRequest,
   resolveClientAddress,
   resolveSafePostLoginPath,
+  resolveTrustedRequestOrigin,
 } from "@/server/auth/request-security";
 import {
   getSessionCookieName,
@@ -20,11 +20,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function loginErrorResponse(
-  request: Request,
+  requestOrigin: string,
   returnTo: string,
   error: "invalid" | "rate-limited",
 ): NextResponse {
-  const location = new URL("/login", request.url);
+  const location = new URL("/login", requestOrigin);
   location.searchParams.set("error", error);
   location.searchParams.set("returnTo", returnTo);
 
@@ -33,8 +33,9 @@ function loginErrorResponse(
 
 export async function POST(request: Request): Promise<Response> {
   const config = resolveAuthConfig();
+  const requestOrigin = resolveTrustedRequestOrigin(request, config.trustProxy);
 
-  if (!isSameOriginRequest(request, config.trustProxy)) {
+  if (!requestOrigin) {
     return new Response("Forbidden", { status: 403 });
   }
 
@@ -70,7 +71,7 @@ export async function POST(request: Request): Promise<Response> {
 
   if (result.status !== "SUCCESS") {
     return loginErrorResponse(
-      request,
+      requestOrigin,
       returnTo,
       result.status === "INVALID" ? "invalid" : "rate-limited",
     );
@@ -78,7 +79,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const destination = new URL(
     result.user.mustChangePassword ? "/cambia-password" : returnTo,
-    request.url,
+    requestOrigin,
   );
   const response = NextResponse.redirect(destination, { status: 303 });
   const appEnvironment = getAppEnvironment();

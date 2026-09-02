@@ -111,6 +111,24 @@ function formRequest(data: Record<string, string>, cookie?: string): Request {
   });
 }
 
+function redirectFormRequest(
+  data: Record<string, string>,
+  cookie: string,
+  host = "192.168.1.12:4000",
+  origin = "http://192.168.1.12:4000",
+): Request {
+  return new Request("http://0.0.0.0:4000/api/admin/configuration", {
+    method: "POST",
+    headers: {
+      host,
+      origin,
+      "content-type": "application/x-www-form-urlencoded",
+      cookie,
+    },
+    body: new URLSearchParams(data),
+  });
+}
+
 describe.sequential("M4 operational configuration with real PostgreSQL", () => {
   beforeAll(async () => {
     process.env.APP_ENV = "development";
@@ -614,6 +632,43 @@ describe.sequential("M4 operational configuration with real PostgreSQL", () => {
     await expect(
       prisma.room.findUnique({ where: { id: primaryRoomId } }),
     ).resolves.toMatchObject(before);
+  });
+
+  it("uses the direct LAN origin for Admin form redirects", async () => {
+    const response = await configurationPost(
+      redirectFormRequest(
+        {
+          action: "create-special-date",
+          ...specialDateInput({ date: "not-a-date" }),
+        },
+        adminCookie,
+      ),
+    );
+    const location = new URL(response.headers.get("location") ?? "");
+
+    expect(response.status).toBe(303);
+    expect(location.origin).toBe("http://192.168.1.12:4000");
+    expect(location.pathname).toBe("/admin/special-dates");
+    expect(location.searchParams.get("status")).toBe("error");
+  });
+
+  it("rejects concordant external origins before Admin form redirects", async () => {
+    const data = {
+      action: "create-special-date",
+      ...specialDateInput({ date: "not-a-date" }),
+    };
+
+    for (const [host, origin] of [
+      ["attacker.example", "http://attacker.example"],
+      ["attacker.example:8080", "http://attacker.example:8080"],
+    ]) {
+      const response = await configurationPost(
+        redirectFormRequest(data, adminCookie, host, origin),
+      );
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get("location")).toBeNull();
+    }
   });
 
   it("keeps the operational seed idempotent without reservations", async () => {

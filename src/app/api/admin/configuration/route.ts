@@ -13,7 +13,7 @@ import {
   passwordChangeRequiredResponse,
 } from "@/server/auth/authorization";
 import { resolveAuthConfig } from "@/server/auth/auth-config";
-import { isSameOriginRequest } from "@/server/auth/request-security";
+import { resolveTrustedRequestOrigin } from "@/server/auth/request-security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,6 +50,7 @@ function prefersJson(request: Request): boolean {
 
 function controlledResponse(
   request: Request,
+  requestOrigin: string,
   destination: string,
   status: "saved" | "archived" | "reactivated" | "error",
   message?: string,
@@ -61,7 +62,7 @@ function controlledResponse(
     );
   }
 
-  const location = new URL(destination, request.url);
+  const location = new URL(destination, requestOrigin);
   location.searchParams.set("status", status);
 
   if (message) {
@@ -73,8 +74,12 @@ function controlledResponse(
 
 export async function POST(request: Request): Promise<Response> {
   const authConfig = resolveAuthConfig();
+  const requestOrigin = resolveTrustedRequestOrigin(
+    request,
+    authConfig.trustProxy,
+  );
 
-  if (!isSameOriginRequest(request, authConfig.trustProxy)) {
+  if (!requestOrigin) {
     return new Response("Forbidden", { status: 403 });
   }
 
@@ -130,6 +135,7 @@ export async function POST(request: Request): Promise<Response> {
     if (error instanceof ConfigurationError) {
       return controlledResponse(
         request,
+        requestOrigin,
         destination,
         "error",
         error.publicMessage,
@@ -139,6 +145,7 @@ export async function POST(request: Request): Promise<Response> {
     console.error("Operational configuration mutation failed.");
     return controlledResponse(
       request,
+      requestOrigin,
       destination,
       "error",
       "Non è stato possibile salvare la configurazione.",
@@ -148,6 +155,7 @@ export async function POST(request: Request): Promise<Response> {
   revalidatePath(destination);
   return controlledResponse(
     request,
+    requestOrigin,
     destination,
     action === "archive-special-date"
       ? "archived"

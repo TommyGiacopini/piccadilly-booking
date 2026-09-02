@@ -48,10 +48,19 @@ function createFormRequest(
   path: string,
   data: Record<string, string>,
   cookie?: string,
-): Request {
-  const headers = new Headers({
+  requestOrigin: {
+    internalOrigin: string;
+    host: string;
+    origin: string;
+  } = {
+    internalOrigin: "http://localhost:4000",
     host: "localhost:4000",
     origin: "http://localhost:4000",
+  },
+): Request {
+  const headers = new Headers({
+    host: requestOrigin.host,
+    origin: requestOrigin.origin,
     "content-type": "application/x-www-form-urlencoded",
   });
 
@@ -59,12 +68,31 @@ function createFormRequest(
     headers.set("cookie", cookie);
   }
 
-  return new Request(`http://localhost:4000${path}`, {
+  return new Request(`${requestOrigin.internalOrigin}${path}`, {
     method: "POST",
     headers,
     body: new URLSearchParams(data),
   });
 }
+
+const lanRequestOrigin = {
+  internalOrigin: "http://0.0.0.0:4000",
+  host: "192.168.1.12:4000",
+  origin: "http://192.168.1.12:4000",
+};
+
+const attackerRequestOrigins = [
+  {
+    internalOrigin: "http://0.0.0.0:4000",
+    host: "attacker.example",
+    origin: "http://attacker.example",
+  },
+  {
+    internalOrigin: "http://0.0.0.0:4000",
+    host: "attacker.example:8080",
+    origin: "http://attacker.example:8080",
+  },
+] as const;
 
 describe.sequential("authentication with real PostgreSQL", () => {
   beforeAll(async () => {
@@ -204,6 +232,112 @@ describe.sequential("authentication with real PostgreSQL", () => {
     expect(serialized).not.toContain("integration.audit-failure");
     expect(serialized).not.toContain(wrongPassword);
     expect(serialized).not.toContain("direct-client");
+  });
+
+  it("uses the direct LAN origin for failed login redirects", async () => {
+    const username = "integration.lan-failure";
+    const keyHash = createRateLimitKeyHash(
+      username,
+      "direct-client",
+      resolveAuthConfig(process.env).rateLimitSecret,
+    );
+    rateLimitKeys.add(keyHash);
+
+    const response = await loginPost(
+      createFormRequest(
+        "/api/auth/login",
+        { username, password: wrongPassword },
+        undefined,
+        lanRequestOrigin,
+      ),
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(
+      "http://192.168.1.12:4000/login?error=invalid&returnTo=%2Fdashboard",
+    );
+  });
+
+  it("rejects unsafe LAN origins and Host/Origin mismatches before login", async () => {
+    const data = { username: "integration.staff", password: testPassword };
+    const crossSite = createFormRequest(
+      "/api/auth/login",
+      data,
+      undefined,
+      { ...lanRequestOrigin, origin: "https://evil.example" },
+    );
+    const hostMismatch = createFormRequest(
+      "/api/auth/login",
+      data,
+      undefined,
+      { ...lanRequestOrigin, host: "attacker.example" },
+    );
+
+    expect((await loginPost(crossSite)).status).toBe(403);
+    expect((await loginPost(hostMismatch)).status).toBe(403);
+  });
+
+  it("rejects concordant external origins before failed or successful login", async () => {
+    for (const requestOrigin of attackerRequestOrigins) {
+      for (const password of [wrongPassword, testPassword]) {
+        const response = await loginPost(
+          createFormRequest(
+            "/api/auth/login",
+            { username: "integration.staff", password },
+            undefined,
+            requestOrigin,
+          ),
+        );
+
+        expect(response.status).toBe(403);
+        expect(response.headers.get("location")).toBeNull();
+      }
+    }
+  });
+
+  it("uses the LAN origin and rejects concordant external logout origins", async () => {
+    const loginResponse = await loginPost(
+      createFormRequest(
+        "/api/auth/login",
+        {
+          username: "integration.staff",
+          password: testPassword,
+          returnTo: "/dashboard",
+        },
+        undefined,
+        lanRequestOrigin,
+      ),
+    );
+    const cookie = loginResponse.headers.get("set-cookie")?.split(";", 1)[0];
+
+    expect(loginResponse.status).toBe(303);
+    expect(loginResponse.headers.get("location")).toBe(
+      "http://192.168.1.12:4000/dashboard",
+    );
+    expect(cookie).toBeTruthy();
+
+    for (const requestOrigin of attackerRequestOrigins) {
+      const rejectedLogout = await logoutPost(
+        createFormRequest("/api/auth/logout", {}, cookie, requestOrigin),
+      );
+
+      expect(rejectedLogout.status).toBe(403);
+      expect(rejectedLogout.headers.get("location")).toBeNull();
+    }
+
+    const logoutResponse = await logoutPost(
+      createFormRequest(
+        "/api/auth/logout",
+        {},
+        cookie,
+        lanRequestOrigin,
+      ),
+    );
+
+    expect(logoutResponse.status).toBe(303);
+    expect(logoutResponse.headers.get("location")).toBe(
+      "http://192.168.1.12:4000/login",
+    );
   });
 
   it("creates, validates and revokes an opaque database session", async () => {
