@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { resolveAuthConfig } from "@/server/auth/auth-config";
 import { revokeSessionWithAudit } from "@/server/auth/authentication-audit";
-import { isSameOriginRequest } from "@/server/auth/request-security";
+import { resolveTrustedRequestOrigin } from "@/server/auth/request-security";
 import {
   getSessionCookieName,
   getSessionCookieOptions,
@@ -14,8 +14,9 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request): Promise<Response> {
   const config = resolveAuthConfig();
+  const requestOrigin = resolveTrustedRequestOrigin(request, config.trustProxy);
 
-  if (!isSameOriginRequest(request, config.trustProxy)) {
+  if (!requestOrigin) {
     return new Response("Forbidden", { status: 403 });
   }
 
@@ -33,7 +34,7 @@ export async function POST(request: Request): Promise<Response> {
     rawToken: sessionToken,
   });
 
-  const response = NextResponse.redirect(new URL("/login", request.url), {
+  const response = NextResponse.redirect(new URL("/login", requestOrigin), {
     status: 303,
   });
   response.cookies.set(
