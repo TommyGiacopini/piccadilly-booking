@@ -3,15 +3,15 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import {
+  resolveClientSubmissionIdentity,
+  type ClientSubmissionIdentity,
+} from "@/shared/client/client-idempotency";
+
 interface ReservationCreateFormProps {
   defaultDate: string;
   initialRooms: { code: string; name: string }[];
   privacyPolicyVersion: string;
-}
-
-interface SubmissionIdentity {
-  signature: string;
-  key: string;
 }
 
 interface AvailabilityResponse {
@@ -38,6 +38,26 @@ function checked(formData: FormData, name: string): boolean {
   return formData.get(name) === "on";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isValidReservationResponse(
+  value: unknown,
+): value is { replayed?: unknown; reservation: { id: string } } {
+  if (!isRecord(value) || !isRecord(value.reservation)) return false;
+
+  const reservationId = value.reservation.id;
+  return typeof reservationId === "string" && reservationId.trim().length > 0;
+}
+
+function responseError(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+
+  const error = value.error;
+  return typeof error === "string" && error.trim().length > 0 ? error : null;
+}
+
 export function ReservationCreateForm({
   defaultDate,
   initialRooms,
@@ -58,7 +78,7 @@ export function ReservationCreateForm({
     kind: "success" | "error";
     text: string;
   } | null>(null);
-  const submissionIdentity = useRef<SubmissionIdentity | null>(null);
+  const submissionIdentity = useRef<ClientSubmissionIdentity | null>(null);
   const partySizeIsValid = Number.isInteger(Number(partySize)) && Number(partySize) > 0;
 
   useEffect(() => {
@@ -110,70 +130,70 @@ export function ReservationCreateForm({
     setSubmitting(true);
     setMessage(null);
 
-    const formData = new FormData(event.currentTarget);
-    const capacityOverride = checked(formData, "capacityOverride");
-    const payload = {
-      localDate,
-      serviceType,
-      arrivalTime: stringValue(formData, "arrivalTime"),
-      partySize: Number(partySize),
-      roomCode: stringValue(formData, "roomCode"),
-      customerFirstName: stringValue(formData, "customerFirstName"),
-      customerLastName: stringValue(formData, "customerLastName"),
-      customerPhone: stringValue(formData, "customerPhone"),
-      customerEmail: stringValue(formData, "customerEmail"),
-      highChair: checked(formData, "highChair"),
-      stroller: checked(formData, "stroller"),
-      accessibility: checked(formData, "accessibility"),
-      children: checked(formData, "children"),
-      celiac: checked(formData, "celiac"),
-      allergies: stringValue(formData, "allergies"),
-      intolerances: stringValue(formData, "intolerances"),
-      celebration: stringValue(formData, "celebration"),
-      animals: checked(formData, "animals"),
-      notes: stringValue(formData, "notes"),
-      verbalConsentConfirmed: checked(formData, "verbalConsentConfirmed"),
-      sendWhatsAppConfirmation: checked(
-        formData,
-        "sendWhatsAppConfirmation",
-      ),
-      capacityOverride,
-      capacityOverrideReason: capacityOverride
-        ? stringValue(formData, "capacityOverrideReason")
-        : null,
-    };
-    const signature = JSON.stringify(payload);
-
-    if (submissionIdentity.current?.signature !== signature) {
-      submissionIdentity.current = { signature, key: crypto.randomUUID() };
-    }
-
     try {
+      const formData = new FormData(event.currentTarget);
+      const capacityOverride = checked(formData, "capacityOverride");
+      const payload = {
+        localDate,
+        serviceType,
+        arrivalTime: stringValue(formData, "arrivalTime"),
+        partySize: Number(partySize),
+        roomCode: stringValue(formData, "roomCode"),
+        customerFirstName: stringValue(formData, "customerFirstName"),
+        customerLastName: stringValue(formData, "customerLastName"),
+        customerPhone: stringValue(formData, "customerPhone"),
+        customerEmail: stringValue(formData, "customerEmail"),
+        highChair: checked(formData, "highChair"),
+        stroller: checked(formData, "stroller"),
+        accessibility: checked(formData, "accessibility"),
+        children: checked(formData, "children"),
+        celiac: checked(formData, "celiac"),
+        allergies: stringValue(formData, "allergies"),
+        intolerances: stringValue(formData, "intolerances"),
+        celebration: stringValue(formData, "celebration"),
+        animals: checked(formData, "animals"),
+        notes: stringValue(formData, "notes"),
+        verbalConsentConfirmed: checked(formData, "verbalConsentConfirmed"),
+        sendWhatsAppConfirmation: checked(
+          formData,
+          "sendWhatsAppConfirmation",
+        ),
+        capacityOverride,
+        capacityOverrideReason: capacityOverride
+          ? stringValue(formData, "capacityOverrideReason")
+          : null,
+      };
+      const signature = JSON.stringify(payload);
+      const identity = resolveClientSubmissionIdentity(
+        submissionIdentity.current,
+        signature,
+      );
+      submissionIdentity.current = identity;
+
       const response = await fetch("/api/staff/reservations", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": submissionIdentity.current.key,
+          "Idempotency-Key": identity.key,
         },
         body: signature,
       });
-      const body = (await response.json()) as {
-        error?: string;
-        replayed?: boolean;
-        reservation?: { id: string };
-      };
+      const body: unknown = await response.json();
 
-      if (!response.ok || !body.reservation) {
+      if (!response.ok || !isValidReservationResponse(body)) {
         setMessage({
           kind: "error",
-          text: body.error ?? "Non è stato possibile creare la prenotazione.",
+          text:
+            responseError(body) ??
+            "Non è stato possibile creare la prenotazione.",
         });
         return;
       }
 
+      submissionIdentity.current = null;
       setMessage({
         kind: "success",
-        text: body.replayed
+        text: body.replayed === true
           ? "Questa richiesta era già stata registrata: nessun duplicato creato."
           : "Prenotazione telefonica salvata e capacità aggiornata.",
       });
