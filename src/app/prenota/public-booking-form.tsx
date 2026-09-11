@@ -7,6 +7,10 @@ import type {
   PublicContacts,
   PublicContentSet,
 } from "@/modules/configuration/domain/public-settings";
+import {
+  resolveClientSubmissionIdentity,
+  type ClientSubmissionIdentity,
+} from "@/shared/client/client-idempotency";
 
 interface AvailabilitySlot {
   time: string;
@@ -131,7 +135,7 @@ export function PublicBookingForm({
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [managementPath, setManagementPath] = useState<string | null>(null);
-  const submission = useRef<{ signature: string; key: string } | null>(null);
+  const submission = useRef<ClientSubmissionIdentity | null>(null);
   const copy = text[language];
   const editorial = contents[language === "it" ? "IT" : "EN"];
 
@@ -179,43 +183,45 @@ export function PublicBookingForm({
     event.preventDefault();
     setSubmitting(true);
     setMessage(null);
-    const formData = new FormData(event.currentTarget);
-    const payload = {
-      localDate: date,
-      serviceType: service,
-      arrivalTime: value(formData, "arrivalTime"),
-      partySize,
-      roomCode: value(formData, "roomCode"),
-      customerFirstName: value(formData, "customerFirstName"),
-      customerLastName: value(formData, "customerLastName"),
-      customerPhone: value(formData, "customerPhone"),
-      customerEmail: value(formData, "customerEmail"),
-      highChair: checked(formData, "highChair"),
-      stroller: checked(formData, "stroller"),
-      accessibility: checked(formData, "accessibility"),
-      children: checked(formData, "children"),
-      celiac: checked(formData, "celiac"),
-      allergies: value(formData, "allergies"),
-      intolerances: value(formData, "intolerances"),
-      celebration: value(formData, "celebration"),
-      animals: checked(formData, "animals"),
-      notes: value(formData, "notes"),
-      language,
-      privacyAccepted: checked(formData, "privacyAccepted"),
-      termsAccepted: checked(formData, "termsAccepted"),
-    };
-    const signature = JSON.stringify(payload);
-
-    if (submission.current?.signature !== signature) {
-      submission.current = { signature, key: crypto.randomUUID() };
-    }
 
     try {
+      const formData = new FormData(event.currentTarget);
+      const payload = {
+        localDate: date,
+        serviceType: service,
+        arrivalTime: value(formData, "arrivalTime"),
+        partySize,
+        roomCode: value(formData, "roomCode"),
+        customerFirstName: value(formData, "customerFirstName"),
+        customerLastName: value(formData, "customerLastName"),
+        customerPhone: value(formData, "customerPhone"),
+        customerEmail: value(formData, "customerEmail"),
+        highChair: checked(formData, "highChair"),
+        stroller: checked(formData, "stroller"),
+        accessibility: checked(formData, "accessibility"),
+        children: checked(formData, "children"),
+        celiac: checked(formData, "celiac"),
+        allergies: value(formData, "allergies"),
+        intolerances: value(formData, "intolerances"),
+        celebration: value(formData, "celebration"),
+        animals: checked(formData, "animals"),
+        notes: value(formData, "notes"),
+        language,
+        privacyAccepted: checked(formData, "privacyAccepted"),
+        termsAccepted: checked(formData, "termsAccepted"),
+      };
+      const signature = JSON.stringify(payload);
+      const identity = resolveClientSubmissionIdentity(
+        submission.current,
+        signature,
+      );
+      submission.current = identity;
+
       const response = await fetch("/api/public/reservations", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": submission.current.key,
+          "Idempotency-Key": identity.key,
         },
         body: signature,
       });
