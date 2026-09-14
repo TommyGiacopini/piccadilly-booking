@@ -4,7 +4,9 @@ import type {
   ClaimedNotification,
   NotificationProvider,
   NotificationProviderResult,
+  NotificationWorkerEvent,
   NotificationWorkerRepository,
+  NotificationWorkerRuntime,
   Sleeper,
 } from "@/modules/notifications/application/ports";
 import {
@@ -103,6 +105,7 @@ function workerDependencies(input: {
   repository: NotificationWorkerRepository;
   whatsappProvider: NotificationProvider;
   emailProvider: NotificationProvider;
+  runtime?: NotificationWorkerRuntime;
 }) {
   let id = 0;
   return {
@@ -113,7 +116,30 @@ function workerDependencies(input: {
       generate: () =>
         `40000000-0000-4000-8000-${String(++id).padStart(12, "0")}`,
     },
+    runtime: input.runtime ?? runtimeRecorder().runtime,
   };
+}
+
+function runtimeRecorder(input?: {
+  classification?: "RUNTIME_RECOVERABLE" | "RUNTIME_FATAL";
+}) {
+  const events: NotificationWorkerEvent[] = [];
+  const runtime: NotificationWorkerRuntime = {
+    classifyFailure: () => ({
+      classification: input?.classification ?? "RUNTIME_RECOVERABLE",
+      code:
+        input?.classification === "RUNTIME_FATAL"
+          ? "WORKER_RUNTIME_UNCLASSIFIED"
+          : "DB_CONNECTION_UNAVAILABLE",
+    }),
+    backoffMilliseconds: (failure) =>
+      [1_000, 2_000, 5_000, 10_000, 30_000][
+        Math.min(Math.max(failure, 1), 5) - 1
+      ]!,
+    timestamp: () => now.toISOString(),
+    emit: (event) => events.push(event),
+  };
+  return { events, runtime };
 }
 
 const success: NotificationProviderResult = {
@@ -162,6 +188,7 @@ describe("notification worker loop", () => {
           },
         },
         ids: { generate: () => "40000000-0000-4000-8000-000000000001" },
+        runtime: runtimeRecorder().runtime,
       },
       controller.signal,
     );
@@ -315,5 +342,403 @@ describe("notification worker loop", () => {
     expect(startedAttempts).toBe(NOTIFICATION_PROCESSING_CONCURRENCY);
     expect(finalizedAttempts).toBe(0);
     expect(claimCalls).toBe(1);
+  });
+
+  it("continues with later notifications after a per-item failure and emits a sanitized event", async () => {
+    const notifications = [claimed("WHATSAPP", 1), claimed("EMAIL", 2)];
+    const runtime = runtimeRecorder();
+    const finalized: string[] = [];
+    const repository = repositoryFor(notifications, (notification) => {
+      finalized.push(notification.id);
+    });
+    const originalStartAttempt = repository.startAttempt;
+    repository.startAttempt = async (input) => {
+      if (input.notification.id === notifications[0]!.id) {
+        throw Object.assign(new Error("hostile raw error"), {
+          code: "ECONNRESET",
+        });
+      }
+      return originalStartAttempt(input);
+    };
+
+    const result = await processDueNotificationBatch(
+      workerDependencies({
+        repository,
+        whatsappProvider: { send: async () => success },
+        emailProvider: { send: async () => success },
+        runtime: runtime.runtime,
+      }),
+    );
+
+    expect(result).toEqual({
+      expired: 0,
+      recovered: 0,
+      claimed: 2,
+      processed: 2,
+      failed: 1,
+    });
+    expect(finalized).toEqual([notifications[1]!.id]);
+    expect(runtime.events).toContainEqual({
+      event: "notification_worker_item_failure",
+      phase: "PROCESS_NOTIFICATION",
+      code: "NOTIFICATION_PROCESSING_FAILED",
+      outboxId: notifications[0]!.id,
+      attemptCorrelationId: "40000000-0000-4000-8000-000000000001",
+      timestamp: now.toISOString(),
+    });
+  });
+
+  it("accounts for an ID generation failure and continues the claimed queue", async () => {
+    const notifications = [claimed("WHATSAPP", 1), claimed("EMAIL", 2)];
+    const runtime = runtimeRecorder();
+    const finalized: string[] = [];
+    const dependencies = workerDependencies({
+      repository: repositoryFor(notifications, (notification) => {
+        finalized.push(notification.id);
+      }),
+      whatsappProvider: { send: async () => success },
+      emailProvider: { send: async () => success },
+      runtime: runtime.runtime,
+    });
+    let generateCalls = 0;
+    dependencies.ids.generate = () => {
+      generateCalls += 1;
+      if (generateCalls === 1) {
+        throw new Error("id-generation-canary-must-not-be-logged");
+      }
+      return "40000000-0000-4000-8000-000000000002";
+    };
+
+    const result = await processDueNotificationBatch(dependencies);
+
+    expect(result).toEqual({
+      expired: 0,
+      recovered: 0,
+      claimed: 2,
+      processed: 2,
+      failed: 1,
+    });
+    expect(finalized).toEqual([notifications[1]!.id]);
+    const failureEvents = runtime.events.filter(
+      (event) => event.event === "notification_worker_item_failure",
+    );
+    expect(failureEvents).toEqual([
+      {
+        event: "notification_worker_item_failure",
+        phase: "PROCESS_NOTIFICATION",
+        code: "NOTIFICATION_PROCESSING_FAILED",
+        outboxId: notifications[0]!.id,
+        timestamp: now.toISOString(),
+      },
+    ]);
+    expect(failureEvents[0]).not.toHaveProperty("attemptCorrelationId");
+    expect(JSON.stringify(runtime.events)).not.toContain(
+      "id-generation-canary-must-not-be-logged",
+    );
+  });
+
+  it("propagates an unexpected queue rejection at the processing boundary", async () => {
+    const notifications = new Proxy([claimed("WHATSAPP", 1)], {
+      get(target, property, receiver) {
+        if (property === "0") {
+          throw new Error("unexpected-queue-access");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    await expect(
+      processDueNotificationBatch(
+        workerDependencies({
+          repository: repositoryFor(notifications),
+          whatsappProvider: { send: async () => success },
+          emailProvider: { send: async () => success },
+        }),
+      ),
+    ).rejects.toMatchObject({ phase: "PROCESS_NOTIFICATION" });
+  });
+
+  it.each([
+    "CLOCK",
+    "EXPIRE_PENDING",
+    "RECOVER_EXPIRED_LEASES",
+    "CLAIM_DUE",
+    "POLL_WAIT",
+  ] as const)(
+    "recovers from an allow-listed %s failure and processes the next batch",
+    async (phase) => {
+      const controller = new AbortController();
+      const runtime = runtimeRecorder();
+      let clockCalls = 0;
+      let expireCalls = 0;
+      let recoverCalls = 0;
+      let claimCalls = 0;
+      let pollCalls = 0;
+      const repository: NotificationWorkerRepository = {
+        expirePending: async () => {
+          expireCalls += 1;
+          if (phase === "EXPIRE_PENDING" && expireCalls === 1) {
+            throw Object.assign(new Error("not logged"), {
+              code: "ECONNREFUSED",
+            });
+          }
+          return 0;
+        },
+        recoverExpiredLeases: async () => {
+          recoverCalls += 1;
+          if (phase === "RECOVER_EXPIRED_LEASES" && recoverCalls === 1) {
+            throw Object.assign(new Error("not logged"), { code: "P1001" });
+          }
+          return 0;
+        },
+        claimDue: async () => {
+          claimCalls += 1;
+          if (phase === "CLAIM_DUE" && claimCalls === 1) {
+            throw Object.assign(new Error("not logged"), { code: "P2024" });
+          }
+          return [];
+        },
+        startAttempt: async () => null,
+        confirmProviderCall: async () => false,
+        finalizeAttempt: async () => "STALE",
+      };
+      const dependencies = workerDependencies({
+        repository,
+        whatsappProvider: { send: async () => success },
+        emailProvider: { send: async () => success },
+        runtime: runtime.runtime,
+      });
+      dependencies.clock = {
+        now: () => {
+          clockCalls += 1;
+          if (phase === "CLOCK" && clockCalls === 1) {
+            throw Object.assign(new Error("not logged"), {
+              code: "ETIMEDOUT",
+            });
+          }
+          return now;
+        },
+      };
+      dependencies.sleeper = {
+        wait: async (milliseconds) => {
+          if (milliseconds === NOTIFICATION_POLL_MS) {
+            pollCalls += 1;
+            if (phase === "POLL_WAIT" && pollCalls === 1) {
+              throw Object.assign(new Error("not logged"), {
+                code: "ECONNRESET",
+              });
+            }
+            controller.abort();
+          }
+        },
+      };
+
+      await expect(
+        runNotificationWorkerLoop(dependencies, controller.signal),
+      ).resolves.toBeUndefined();
+      expect(claimCalls).toBeGreaterThanOrEqual(1);
+      expect(runtime.events).toContainEqual(
+        expect.objectContaining({
+          event: "notification_worker_runtime_failure",
+          phase,
+          classification: "RUNTIME_RECOVERABLE",
+          consecutiveFailures: 1,
+          backoffMs: 1_000,
+        }),
+      );
+      expect(runtime.events).toContainEqual(
+        expect.objectContaining({
+          event: "notification_worker_recovered",
+          previousFailures: 1,
+        }),
+      );
+    },
+  );
+
+  it("uses the exact capped runtime backoff sequence", async () => {
+    const controller = new AbortController();
+    const runtime = runtimeRecorder();
+    const waits: number[] = [];
+    let expireCalls = 0;
+    const repository: NotificationWorkerRepository = {
+      ...repositoryFor([]),
+      expirePending: async () => {
+        expireCalls += 1;
+        if (expireCalls <= 6) {
+          throw Object.assign(new Error("not logged"), { code: "P1001" });
+        }
+        return 0;
+      },
+    };
+    const dependencies = workerDependencies({
+      repository,
+      whatsappProvider: { send: async () => success },
+      emailProvider: { send: async () => success },
+      runtime: runtime.runtime,
+    });
+    dependencies.sleeper = {
+      wait: async (milliseconds) => {
+        waits.push(milliseconds);
+        if (expireCalls > 6) controller.abort();
+      },
+    };
+
+    await runNotificationWorkerLoop(dependencies, controller.signal);
+
+    expect(waits).toEqual([
+      1_000,
+      2_000,
+      5_000,
+      10_000,
+      30_000,
+      30_000,
+      NOTIFICATION_POLL_MS,
+    ]);
+  });
+
+  it("resets runtime backoff after a completed batch", async () => {
+    const controller = new AbortController();
+    const runtime = runtimeRecorder();
+    const backoffs: number[] = [];
+    let expireCalls = 0;
+    let completedBatches = 0;
+    const repository: NotificationWorkerRepository = {
+      ...repositoryFor([]),
+      expirePending: async () => {
+        expireCalls += 1;
+        if (expireCalls === 1 || expireCalls === 3) {
+          throw Object.assign(new Error("not logged"), { code: "P1001" });
+        }
+        completedBatches += 1;
+        return 0;
+      },
+    };
+    const dependencies = workerDependencies({
+      repository,
+      whatsappProvider: { send: async () => success },
+      emailProvider: { send: async () => success },
+      runtime: runtime.runtime,
+    });
+    dependencies.sleeper = {
+      wait: async (milliseconds) => {
+        if (milliseconds !== NOTIFICATION_POLL_MS) backoffs.push(milliseconds);
+        if (milliseconds === NOTIFICATION_POLL_MS && completedBatches === 1) {
+          return;
+        }
+        if (milliseconds === NOTIFICATION_POLL_MS && completedBatches === 2) {
+          controller.abort();
+        }
+      },
+    };
+
+    await runNotificationWorkerLoop(dependencies, controller.signal);
+
+    expect(backoffs).toEqual([1_000, 1_000]);
+    expect(
+      runtime.events.filter(
+        (event) => event.event === "notification_worker_recovered",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("fails fast for an unknown runtime error without sleeping", async () => {
+    const runtime = runtimeRecorder({ classification: "RUNTIME_FATAL" });
+    let sleeps = 0;
+    const dependencies = workerDependencies({
+      repository: {
+        ...repositoryFor([]),
+        expirePending: async () => {
+          throw new Error("unknown and hostile");
+        },
+      },
+      whatsappProvider: { send: async () => success },
+      emailProvider: { send: async () => success },
+      runtime: runtime.runtime,
+    });
+    dependencies.sleeper = {
+      wait: async () => {
+        sleeps += 1;
+      },
+    };
+
+    await expect(
+      runNotificationWorkerLoop(dependencies, new AbortController().signal),
+    ).rejects.toMatchObject({ phase: "EXPIRE_PENDING" });
+    expect(sleeps).toBe(0);
+    expect(runtime.events).toContainEqual(
+      expect.objectContaining({
+        event: "notification_worker_runtime_failure",
+        classification: "RUNTIME_FATAL",
+        code: "WORKER_RUNTIME_UNCLASSIFIED",
+        backoffMs: 0,
+      }),
+    );
+  });
+
+  it("aborts during runtime backoff without another claim or failure event", async () => {
+    const controller = new AbortController();
+    const runtime = runtimeRecorder();
+    let expireCalls = 0;
+    let claimCalls = 0;
+    const dependencies = workerDependencies({
+      repository: {
+        ...repositoryFor([]),
+        expirePending: async () => {
+          expireCalls += 1;
+          throw Object.assign(new Error("not logged"), { code: "P1001" });
+        },
+        claimDue: async () => {
+          claimCalls += 1;
+          return [];
+        },
+      },
+      whatsappProvider: { send: async () => success },
+      emailProvider: { send: async () => success },
+      runtime: runtime.runtime,
+    });
+    dependencies.sleeper = {
+      wait: async (_milliseconds, signal) => {
+        controller.abort();
+        expect(signal.aborted).toBe(true);
+      },
+    };
+
+    await expect(
+      runNotificationWorkerLoop(dependencies, controller.signal),
+    ).resolves.toBeUndefined();
+    expect(expireCalls).toBe(1);
+    expect(claimCalls).toBe(0);
+    expect(
+      runtime.events.filter(
+        (event) => event.event === "notification_worker_runtime_failure",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("continues when the injected event logger throws", async () => {
+    const runtime = runtimeRecorder();
+    runtime.runtime.emit = () => {
+      throw new Error("logger failure");
+    };
+    const notifications = [claimed("WHATSAPP", 1), claimed("EMAIL", 2)];
+    const repository = repositoryFor(notifications);
+    const originalStartAttempt = repository.startAttempt;
+    repository.startAttempt = async (input) => {
+      if (input.notification.id === notifications[0]!.id) {
+        throw new Error("item failure");
+      }
+      return originalStartAttempt(input);
+    };
+
+    await expect(
+      processDueNotificationBatch(
+        workerDependencies({
+          repository,
+          whatsappProvider: { send: async () => success },
+          emailProvider: { send: async () => success },
+          runtime: runtime.runtime,
+        }),
+      ),
+    ).resolves.toMatchObject({ processed: 2, failed: 1 });
   });
 });

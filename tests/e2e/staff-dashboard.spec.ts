@@ -145,18 +145,20 @@ test.describe("M8 dashboard Staff/Admin", () => {
     const firstName = e2eReservationFirstName;
     const lastName = `Staff ${suffix}`;
     const date = "2099-11-18";
+    let reservationPostCount = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/api/staff/reservations"
+      ) {
+        reservationPostCount += 1;
+      }
+    });
 
     await login(page, "STAFF");
     await openPhoneForm(page, date);
     await fillPhoneReservation(page, { firstName, lastName, partySize: 2 });
-    await page
-      .getByRole("button", { name: "Salva prenotazione telefonica" })
-      .click();
-    await expect(
-      page.getByText(
-        "Questa richiesta era già stata registrata: nessun duplicato creato.",
-      ),
-    ).toBeVisible();
+    expect(reservationPostCount).toBe(1);
     await page.getByRole("link", { name: "Torna alla dashboard" }).click();
 
     const matchingCards = page

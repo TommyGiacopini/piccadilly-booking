@@ -203,6 +203,10 @@ Il worker terminalizza prima del claim fino a 100 leg `PENDING` scadute, con ord
 
 Ogni provider call riceve un `AbortSignal` creato dal worker e ha una deadline applicativa iniettabile di 30 secondi, inferiore alla lease; timeout e shutdown abortiscono il provider. Il batch elabora al massimo cinque leg contemporaneamente, così i canali paralleli restano indipendenti, e dopo lo shutdown non avvia le leg claimed ancora in coda. `completedAt`, expiry e backoff 1/5/15 minuti sono calcolati dal clock dopo la conclusione della call. Fallback email e terminalizzazione WhatsApp condividono la stessa transazione. Le leg parallele hanno lease, retry e idempotenza indipendenti. Il read model dashboard esegue una sola query bounded tenant-scoped e proietta soltanto warning minimizzati del gruppo rilevante più recente.
 
+Il worker long-running usa inoltre una policy runtime infrastrutturale iniettata, separata dal delivery retry: l'application associa le eccezioni alle phase allow-listed, continua dopo failure per singolo item e ritenta soltanto failure runtime riconosciute da codici stabili. Il backoff runtime è `1/2/5/10/30` secondi con cap a 30 secondi e reset dopo un batch valido; unknown e incompatibilità di configurazione/schema restano fatal. Logging JSON sanitizzato, classificazione Prisma/PostgreSQL/Node e gestione CLI restano nell'infrastructure, senza dipendenze da Prisma, console o process nell'application.
+
+Il comando full Vitest passa da un runner che accetta soltanto `APP_ENV=development` e PostgreSQL loopback, crea un database univoco rigidamente validato, applica le 13 migration e il seed fittizio in ambiente process-local, esegue i test e rimuove/verifica il database in `finally`. La suite outbox usa fixture e assertion scenario-scoped; il repository worker produttivo conserva intenzionalmente la semantica globale M12.
+
 ## 6. Regole di dipendenza
 
 - Il dominio non importa Next.js, Prisma, PDF, Excel o SDK esterni.

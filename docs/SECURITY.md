@@ -282,6 +282,8 @@ Il componente client non riceve tenant, attore o correlation ID, non accede a Pr
 - La destination è presente soltanto sulla singola leg. Il payload contiene esclusivamente nome, ristorante, data, servizio, orario e persone; non contiene cognome, note, esigenze, assegnazione, consensi, token o link personale.
 - Retry e replay usano una chiave senza PII; la receipt simulata non contiene destination o payload e rileva conflitti di hash.
 - Errori inattesi vengono convertiti in failure code allow-listed. Non vengono persistiti messaggi liberi, stack, SQL, payload o destination negli attempt e nei log.
+- Il worker long-running ritenta soltanto codici runtime stabili esplicitamente allow-listed; unknown, configurazione, autenticazione/autorizzazione e incompatibilità schema sono fatal. Il backoff runtime `1/2/5/10/30` secondi è separato dal delivery retry M12 e viene interrotto dallo shutdown.
+- Gli eventi worker sono JSON minimizzati su una riga. Non serializzano error message, stack, cause, meta, destination, payload, telefono, email, nome, token, password, cookie, variabili ambiente o connection string; una failure del logger non modifica il control flow.
 - Il warning dashboard espone soltanto `Notifica non consegnata` o `Notifica consegnata soltanto su un canale`, senza destination, payload, provider reference, attempt o errore raw.
 - Un errore permanente viene mostrato alla dashboard senza invalidare la prenotazione.
 - M12 non implementa retention. Una policy approvata di retention/redazione per outbox, attempt e receipt è obbligatoria prima di M14 e della produzione.
