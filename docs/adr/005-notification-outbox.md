@@ -61,6 +61,14 @@ La receipt garantisce: stessa chiave e stesso payload hash restituiscono la mede
 
 M12 contiene esclusivamente simulatori WhatsApp/email con default success deterministico e nessun I/O di rete. Non introduce retention: policy di retention/redazione e validazione dei provider reali sono gate obbligatori prima di M14/produzione.
 
+## Resilienza del processo worker
+
+Il retry di delivery M12 (`+1/+5/+15` minuti, massimo quattro attempt) resta distinto dal retry del processo long-running. Una failure di una singola notification incrementa soltanto il conteggio `failed`, produce un evento minimizzato e non interrompe il batch. Una failure batch/runtime è ritentabile soltanto quando un codice stabile Prisma, SQLSTATE PostgreSQL o Node/driver appartiene all'allow-list di indisponibilità, timeout, perdita connessione, pool exhaustion o conflitto transazionale. Errori di configurazione, autenticazione/autorizzazione, schema, validazione, programmazione e ogni unknown non allow-listed sono fatal.
+
+Il backoff runtime è deterministico e senza jitter: `1s`, `2s`, `5s`, `10s`, poi `30s` al quinto fallimento e successivi. Un batch completato azzera il contatore; SIGINT/SIGTERM interrompono backoff, polling e provider call senza generare failure spurie. Il comando one-shot resta fail-fast e non applica questo retry.
+
+Gli eventi runtime sono JSON su una riga e contengono soltanto phase/classification/code allow-listed, contatori, backoff, timestamp e, per una failure di item, gli UUID tecnici outbox/correlation. Non serializzano mai error message, stack, cause, meta, destination, payload, contatti, token, credenziali o connection string. Anche una failure del logger o della disconnessione Prisma viene contenuta e sanitizzata.
+
 ## Conseguenze
 
 ### Positive

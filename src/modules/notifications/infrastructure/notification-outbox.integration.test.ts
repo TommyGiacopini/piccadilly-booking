@@ -11,6 +11,7 @@ import { notificationIdempotencyKey } from "@/modules/notifications/domain/deliv
 import { toVersionedMessage } from "@/modules/notifications/domain/notification-rules";
 import type { NotificationPayloadV1 } from "@/modules/notifications/domain/types";
 import { PrismaNotificationWorkerRepository } from "@/modules/notifications/infrastructure/notification-worker-repository";
+import { createNotificationWorkerRuntime } from "@/modules/notifications/infrastructure/notification-worker-runtime";
 import {
   SimulatedEmailProvider,
   SimulatedWhatsAppProvider,
@@ -19,12 +20,17 @@ import { prisma } from "@/server/db/prisma";
 
 const restaurantA = randomUUID();
 const restaurantB = randomUUID();
+const decoyRestaurant = randomUUID();
 const userA = randomUUID();
 const userB = randomUUID();
+const decoyUser = randomUUID();
 const reservationA = randomUUID();
 const reservationB = randomUUID();
+const decoyReservation = randomUUID();
 const baseNow = new Date("2028-08-20T10:00:00.000Z");
 const expiry = new Date("2028-08-21T10:00:00.000Z");
+const decoyAvailableAt = new Date("2099-01-01T10:00:00.000Z");
+const decoyExpiry = new Date("2099-01-02T10:00:00.000Z");
 
 const payload: NotificationPayloadV1 = {
   schemaVersion: 1,
@@ -94,6 +100,19 @@ async function deleteNotificationRows() {
   await prisma.notificationOutbox.deleteMany({ where: { restaurantId: { in: [restaurantA, restaurantB] } } });
 }
 
+async function readDecoyState() {
+  return prisma.notificationOutbox.findFirst({
+    where: { restaurantId: decoyRestaurant },
+    select: {
+      id: true,
+      status: true,
+      availableAt: true,
+      attemptCount: true,
+      leaseToken: true,
+    },
+  });
+}
+
 const testSleeper = {
   wait: async (_milliseconds: number, signal: AbortSignal) =>
     new Promise<void>((resolve) => {
@@ -117,6 +136,7 @@ function worker(input: {
     clock: { now: () => input.now },
     sleeper: testSleeper,
     ids: { generate: randomUUID },
+    runtime: createNotificationWorkerRuntime({ write: () => undefined }),
   };
 }
 
@@ -126,18 +146,21 @@ describe.sequential("M12 transactional outbox with real PostgreSQL", () => {
       data: [
         { id: restaurantA, name: "M12 Demo A", timezone: "Europe/Rome" },
         { id: restaurantB, name: "M12 Demo B", timezone: "Europe/Rome" },
+        { id: decoyRestaurant, name: "M12 Foreign Decoy", timezone: "Europe/Rome" },
       ],
     });
     await prisma.restaurantNotificationSettings.createMany({
       data: [
         { restaurantId: restaurantA, strategy: "WHATSAPP_ONLY" },
         { restaurantId: restaurantB, strategy: "WHATSAPP_ONLY" },
+        { restaurantId: decoyRestaurant, strategy: "WHATSAPP_ONLY" },
       ],
     });
     await prisma.user.createMany({
       data: [
         { id: userA, restaurantId: restaurantA, username: `m12-a-${restaurantA}`, passwordHash: "not-used", role: "ADMIN" },
         { id: userB, restaurantId: restaurantB, username: `m12-b-${restaurantB}`, passwordHash: "not-used", role: "ADMIN" },
+        { id: decoyUser, restaurantId: decoyRestaurant, username: `m12-decoy-${decoyRestaurant}`, passwordHash: "not-used", role: "ADMIN" },
       ],
     });
     await prisma.reservation.createMany({
@@ -178,7 +201,33 @@ describe.sequential("M12 transactional outbox with real PostgreSQL", () => {
           privacyConsentMethod: "VERBAL",
           createdByUserId: userB,
         },
+        {
+          id: decoyReservation,
+          restaurantId: decoyRestaurant,
+          localDate: new Date("2099-01-01T00:00:00.000Z"),
+          serviceType: "DINNER",
+          arrivalTime: new Date("1970-01-01T20:00:00.000Z"),
+          partySize: 2,
+          status: "CONFIRMED",
+          origin: "PHONE",
+          customerFirstName: "Foreign",
+          customerLastName: "Decoy",
+          customerPhone: "+39000000002",
+          customerEmail: null,
+          privacyPolicyVersion: "m12-test-v1",
+          privacyConsentAt: baseNow,
+          privacyConsentMethod: "VERBAL",
+          createdByUserId: decoyUser,
+        },
       ],
+    });
+    await createOutbox({
+      restaurantId: decoyRestaurant,
+      reservationId: decoyReservation,
+      actorUserId: decoyUser,
+      availableAt: decoyAvailableAt,
+      scheduledAt: decoyAvailableAt,
+      expiresAt: decoyExpiry,
     });
   });
 
@@ -186,10 +235,11 @@ describe.sequential("M12 transactional outbox with real PostgreSQL", () => {
 
   afterAll(async () => {
     await deleteNotificationRows();
-    await prisma.reservation.deleteMany({ where: { id: { in: [reservationA, reservationB] } } });
-    await prisma.user.deleteMany({ where: { id: { in: [userA, userB] } } });
-    await prisma.restaurantNotificationSettings.deleteMany({ where: { restaurantId: { in: [restaurantA, restaurantB] } } });
-    await prisma.restaurant.deleteMany({ where: { id: { in: [restaurantA, restaurantB] } } });
+    await prisma.notificationOutbox.deleteMany({ where: { restaurantId: decoyRestaurant } });
+    await prisma.reservation.deleteMany({ where: { id: { in: [reservationA, reservationB, decoyReservation] } } });
+    await prisma.user.deleteMany({ where: { id: { in: [userA, userB, decoyUser] } } });
+    await prisma.restaurantNotificationSettings.deleteMany({ where: { restaurantId: { in: [restaurantA, restaurantB, decoyRestaurant] } } });
+    await prisma.restaurant.deleteMany({ where: { id: { in: [restaurantA, restaurantB, decoyRestaurant] } } });
     await prisma.$disconnect();
   });
 
@@ -206,7 +256,11 @@ describe.sequential("M12 transactional outbox with real PostgreSQL", () => {
   it("rejects cross-tenant reservation and actor references", async () => {
     await expect(createOutbox({ restaurantId: restaurantA, reservationId: reservationB, actorUserId: userA })).rejects.toThrow();
     await expect(createOutbox({ restaurantId: restaurantA, reservationId: reservationA, actorUserId: userB })).rejects.toThrow();
-    await expect(prisma.notificationOutbox.count()).resolves.toBe(0);
+    await expect(
+      prisma.notificationOutbox.count({
+        where: { restaurantId: { in: [restaurantA, restaurantB] } },
+      }),
+    ).resolves.toBe(0);
   });
 
   it("enforces logical-delivery and idempotency uniqueness", async () => {
@@ -214,7 +268,51 @@ describe.sequential("M12 transactional outbox with real PostgreSQL", () => {
     await expect(createOutbox({ eventGroupId: randomUUID() })).rejects.toThrow();
     const second = await createOutbox({ reservationVersion: 2, eventType: "RESERVATION_UPDATED" });
     await expect(prisma.notificationOutbox.update({ where: { id: second.id }, data: { idempotencyKey: first.idempotencyKey } })).rejects.toThrow();
-    await expect(prisma.notificationOutbox.count()).resolves.toBe(2);
+    await expect(
+      prisma.notificationOutbox.count({ where: { restaurantId: restaurantA } }),
+    ).resolves.toBe(2);
+  });
+
+  it("keeps scenario counts and cleanup scoped when a foreign-tenant decoy exists", async () => {
+    const decoyBefore = await readDecoyState();
+    const target = await createOutbox({});
+
+    await expect(
+      prisma.notificationOutbox.count({ where: { restaurantId: restaurantA } }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.notificationOutbox.count({
+        where: { id: { in: [target.id] }, restaurantId: restaurantA },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.notificationOutbox.count({
+        where: { id: { in: [target.id, decoyBefore!.id] } },
+      }),
+    ).resolves.toBe(2);
+
+    await deleteNotificationRows();
+
+    await expect(
+      prisma.notificationOutbox.count({
+        where: { restaurantId: { in: [restaurantA, restaurantB] } },
+      }),
+    ).resolves.toBe(0);
+    await expect(readDecoyState()).resolves.toEqual(decoyBefore);
+  });
+
+  it("does not select a future foreign-tenant decoy as scenario work", async () => {
+    const target = await createOutbox({});
+    const decoyBefore = await readDecoyState();
+    const claimed = await new PrismaNotificationWorkerRepository().claimDue({
+      now: baseNow,
+      batchSize: 25,
+      maxPerTenant: 5,
+      leaseMilliseconds: 120_000,
+    });
+
+    expect(claimed.map((row) => row.id)).toEqual([target.id]);
+    await expect(readDecoyState()).resolves.toEqual(decoyBefore);
   });
 
   it("enforces lifecycle, lease, attempt-count and JSON-object checks in PostgreSQL", async () => {
@@ -358,7 +456,14 @@ describe.sequential("M12 transactional outbox with real PostgreSQL", () => {
     const attempt = await repository.startAttempt({ notification: claimed!, attemptCorrelationId: randomUUID(), now: baseNow });
     expect(attempt).not.toBeNull();
     await expect(repository.recoverExpiredLeases(new Date(baseNow.getTime() + 120_001))).resolves.toBe(1);
-    await expect(prisma.notificationAttempt.findFirstOrThrow()).resolves.toMatchObject({ outcome: "ABANDONED", failureCode: "WORKER_INTERRUPTED" });
+    await expect(
+      prisma.notificationAttempt.findFirstOrThrow({
+        where: { outboxId: claimed!.id, attemptNumber: 1 },
+      }),
+    ).resolves.toMatchObject({
+      outcome: "ABANDONED",
+      failureCode: "WORKER_INTERRUPTED",
+    });
     await expect(prisma.notificationOutbox.findUniqueOrThrow({ where: { id: claimed!.id } })).resolves.toMatchObject({ status: "PENDING", attemptCount: 1, leaseToken: null });
     await expect(repository.finalizeAttempt({ attempt: attempt!, result: { type: "SUCCESS", providerReference: "stale", deduplicated: false }, now: new Date(baseNow.getTime() + 120_002), nextAvailableAt: null, terminalFailureCode: null })).resolves.toBe("STALE");
   });
@@ -549,7 +654,7 @@ describe.sequential("M12 transactional outbox with real PostgreSQL", () => {
       repository.expirePending({ now: baseNow, limit: 1_000 }),
     ).resolves.toBe(100);
     const remaining = await prisma.notificationOutbox.findMany({
-      where: { status: "PENDING" },
+      where: { restaurantId: restaurantA, status: "PENDING" },
       select: { expiresAt: true },
     });
     expect(remaining).toHaveLength(5);
@@ -576,11 +681,17 @@ describe.sequential("M12 transactional outbox with real PostgreSQL", () => {
     ]);
     expect(swept.reduce((total, value) => total + value, 0)).toBe(2);
     await expect(
-      prisma.notificationOutbox.count({ where: { status: "PENDING" } }),
+      prisma.notificationOutbox.count({
+        where: { restaurantId: restaurantA, status: "PENDING" },
+      }),
     ).resolves.toBe(0);
-    await expect(prisma.notificationAttempt.count()).resolves.toBe(0);
     await expect(
-      prisma.notificationOutbox.count({ where: { channel: "EMAIL" } }),
+      prisma.notificationAttempt.count({ where: { restaurantId: restaurantA } }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.notificationOutbox.count({
+        where: { restaurantId: restaurantA, channel: "EMAIL" },
+      }),
     ).resolves.toBe(0);
   });
 
@@ -803,10 +914,19 @@ describe.sequential("M12 transactional outbox with real PostgreSQL", () => {
 
   it("keeps reservation state unchanged when the provider fails after commit", async () => {
     const before = await prisma.reservation.findUniqueOrThrow({ where: { id: reservationA } });
-    await createOutbox({});
+    const row = await createOutbox({});
     await processDueNotificationBatch(worker({ now: baseNow, whatsapp: new SimulatedWhatsAppProvider({ type: "PERMANENT" }) }));
     expect(await prisma.reservation.findUniqueOrThrow({ where: { id: reservationA } })).toEqual(before);
-    await expect(prisma.notificationOutbox.findFirstOrThrow()).resolves.toMatchObject({ status: "DEAD", terminalFailureCode: "SIMULATED_PERMANENT_FAILURE" });
-    await expect(prisma.notificationAttempt.findFirstOrThrow()).resolves.toMatchObject({ outcome: "PERMANENT_FAILURE" });
+    await expect(
+      prisma.notificationOutbox.findUniqueOrThrow({ where: { id: row.id } }),
+    ).resolves.toMatchObject({
+      status: "DEAD",
+      terminalFailureCode: "SIMULATED_PERMANENT_FAILURE",
+    });
+    await expect(
+      prisma.notificationAttempt.findFirstOrThrow({
+        where: { outboxId: row.id, attemptNumber: 1 },
+      }),
+    ).resolves.toMatchObject({ outcome: "PERMANENT_FAILURE" });
   });
 });

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NotificationWorkerDependencies } from "@/modules/notifications/application/worker";
 import { PrismaNotificationWorkerRepository } from "@/modules/notifications/infrastructure/notification-worker-repository";
+import { createNotificationWorkerRuntime } from "@/modules/notifications/infrastructure/notification-worker-runtime";
 import {
   SimulatedEmailProvider,
   SimulatedWhatsAppProvider,
@@ -30,6 +31,7 @@ export const realSleeper = {
 export function createNotificationWorkerDependencies(input?: {
   whatsappMode?: SimulatedProviderMode;
   emailMode?: SimulatedProviderMode;
+  runtime?: NotificationWorkerDependencies["runtime"];
 }): NotificationWorkerDependencies {
   return {
     repository: new PrismaNotificationWorkerRepository(),
@@ -38,5 +40,6 @@ export function createNotificationWorkerDependencies(input?: {
     clock: systemClock,
     sleeper: realSleeper,
     ids: { generate: randomUUID },
+    runtime: input?.runtime ?? createNotificationWorkerRuntime(),
   };
 }

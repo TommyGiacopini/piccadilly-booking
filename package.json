@@ -11,7 +11,7 @@
     "start": "node scripts/start.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "node scripts/run-vitest-isolated.mjs",
     "test:watch": "vitest",
     "test:e2e": "npm run build && npm run db:seed && node scripts/run-e2e.mjs",
     "test:e2e:staging": "playwright test --config=playwright.staging.config.ts",

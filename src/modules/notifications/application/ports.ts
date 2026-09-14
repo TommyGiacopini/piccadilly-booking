@@ -22,6 +22,78 @@ export interface NotificationIdGenerator {
   generate(): string;
 }
 
+export type NotificationWorkerPhase =
+  | "STARTUP"
+  | "CLOCK"
+  | "EXPIRE_PENDING"
+  | "RECOVER_EXPIRED_LEASES"
+  | "CLAIM_DUE"
+  | "PROCESS_NOTIFICATION"
+  | "POLL_WAIT"
+  | "SHUTDOWN";
+
+export type NotificationWorkerFailureClassification =
+  | "RUNTIME_RECOVERABLE"
+  | "RUNTIME_FATAL";
+
+export type NotificationWorkerFailureCode =
+  | "DB_CONNECTION_UNAVAILABLE"
+  | "DB_OPERATION_TIMEOUT"
+  | "DB_CONNECTION_LOST"
+  | "DB_POOL_EXHAUSTED"
+  | "DB_TRANSACTION_CONFLICT"
+  | "DB_AUTHORIZATION_FAILED"
+  | "DB_SCHEMA_INCOMPATIBLE"
+  | "WORKER_CONFIGURATION_INVALID"
+  | "WORKER_RUNTIME_UNCLASSIFIED"
+  | "NOTIFICATION_PROCESSING_FAILED";
+
+export type NotificationWorkerEvent =
+  | {
+      event: "notification_worker_runtime_failure";
+      phase: NotificationWorkerPhase;
+      classification: NotificationWorkerFailureClassification;
+      code: NotificationWorkerFailureCode;
+      consecutiveFailures: number;
+      backoffMs: number;
+      timestamp: string;
+    }
+  | {
+      event: "notification_worker_recovered";
+      previousFailures: number;
+      timestamp: string;
+    }
+  | {
+      event: "notification_worker_item_failure";
+      phase: "PROCESS_NOTIFICATION";
+      code: "NOTIFICATION_PROCESSING_FAILED";
+      outboxId: string;
+      attemptCorrelationId?: string;
+      timestamp: string;
+    }
+  | {
+      event: "notification_worker_stopped";
+      reason:
+        | "ABORTED"
+        | "RUNTIME_FATAL"
+        | "ONE_SHOT_FAILURE"
+        | "SHUTDOWN_FAILURE";
+      phase: NotificationWorkerPhase;
+      code: NotificationWorkerFailureCode;
+      exitCode: 0 | 1;
+      timestamp: string;
+    };
+
+export interface NotificationWorkerRuntime {
+  classifyFailure(error: unknown): {
+    classification: NotificationWorkerFailureClassification;
+    code: NotificationWorkerFailureCode;
+  };
+  backoffMilliseconds(consecutiveFailures: number): number;
+  timestamp(): string;
+  emit(event: NotificationWorkerEvent): void;
+}
+
 export interface NotificationPlanningContext {
   restaurantName: string;
   timezone: string;
