@@ -38,7 +38,7 @@ function assertExactBlueprintCardinality(blueprint: string): void {
   if (
     databaseEntries.length !== 1 ||
     databaseNames.length !== 1 ||
-    databaseNames[0] !== "piccadilly-booking-m13-61a66b11-db"
+    databaseNames[0] !== "piccadilly-booking-m13-staging-db"
   ) {
     throw new Error("Blueprint must contain exactly the frozen M13 PostgreSQL database.");
   }
@@ -59,13 +59,13 @@ describe("M13 Render Blueprint contract", () => {
     expect(servicesSection.match(/^  - type: worker$/gm)).toHaveLength(1);
     expect(databasesSection.match(/^  - name:/gm)).toHaveLength(1);
     expect(servicesSection).toContain(
-      "name: piccadilly-booking-m13-61a66b11-web",
+      "name: piccadilly-booking-m13-staging-web",
     );
     expect(servicesSection).toContain(
-      "name: piccadilly-booking-m13-61a66b11-worker",
+      "name: piccadilly-booking-m13-staging-worker",
     );
     expect(databasesSection).toContain(
-      "name: piccadilly-booking-m13-61a66b11-db",
+      "name: piccadilly-booking-m13-staging-db",
     );
     expect(servicesSection.match(/runtime: node/g)).toHaveLength(2);
     expect(servicesSection.match(/branch: main/g)).toHaveLength(2);
@@ -103,6 +103,9 @@ describe("M13 Render Blueprint contract", () => {
 
     expect(servicesSection.match(/- key: DATABASE_URL/g)).toHaveLength(2);
     expect(servicesSection.match(/fromDatabase:/g)).toHaveLength(2);
+    expect(
+      servicesSection.match(/name: piccadilly-booking-m13-staging-db/g),
+    ).toHaveLength(2);
     expect(servicesSection.match(/property: connectionString/g)).toHaveLength(2);
     expect(servicesSection.match(/- key: APP_ENV/g)).toHaveLength(2);
     expect(servicesSection.match(/^\s+value: staging$/gm)).toHaveLength(2);
@@ -110,6 +113,7 @@ describe("M13 Render Blueprint contract", () => {
     expect(blueprint).not.toMatch(
       /(?:runtime:\s*docker|type:\s*(?:cron|keyvalue|redis)|^\s+(?:domains|disk|dockerCommand|schedule):|customDomain)/im,
     );
+    expect(blueprint).not.toContain("m13-61a66b11");
   });
 
   it.each(["pserv", "static", "web", "worker", "cron"])(
@@ -233,5 +237,25 @@ describe("M13 staging Playwright static contract", () => {
     }
     expect(suite).not.toContain("DATABASE_URL");
     expect(suite).not.toMatch(/from\s+["']pg["']|PrismaClient/);
+  });
+
+  it("requires the public and Staff creates to use one real browser form submit", () => {
+    expect(suite).toContain('page.goto("/prenota?lang=it")');
+    expect(suite).toMatch(
+      /page\s*\.getByRole\("button",\s*\{ name: "Conferma prenotazione" \}\)/u,
+    );
+    expect(suite).toContain("publicCreatePostCount");
+    expect(suite).toContain("expect(publicCreatePostCount).toBe(1)");
+    expect(suite).toContain(
+      'page.goto(`/dashboard/reservations/new?date=${localDate}`)',
+    );
+    expect(suite).toMatch(
+      /page\s*\.getByRole\("button",\s*\{ name: "Salva prenotazione telefonica" \}\)/u,
+    );
+    expect(suite).toContain("phoneCreatePostCount");
+    expect(suite).toContain("expect(phoneCreatePostCount).toBe(1)");
+    expect(suite).not.toMatch(
+      /page\.request\.post\(["']\/api\/(?:public|staff)\/reservations["']/u,
+    );
   });
 });

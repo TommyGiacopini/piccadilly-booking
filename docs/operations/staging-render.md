@@ -2,23 +2,27 @@
 
 ## 1. Stato e autorità
 
-Questo runbook descrive il contratto M13 e le verifiche locali preparate per lo
-staging personale. La Fase A autorizza solo implementazione e validazione
-locale. Non autorizza Blueprint sync, provisioning, database Render, secret,
-deploy, one-off job, piano a pagamento o test contro un URL remoto.
+Questo runbook descrive il contratto M13 FASE A, merged con la PR #18, e la
+riconciliazione locale sulla baseline post-PR #19/#20/#21. La riconciliazione è
+implementata localmente e attende il Final QG Work. Non autorizza Blueprint
+sync, provisioning, database Render, secret, deploy, one-off job, piano a
+pagamento o test contro un URL remoto; FASE C resta sospesa e non iniziata.
 
-Qualunque operazione mutativa su Render richiede una futura autorizzazione
-Controller esplicita. Il costo previsto del profilo congelato è circa
-20,30 USD/mese.
+Qualunque accesso autenticato a Render richiede una futura autorizzazione
+Controller esplicita. L'autorizzazione economica e al provisioning è un gate
+successivo e separato. La cifra di 20,30 USD/mese è soltanto una stima storica,
+non un prezzo corrente o un'autorizzazione di spesa.
+
+> RENDER COST CHECKPOINT — REFRESH REQUIRED BEFORE ANY RESOURCE CREATION
 
 ## 2. Inventario congelato
 
 Il file `render.yaml` dichiara:
 
 - workspace Hobby;
-- web `piccadilly-booking-m13-61a66b11-web`, `0.5c-512mb`, una istanza;
-- worker `piccadilly-booking-m13-61a66b11-worker`, `0.5c-512mb`, una istanza;
-- PostgreSQL `piccadilly-booking-m13-61a66b11-db`, `0.1c-256mb`, 1 GB;
+- web `piccadilly-booking-m13-staging-web`, `0.5c-512mb`, una istanza;
+- worker `piccadilly-booking-m13-staging-worker`, `0.5c-512mb`, una istanza;
+- PostgreSQL `piccadilly-booking-m13-staging-db`, `0.1c-256mb`, 1 GB;
 - regione Frankfurt;
 - branch `main`, preview e auto-deploy disabilitati;
 - nessun custom domain, cron, Redis, persistent disk o Docker runtime.
@@ -82,7 +86,17 @@ secondi, fino a 120 secondi, che tutte le tredici migration versionate risultino
 applicate. La readiness richiede uguaglianza esatta, cardinalità 13 e assenza di
 duplicati tra inventario directory e migration concluse con successo: una
 migration mancante o inattesa mantiene il worker in attesa. I segnali
-interrompono l'attesa e vengono propagati al worker M12.
+interrompono l'attesa e vengono propagati al CLI corrente. Dopo la readiness il
+runtime PR #21 classifica errori transient/fatal, applica il backoff runtime
+`1/2/5/10/30` secondi e mantiene log strutturati sanitizzati; il wrapper staging
+non introduce un secondo ciclo di retry. I retry delivery M12 restano separati
+a +1/+5/+15 minuti.
+
+Il normale `npm test` usa il runner isolato PR #21 su PostgreSQL temporaneo
+loopback. Il runner imposta direttamente
+`M13_STAGING_TOOLING_PG_TEST=true` nel child environment minimizzato: un valore
+host non può disabilitare o sostituire il gate, e il flag non è richiesto nel
+runtime Render.
 
 `APP_ENV`, non `NODE_ENV`, distingue staging e produzione. Render può e deve
 usare `NODE_ENV=production` anche nello staging.
@@ -176,8 +190,11 @@ npm run test:e2e:staging
 La suite sceglie una data `Europe/Rome` a oggi +7, copre Basic gate, banner,
 indicizzazione, health, booking pubblico e gestione, login Staff/Admin,
 prenotazione telefonica con opt-out, configurazione notifiche, assegnazione,
-PDF/Excel, cookie, Origin e viewport 390/820/1440. La Fase A non esegue questo
-comando contro Render perché non esiste ancora un URL staging autorizzato.
+PDF/Excel, cookie, Origin e viewport 390/820/1440. I create Public e Phone usano
+i form browser reali, un singolo submit utente e richiedono esattamente un POST
+201 per intento; non duplicano nel test la logica dei client PR #20. La Fase A
+non esegue questo comando contro Render perché non esiste ancora un URL staging
+autorizzato.
 
 ## 10. Acceptance notifiche futura
 

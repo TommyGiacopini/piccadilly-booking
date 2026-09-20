@@ -247,7 +247,7 @@ Riferimento: `docs/adr/006-audit-architecture-minimization.md`.
 
 ### D-037 — Fondazione dell'assegnazione manuale di sala e tavoli
 
-M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; entrambe sono merged su `main` con la PR #11. M10-C implementa la UI operativa, è approvata da Work ed è merged su `main` con la PR #12. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è stata successivamente approvata da Work e squash-merged su `main` con la PR #16; M13 è la milestone successiva e non è ancora iniziata.
+M10 è suddivisa in tre tranche. M10-A introduce fondazione dati, dominio, repository, servizio applicativo, API Staff/Admin e test; M10-B integra il lifecycle di reschedule e cancellazione e l'impatto delle disattivazioni; entrambe sono merged su `main` con la PR #11. M10-C implementa la UI operativa, è approvata da Work ed è merged su `main` con la PR #12. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è stata successivamente approvata da Work e squash-merged su `main` con la PR #16. M13 FASE A è merged con la PR #18; la riconciliazione post-corrective è locale e FASE C resta sospesa.
 
 Le decisioni vincolanti approvate sono formalizzate come segue:
 
@@ -298,13 +298,16 @@ M12 include soltanto provider simulati deterministici, senza rete, SDK, segreti 
 
 ### D-040 — Contratto dello staging personale M13
 
-Lo staging personale usa un Render Blueprint versionato con un servizio web
+M13 FASE A è merged con la PR #18. La riconciliazione locale sulla baseline
+post-PR #19/#20/#21 conserva un Render Blueprint versionato con un servizio web
 Node, un background worker Node separato e un PostgreSQL dedicato, tutti in
-regione Frankfurt. Il profilo congelato è Hobby workspace, web e worker
-`0.5c-512mb`, database `0.1c-256mb`, storage 1 GB, una sola istanza per servizio,
-preview e auto-deploy disabilitati. Il costo indicativo complessivo è circa
-20,30 USD/mese; il file infrastrutturale non autorizza provisioning, deploy o
-attivazione del costo.
+regione Frankfurt. I nomi stabili sono `piccadilly-booking-m13-staging-web`,
+`piccadilly-booking-m13-staging-worker` e
+`piccadilly-booking-m13-staging-db`; non contengono SHA. Il profilo congelato è
+Hobby workspace, web e worker `0.5c-512mb`, database `0.1c-256mb`, storage 1 GB,
+una sola istanza per servizio, preview e auto-deploy disabilitati. La cifra di
+20,30 USD/mese è una stima storica, non un prezzo corrente o un'autorizzazione:
+**RENDER COST CHECKPOINT — REFRESH REQUIRED BEFORE ANY RESOURCE CREATION**.
 
 `APP_ENV` è il confine applicativo canonico: `staging` resta staging anche quando
 Render imposta `NODE_ENV=production`; `APP_ENV=production` vieta sempre il seed
@@ -312,8 +315,9 @@ demo. Il web valida fail-fast l'ambiente Render, il proxy fidato, l'URL HTTPS
 `*.onrender.com`, le configurazioni applicative e i secret obbligatori. Il
 pre-deploy applica le tredici migration versionate e poi il seed fittizio. Il
 worker non esegue migration: attende per massimo 120 secondi che tutte le
-tredici migration risultino applicate, quindi avvia senza modifiche il worker
-M12.
+tredici migration risultino applicate, quindi avvia il CLI corrente. Il runtime
+PR #21 mantiene classificazione transient/fatal, backoff `1/2/5/10/30`, log
+strutturati sanitizzati e lifecycle di loop separato dai retry delivery M12.
 
 Lo staging è protetto con HTTP Basic, esclusi soltanto health e robots, espone
 un banner demo, `noindex/nofollow/noarchive` globale e cookie di sessione
@@ -328,7 +332,9 @@ produzione e limitano il cleanup al run ID confermato, preservando un
 fingerprint delle righe non appartenenti al run. La suite Playwright remota non
 riceve `DATABASE_URL`.
 
-M13 non modifica schema o migration, non aggiunge dipendenze, non introduce
+Il normale `npm test` usa il runner PostgreSQL isolato PR #21 e abilita nel
+child environment controllato i test PostgreSQL M13, senza ereditare autorità
+dal relativo flag host. M13 non modifica schema o migration, non aggiunge dipendenze, non introduce
 provider reali, Redis, cron, disk persistenti, dominio custom o GitHub Actions.
 Le attività Render mutative richiedono una successiva autorizzazione Controller.
 ADR 004 resta invariato e autorevole per la separazione degli ambienti.
@@ -341,11 +347,14 @@ canonica è: “Official Render JSON Schema validation PASS; authenticated
 workspace-aware Render semantic validation deferred by contract to FASE C.”
 
 Solo in Fase C, dopo Quality Gate locale, pubblicazione Git, merge e separate
-autorizzazioni Controller all'accesso Render e al costo, il CLI eseguirà la
+autorizzazioni Controller all'accesso/autenticazione Render e al costo/provisioning, il CLI eseguirà la
 validazione autenticata con workspace process-local, exit code 0, `valid=true`,
 ispezione del plan, semantic validation e conflict checking prima di qualunque
 creazione o sincronizzazione. Workspace ID e token non sono versionati,
 hardcoded o inclusi nelle evidence.
+
+La riconciliazione locale non crea risorse, non esegue test remoti e non completa
+M13. FASE C resta sospesa e non iniziata fino ai successivi gate Controller.
 
 ## 3. Decisioni reversibili
 

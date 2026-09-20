@@ -220,6 +220,7 @@ export function buildIsolatedVitestChildEnvironment(environment, input) {
     ...childEnvironment,
     APP_ENV: "development",
     NODE_ENV: "test",
+    M13_STAGING_TOOLING_PG_TEST: "true",
     DATABASE_URL: input.databaseUrl,
     AUTH_RESTAURANT_ID: TEST_RESTAURANT_ID,
     AUTH_RATE_LIMIT_SECRET: input.authRateLimitSecret,

@@ -581,7 +581,7 @@ M10-B applica la rimozione logica atomica su cambio data/servizio/orario con sin
 
 **Checkpoint M10-C — operatività visuale approvata da Work e merged su `main` con la PR #12**
 
-M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEGNARE`/assegnate e sala definitiva, indicatori dei coperti non assegnati e per sala finale. Il pannello responsive riusa le API M10-A per prima assegnazione, riassegnazione, note e clear, mostra posti informativi e riferimenti grandfathered e richiede una rilettura esplicita sui conflitti di versione. I test unitari, PostgreSQL e Playwright coprono il checkpoint approvato. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è stata successivamente approvata da Work e squash-merged su `main` con la PR #16; M13 è la milestone successiva e non è ancora iniziata.
+M10-C integra nel read model tenant-scoped assegnazione attiva, filtri `DA ASSEGNARE`/assegnate e sala definitiva, indicatori dei coperti non assegnati e per sala finale. Il pannello responsive riusa le API M10-A per prima assegnazione, riassegnazione, note e clear, mostra posti informativi e riferimenti grandfathered e richiede una rilettura esplicita sui conflitti di versione. I test unitari, PostgreSQL e Playwright coprono il checkpoint approvato. Con il merge di M10-C, M10 è completata e merged su `main`; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è stata successivamente approvata da Work e squash-merged su `main` con la PR #16. M13 FASE A è merged con la PR #18; la riconciliazione post-corrective è in corso e FASE C resta sospesa.
 
 ### M11 — Esportazioni PDF ed Excel
 
@@ -683,22 +683,37 @@ La pipeline di notifica è verificata interamente con mock.
 
 ### M13 — Staging personale
 
-**Stato: IN CORSO / IMPLEMENTATA — IN ATTESA DI VALIDAZIONE REMOTA**
+**Stato: M13 IN CORSO — RICONCILIAZIONE LOCALE IMPLEMENTATA / IN ATTESA DI WORK FINAL QG**
 
-La Fase A locale M13 introduce il Blueprint Render versionato, i contratti di
+La Fase A M13, merged su `main` con la PR #18, introduce il Blueprint Render versionato, i contratti di
 startup web/worker, i controlli staging, il seed fittizio, le superfici di
 sicurezza, il tooling operativo run-scoped e la suite Playwright remota. Non
 sono state create risorse Render e non sono stati eseguiti deploy o test remoti.
+PR #19 ha corretto e irrigidito l'origine dei redirect auth LAN/proxy; PR #20 ha
+stabilizzato l'idempotenza client Public/Phone; PR #21 ha introdotto il runner
+Vitest PostgreSQL isolato e la resilienza runtime del worker. La baseline
+canonica post-PR #21 è `2acc992b4c5a2ea11173048be5fa6168c670137a` e la
+riconciliazione locale corrente adatta M13 a tale baseline senza riaprire i
+correttivi.
+
 La Fase A valida il JSON Schema ufficiale, il contratto Blueprint permanente e
 la compatibilità statica con la specifica Render corrente. Formula canonica:
 “Official Render JSON Schema validation PASS; authenticated workspace-aware
 Render semantic validation deferred by contract to FASE C.”
 
+I nomi risorsa congelati sono `piccadilly-booking-m13-staging-web`,
+`piccadilly-booking-m13-staging-worker` e
+`piccadilly-booking-m13-staging-db`. La cifra di 20,30 USD/mese resta soltanto
+una stima storica, non un prezzo corrente o un'autorizzazione di spesa.
+**RENDER COST CHECKPOINT — REFRESH REQUIRED BEFORE ANY RESOURCE CREATION**.
+Render resources, autenticazione e spesa sono zero; il workstream Design/UX è
+separato e non è iniziato.
+
 La Fase C eseguirà semantic validation, plan inspection e conflict checking con
 CLI autenticato e workspace process-local soltanto dopo Local Final Quality
 Gate Work, pubblicazione Git, merge e autorizzazioni Controller separate per
 accesso Render e costo. Validazione remota e provisioning restano quindi
-subordinati a tali gate.
+subordinati a tali gate; FASE C è sospesa e non iniziata.
 
 **Obiettivo**
 
