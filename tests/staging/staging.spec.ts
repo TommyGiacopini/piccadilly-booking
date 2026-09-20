@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { expect, request, test, type Page } from "@playwright/test";
 
 import {
@@ -37,59 +35,15 @@ async function logout(page: Page) {
   expect(response.status()).toBe(303);
 }
 
-function publicPayload(arrivalTime = "19:00") {
-  return {
-    localDate,
-    serviceType: "DINNER",
-    arrivalTime,
-    partySize: 2,
-    roomCode: "sala-1",
-    highChair: false,
-    stroller: false,
-    accessibility: false,
-    children: false,
-    celiac: false,
-    allergies: null,
-    intolerances: null,
-    celebration: null,
-    animals: false,
-    notes: `${prefix}PUBLIC-NOTES`,
-    customerFirstName: `${prefix}PUBLIC-FIRST`,
-    customerLastName: `${prefix}PUBLIC-LAST`,
-    customerPhone: "+390000001301",
-    customerEmail: `${staging.runId.toLowerCase()}-public@example.test`,
-    language: "it",
-    privacyAccepted: true,
-    termsAccepted: true,
-  };
-}
-
-function staffPayload() {
-  return {
-    localDate,
-    serviceType: "DINNER",
-    arrivalTime: "19:30",
-    partySize: 2,
-    roomCode: "sala-1",
-    customerFirstName: `${prefix}STAFF-FIRST`,
-    customerLastName: `${prefix}STAFF-LAST`,
-    customerPhone: "+390000001302",
-    customerEmail: `${staging.runId.toLowerCase()}-staff@example.test`,
-    highChair: false,
-    stroller: false,
-    accessibility: false,
-    children: false,
-    celiac: false,
-    allergies: null,
-    intolerances: null,
-    celebration: null,
-    animals: false,
-    notes: `${prefix}STAFF-NOTES`,
-    verbalConsentConfirmed: true,
-    sendWhatsAppConfirmation: false,
-    capacityOverride: false,
-    capacityOverrideReason: null,
-  };
+async function selectFirstRealOption(page: Page, label: string) {
+  const option = page
+    .getByLabel(label)
+    .locator("option:not([value=''])")
+    .first();
+  await expect(option).toHaveCount(1);
+  const value = await option.getAttribute("value");
+  expect(value).toBeTruthy();
+  await page.getByLabel(label).selectOption(value!);
 }
 
 test.describe.serial("M13 personal staging acceptance", () => {
@@ -141,40 +95,71 @@ test.describe.serial("M13 personal staging acceptance", () => {
   });
 
   test("public booking and management update/cancel", async ({ page }) => {
-    const createdResponse = await page.request.post("/api/public/reservations", {
-      headers: { origin, "Idempotency-Key": randomUUID() },
-      data: publicPayload(),
+    let publicCreatePostCount = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/api/public/reservations"
+      ) {
+        publicCreatePostCount += 1;
+      }
     });
+    await page.goto("/prenota?lang=it");
+    await page.getByLabel("Data").fill(localDate);
+    await page.getByLabel("Servizio").selectOption("DINNER");
+    await selectFirstRealOption(page, "Orario disponibile");
+    await selectFirstRealOption(page, "Sala preferita");
+    await page.getByLabel("Nome", { exact: true }).fill(`${prefix}PUBLIC-FIRST`);
+    await page.getByLabel("Cognome", { exact: true }).fill(`${prefix}PUBLIC-LAST`);
+    await page.getByLabel("Telefono").fill("+390000001301");
+    await page
+      .getByLabel("Email (facoltativa)")
+      .fill(`${staging.runId.toLowerCase()}-public@example.test`);
+    await page.getByLabel("Note (facoltative)").fill(`${prefix}PUBLIC-NOTES`);
+    await page.getByLabel(/Accetto l.informativa privacy/).check();
+    await page.getByLabel(/Accetto le condizioni di prenotazione/).check();
+    const responsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/public/reservations",
+    );
+    await page
+      .getByRole("button", { name: "Conferma prenotazione" })
+      .click();
+    const createdResponse = await responsePromise;
     expect(createdResponse.status(), await createdResponse.text()).toBe(201);
+    expect(publicCreatePostCount).toBe(1);
     const created = (await createdResponse.json()) as { managementPath: string };
     expect(created.managementPath).toMatch(/^\/p\/[A-Za-z0-9_-]+$/);
+    await expect(
+      page.getByRole("link", { name: "Apri il tuo link personale" }),
+    ).toHaveAttribute("href", `${created.managementPath}?lang=it`);
 
     const managementPage = await page.goto(created.managementPath);
     expect(managementPage?.status()).toBe(200);
     expect(managementPage?.headers()["x-robots-tag"]).toContain("noindex");
 
     const token = created.managementPath.slice(3);
-    const changed = publicPayload("19:15");
     const updateResponse = await page.request.patch(
       `/api/public/reservations/${token}`,
       {
         headers: { origin },
         data: {
-          localDate: changed.localDate,
-          serviceType: changed.serviceType,
-          arrivalTime: changed.arrivalTime,
-          partySize: changed.partySize,
-          roomCode: changed.roomCode,
-          highChair: changed.highChair,
-          stroller: changed.stroller,
-          accessibility: changed.accessibility,
-          children: changed.children,
-          celiac: changed.celiac,
-          allergies: changed.allergies,
-          intolerances: changed.intolerances,
-          celebration: changed.celebration,
-          animals: changed.animals,
-          notes: changed.notes,
+          localDate,
+          serviceType: "DINNER",
+          arrivalTime: "19:15",
+          partySize: 2,
+          roomCode: "sala-1",
+          highChair: false,
+          stroller: false,
+          accessibility: false,
+          children: false,
+          celiac: false,
+          allergies: null,
+          intolerances: null,
+          celebration: null,
+          animals: false,
+          notes: `${prefix}PUBLIC-NOTES`,
         },
       },
     );
@@ -195,14 +180,52 @@ test.describe.serial("M13 personal staging acceptance", () => {
       await page.goto(`/dashboard?date=${localDate}`);
       await expect(page.getByText(/sessione .* \(STAFF\)/i)).toBeVisible();
 
-    const createdResponse = await page.request.post("/api/staff/reservations", {
-      headers: { origin, "Idempotency-Key": randomUUID() },
-      data: staffPayload(),
+    let phoneCreatePostCount = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/api/staff/reservations"
+      ) {
+        phoneCreatePostCount += 1;
+      }
     });
+    await page.goto(`/dashboard/reservations/new?date=${localDate}`);
+    await page.getByLabel("Data").fill(localDate);
+    await page.getByLabel("Servizio").selectOption("DINNER");
+    await page.getByLabel("Persone").fill("2");
+    await selectFirstRealOption(page, "Slot configurato");
+    await selectFirstRealOption(page, "Sala preferita (non garantita)");
+    await page.getByLabel("Nome", { exact: true }).fill(`${prefix}STAFF-FIRST`);
+    await page.getByLabel("Cognome", { exact: true }).fill(`${prefix}STAFF-LAST`);
+    await page.getByLabel("Telefono").fill("+390000001302");
+    await page
+      .getByLabel("Email (facoltativa)")
+      .fill(`${staging.runId.toLowerCase()}-staff@example.test`);
+    await page.getByLabel("Note").fill(`${prefix}STAFF-NOTES`);
+    await page.getByLabel("Invia conferma WhatsApp").uncheck();
+    await page.getByLabel(/Confermo di avere acquisito verbalmente/).check();
+    const responsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/staff/reservations",
+    );
+    await page
+      .getByRole("button", { name: "Salva prenotazione telefonica" })
+      .click();
+    const createdResponse = await responsePromise;
     expect(createdResponse.status(), await createdResponse.text()).toBe(201);
+    expect(phoneCreatePostCount).toBe(1);
+    await expect(
+      page.getByText("Prenotazione telefonica salvata e capacità aggiornata."),
+    ).toBeVisible();
     const created = (await createdResponse.json()) as {
       reservation: { id: string; version: number };
     };
+
+    await page.goto(`/dashboard?date=${localDate}`);
+    await expect(
+      page.locator("article").filter({ hasText: `${prefix}STAFF-FIRST` }),
+    ).toHaveCount(1);
 
     const contextResponse = await page.request.get(
       `/api/staff/reservations/${created.reservation.id}/assignment`,

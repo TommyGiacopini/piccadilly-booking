@@ -142,6 +142,7 @@ describe("isolated Vitest runner safety", () => {
       environment({
         Path: "C:\\Windows\\System32",
         AUTH_RATE_LIMIT_SECRET: "host-auth-secret-canary",
+        M13_STAGING_TOOLING_PG_TEST: "false",
         UNRELATED_HOST_SECRET: "unrelated-host-secret-canary",
         RENDER: "true",
       }),
@@ -160,6 +161,7 @@ describe("isolated Vitest runner safety", () => {
       `node_modules\\.bin;C:\\Windows\\System32`,
     );
     expect(childEnvironment.APP_ENV).toBe("development");
+    expect(childEnvironment.M13_STAGING_TOOLING_PG_TEST).toBe("true");
     expect(childEnvironment.AUTH_RATE_LIMIT_SECRET).toBe(
       "runner-auth-secret-canary-value",
     );
@@ -172,6 +174,29 @@ describe("isolated Vitest runner safety", () => {
       "unrelated-host-secret-canary",
     );
   });
+
+  it.each(["false", "arbitrary-host-value"])(
+    "keeps the M13 PostgreSQL test flag runner-controlled when the host supplies %s",
+    (hostValue) => {
+      const childEnvironment = buildIsolatedVitestChildEnvironment(
+        environment({ M13_STAGING_TOOLING_PG_TEST: hostValue }),
+        {
+          databaseUrl:
+            "postgresql://isolated:test-password@127.0.0.1:5433/piccadilly_vitest_0123456789abcdef0123456789abcdef",
+          adminPassword: "runner-admin-password-canary",
+          staffPassword: "runner-staff-password-canary",
+          authRateLimitSecret: "runner-auth-secret-canary-value",
+          publicManagementSecret: "runner-management-secret-canary-value",
+          publicRateLimitSecret: "runner-rate-secret-canary-value",
+        },
+      );
+
+      expect(childEnvironment.M13_STAGING_TOOLING_PG_TEST).toBe("true");
+      if (hostValue !== "false") {
+        expect(JSON.stringify(childEnvironment)).not.toContain(hostValue);
+      }
+    },
+  );
 
   it("classifies sensitive environment variable names without substring matching", () => {
     for (const name of [
@@ -299,6 +324,7 @@ describe("isolated Vitest runner safety", () => {
     ]);
     expect(fake.childEnvironments).toHaveLength(3);
     for (const { childEnvironment } of fake.childEnvironments) {
+      expect(childEnvironment.M13_STAGING_TOOLING_PG_TEST).toBe("true");
       expect(childEnvironment).not.toHaveProperty("UNRELATED_HOST_SECRET");
       expect(JSON.stringify(childEnvironment)).not.toContain(
         "must-not-reach-runner-children",

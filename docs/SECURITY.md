@@ -320,6 +320,9 @@ Il componente client non riceve tenant, attore o correlation ID, non accede a Pr
 
 ### Staging personale
 
+- Blueprint con nomi stabili `piccadilly-booking-m13-staging-web`,
+  `piccadilly-booking-m13-staging-worker` e
+  `piccadilly-booking-m13-staging-db`, senza SHA o identificativi workspace;
 - dati fittizi e tenant demo esatto;
 - database separato e mai promosso a produzione;
 - provider simulati obbligatori, con kill gate su configurazioni Meta, Graph,
@@ -336,6 +339,12 @@ Il componente client non riceve tenant, attore o correlation ID, non accede a Pr
   prefissati, hostname e destination;
 - cleanup solo per run ID confermato e controllo fingerprint PRE/POST sulle
   righe non appartenenti al run;
+- `npm test` esegue i test PostgreSQL, inclusi quelli M13, in un database
+  temporaneo loopback posseduto dal runner; il flag M13 è fissato nel child
+  environment minimizzato e non è controllabile dall'host;
+- il wrapper worker staging verifica tredici migration e poi delega al runtime
+  PR #21, preservando classificazione transient/fatal, backoff
+  `1/2/5/10/30` e log strutturati senza PII o secret;
 - nessun backup o dump di produzione e nessun collegamento al sito ufficiale.
 
 Le credenziali Basic e demo non compaiono nel Blueprint con valori in chiaro,
@@ -347,6 +356,11 @@ field documentati. La semantic validation e il conflict checking workspace-aware
 sono rinviati per contratto alla Fase C. In quella fase workspace e autenticazione
 saranno esclusivamente process-local e nessun identificativo o token verrà
 versionato, scritto in `.env` repository, loggato o incluso nelle evidence.
+La cifra di 20,30 USD/mese è esclusivamente una stima storica:
+**RENDER COST CHECKPOINT — REFRESH REQUIRED BEFORE ANY RESOURCE CREATION**.
+Accesso/autenticazione Render e autorizzazione economica/provisioning restano
+gate Controller separati. M13 FASE A è merged con la PR #18; la riconciliazione
+post-PR #19/#20/#21 è locale, mentre FASE C è sospesa e non iniziata.
 
 ### Produzione
 
