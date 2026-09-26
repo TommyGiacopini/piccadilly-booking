@@ -28,10 +28,7 @@ async function login(page: Page, role: "STAFF" | "ADMIN") {
   await expect(page).toHaveURL(/\/dashboard(?:\?|$)/, { timeout: 20_000 });
   await expect(page.getByRole("heading", { name: /agosto|settembre|ottobre|novembre|dicembre|gennaio|febbraio|marzo|aprile|maggio|giugno|luglio/i })).toBeVisible();
   await expect(
-    page.getByText(
-      `sessione ${username} (${role})`,
-      { exact: false },
-    ),
+    page.getByText(username, { exact: true }),
   ).toBeVisible();
 }
 
@@ -72,7 +69,7 @@ async function fillPhoneReservation(
     .click();
   await expect(
     page.getByText("Prenotazione telefonica salvata e capacità aggiornata."),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 20_000 });
 }
 
 async function cancelCreatedReservation(
@@ -81,8 +78,9 @@ async function cancelCreatedReservation(
   overrideReason?: string,
 ) {
   await page.getByRole("link", { name: "Torna alla dashboard" }).click();
+  await expect(page).toHaveURL(/\/dashboard\?date=/, { timeout: 20_000 });
   const card = page.locator("article").filter({ hasText: fullName }).last();
-  await expect(card).toBeVisible();
+  await expect(card).toBeVisible({ timeout: 20_000 });
   if (overrideReason) await expect(card).toContainText(overrideReason);
   await card.getByRole("button", { name: "Cancella" }).click();
   const cancellationResponse = page.waitForResponse(

@@ -31,14 +31,6 @@ export default async function AdminTechnicalPage() {
         >
           Gestisci utenti
         </Link>
-        <form action="/api/auth/logout" className="mt-8" method="post">
-          <button
-            className="rounded-xl bg-zinc-950 px-6 py-3 font-bold text-white"
-            type="submit"
-          >
-            Logout
-          </button>
-        </form>
       </section>
     </main>
   );

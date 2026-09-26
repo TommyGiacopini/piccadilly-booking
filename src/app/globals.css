@@ -1,9 +1,90 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f4f4f5;
-  --foreground: #111111;
-  --accent: #f97316;
+  --official-site-dark: #231b17;
+  --official-site-copper: #e68541;
+  --official-site-amber: #f6ae49;
+
+  --brand-primary: #9b4f1b;
+  --brand-primary-hover: #824014;
+  --brand-primary-active: #6c3410;
+  --brand-primary-subtle: #fbede2;
+  --brand-on-primary: #ffffff;
+
+  --background: #faf7f2;
+  --surface: #ffffff;
+  --surface-muted: #f3eee7;
+  --surface-elevated: #ffffff;
+
+  --text-primary: #231b17;
+  --text-secondary: #5f554f;
+  --text-muted: #756a63;
+
+  --border: #ddd4ca;
+  --border-strong: #94867b;
+
+  --success: #2f6b4f;
+  --warning: #8b5a08;
+  --danger: #a23b35;
+  --info: #2e5e7e;
+  --focus: #2563eb;
+
+  --shell-background: #231b17;
+  --shell-hover: #312620;
+  --shell-selected: #3b2f29;
+  --shell-text: #f7f3ef;
+  --shell-text-secondary: #cfc4bc;
+}
+
+@theme inline {
+  --color-brand-primary: var(--brand-primary);
+  --color-brand-primary-hover: var(--brand-primary-hover);
+  --color-brand-primary-active: var(--brand-primary-active);
+  --color-brand-primary-subtle: var(--brand-primary-subtle);
+  --color-brand-on-primary: var(--brand-on-primary);
+  --color-page-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-focus: var(--focus);
+  --color-shell: var(--shell-background);
+  --color-shell-hover: var(--shell-hover);
+  --color-shell-selected: var(--shell-selected);
+  --color-shell-text: var(--shell-text);
+  --color-shell-text-secondary: var(--shell-text-secondary);
+  --color-brand-copper: var(--official-site-copper);
+  --color-brand-amber: var(--official-site-amber);
+
+  --font-sans: var(--font-inter), Inter, "Segoe UI", Arial, Helvetica, sans-serif;
+
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-md: 1rem;
+  --text-md--line-height: 1.5rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.625rem;
+  --text-heading-sm: 1.25rem;
+  --text-heading-sm--line-height: 1.75rem;
+  --text-heading-md: 1.5rem;
+  --text-heading-md--line-height: 2rem;
+  --text-heading-lg: 2rem;
+  --text-heading-lg--line-height: 2.5rem;
+  --text-metric: 1.75rem;
+  --text-metric--line-height: 2rem;
+
+  --radius-control: 0.5rem;
+  --radius-surface: 0.5rem;
 }
 
 * {
@@ -11,6 +92,7 @@
 }
 
 html {
+  min-width: 320px;
   background: var(--background);
 }
 
@@ -18,8 +100,78 @@ body {
   min-height: 100vh;
   margin: 0;
   background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  color: var(--text-primary);
+  font-family: var(--font-inter), Inter, "Segoe UI", Arial, Helvetica, sans-serif;
+  font-size: 1rem;
+  font-synthesis-weight: none;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+strong,
+b {
+  font-weight: 600;
+}
+
+a,
+button,
+input,
+select,
+textarea,
+[tabindex]:not([tabindex="-1"]) {
+  outline-color: transparent;
+  outline-offset: 3px;
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: var(--official-site-copper);
+  color: var(--official-site-dark);
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 1200;
+  transform: translateY(-180%);
+  border-radius: 0.375rem;
+  background: var(--surface);
+  color: var(--text-primary);
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: transform 120ms ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 .staging-banner {
@@ -28,11 +180,11 @@ body {
   z-index: 1000;
   width: 100%;
   padding: 0.55rem 0.75rem;
-  border-bottom: 2px solid #111111;
-  background: #f97316;
-  color: #111111;
+  border-bottom: 2px solid var(--official-site-dark);
+  background: var(--official-site-amber);
+  color: var(--official-site-dark);
   font-size: 0.75rem;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.25;
   text-align: center;
   letter-spacing: 0.025em;
@@ -45,7 +197,13 @@ body {
   }
 }
 
-::selection {
-  background: var(--accent);
-  color: #ffffff;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

@@ -11,9 +11,50 @@ import {
 describe("authentication request security", () => {
   it("allows only known internal post-login destinations", () => {
     expect(resolveSafePostLoginPath("/dashboard")).toBe("/dashboard");
+    expect(resolveSafePostLoginPath("/dashboard/reservations/new")).toBe(
+      "/dashboard/reservations/new",
+    );
+    expect(
+      resolveSafePostLoginPath(
+        "/dashboard/reservations/123e4567-e89b-42d3-a456-426614174000/edit",
+      ),
+    ).toBe(
+      "/dashboard/reservations/123e4567-e89b-42d3-a456-426614174000/edit",
+    );
     expect(resolveSafePostLoginPath("/admin")).toBe("/admin");
+    expect(resolveSafePostLoginPath("/admin/audit")).toBe("/admin/audit");
+    expect(resolveSafePostLoginPath("/admin/availability-preview")).toBe(
+      "/admin/availability-preview",
+    );
+    expect(resolveSafePostLoginPath("/admin/configuration")).toBe(
+      "/admin/configuration",
+    );
+    expect(resolveSafePostLoginPath("/admin/notification-settings")).toBe(
+      "/admin/notification-settings",
+    );
+    expect(resolveSafePostLoginPath("/admin/public-settings")).toBe(
+      "/admin/public-settings",
+    );
+    expect(resolveSafePostLoginPath("/admin/rooms")).toBe("/admin/rooms");
+    expect(resolveSafePostLoginPath("/admin/schedules")).toBe(
+      "/admin/schedules",
+    );
+    expect(resolveSafePostLoginPath("/admin/special-dates")).toBe(
+      "/admin/special-dates",
+    );
+    expect(resolveSafePostLoginPath("/admin/users")).toBe("/admin/users");
     expect(resolveSafePostLoginPath("https://example.com")).toBe("/dashboard");
     expect(resolveSafePostLoginPath("//example.com")).toBe("/dashboard");
+    expect(
+      resolveSafePostLoginPath(
+        "/dashboard/reservations/not-a-uuid/edit",
+      ),
+    ).toBe("/dashboard");
+    expect(
+      resolveSafePostLoginPath(
+        "/dashboard/reservations/123e4567-e89b-42d3-a456-426614174000/edit?unsafe=1",
+      ),
+    ).toBe("/dashboard");
     expect(resolveSafePostLoginPath(["/admin"])).toBe("/dashboard");
   });
 

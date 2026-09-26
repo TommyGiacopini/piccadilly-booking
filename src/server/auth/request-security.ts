@@ -7,12 +7,19 @@ const ALLOWED_POST_LOGIN_PATHS = new Set([
   "/dashboard",
   "/dashboard/reservations/new",
   "/admin",
+  "/admin/audit",
+  "/admin/availability-preview",
   "/admin/configuration",
+  "/admin/notification-settings",
+  "/admin/public-settings",
   "/admin/rooms",
   "/admin/schedules",
   "/admin/special-dates",
   "/admin/users",
 ]);
+
+const RESERVATION_EDIT_POST_LOGIN_PATH =
+  /^\/dashboard\/reservations\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/edit$/iu;
 
 function closestForwardedValue(value: string | null): string | null {
   const values = value
@@ -149,7 +156,11 @@ function resolveDirectRequestOrigin(
 }
 
 export function resolveSafePostLoginPath(value: unknown): string {
-  if (typeof value !== "string" || !ALLOWED_POST_LOGIN_PATHS.has(value)) {
+  if (
+    typeof value !== "string" ||
+    (!ALLOWED_POST_LOGIN_PATHS.has(value) &&
+      !RESERVATION_EDIT_POST_LOGIN_PATH.test(value))
+  ) {
     return "/dashboard";
   }
 

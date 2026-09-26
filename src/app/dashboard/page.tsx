@@ -166,32 +166,16 @@ export default async function DashboardPage({
                 {italianDate(dashboard.localDate)}
               </h1>
               <p className="mt-2 text-sm text-zinc-400">
-                Giorno del ristorante in {dashboard.timezone} · sessione {user.username} ({user.role})
+                Giorno del ristorante in {dashboard.timezone}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              {user.role === "ADMIN" ? (
-                <Link className="rounded-xl border border-zinc-700 px-5 py-3 font-bold text-white hover:border-zinc-500" href="/admin/users">
-                  Utenti
-                </Link>
-              ) : null}
-              <Link className="rounded-xl border border-zinc-700 px-5 py-3 font-bold text-white hover:border-zinc-500" href="/cambia-password">
-                Password
-              </Link>
               <Link
                 className="rounded-xl bg-orange-500 px-5 py-3 font-black text-white transition hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-300"
                 href={`/dashboard/reservations/new?date=${dashboard.localDate}`}
               >
                 + Telefonica
               </Link>
-              <form action="/api/auth/logout" method="post">
-                <button
-                  className="rounded-xl border border-zinc-700 px-5 py-3 font-bold text-white hover:border-zinc-500 focus:outline-none focus:ring-4 focus:ring-zinc-700"
-                  type="submit"
-                >
-                  Logout
-                </button>
-              </form>
             </div>
           </div>
         </div>
@@ -335,7 +319,7 @@ export default async function DashboardPage({
                 const badges = requestBadges(reservation);
                 return (
                   <article
-                    className={`rounded-2xl border p-5 shadow-sm ${
+                    className={`min-w-0 rounded-2xl border p-5 shadow-sm ${
                       reservation.status === "CANCELLED"
                         ? "border-zinc-300 bg-zinc-100 opacity-75"
                         : "border-zinc-200 bg-white"
@@ -343,19 +327,19 @@ export default async function DashboardPage({
                     data-reservation-id={reservation.id}
                     key={reservation.id}
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
                         <p className="text-sm font-black text-orange-600">
                           {serviceLabel(reservation.serviceType)} · {reservation.arrivalTime}
                         </p>
-                        <h3 className="mt-1 text-xl font-black text-zinc-950">
+                        <h3 className="mt-1 [overflow-wrap:anywhere] text-xl font-black text-zinc-950">
                           {reservation.customerFirstName} {reservation.customerLastName}
                         </h3>
                         <p className="mt-1 font-bold text-zinc-600">
                           {reservation.partySize} {reservation.partySize === 1 ? "persona" : "persone"}
                         </p>
                       </div>
-                      <span className={`rounded-full px-3 py-1 text-xs font-black ${reservation.status === "CONFIRMED" ? "bg-emerald-100 text-emerald-900" : "bg-zinc-300 text-zinc-800"}`}>
+                      <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-black ${reservation.status === "CONFIRMED" ? "bg-emerald-100 text-emerald-900" : "bg-zinc-300 text-zinc-800"}`}>
                         {reservation.status === "CONFIRMED" ? "Confermata" : "Cancellata"}
                       </span>
                     </div>

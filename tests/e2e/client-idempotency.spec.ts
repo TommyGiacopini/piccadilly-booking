@@ -250,7 +250,9 @@ test.describe("UAT client idempotency - phone form", () => {
 
     await loginStaff(page);
     await fillPhoneReservation(page);
-    const submit = page.locator('button[type="submit"]');
+    const submit = page.getByRole("button", {
+      name: /Salva prenotazione telefonica|Salvataggio…/,
+    });
     await submit.click();
 
     await expect.poll(() => keys.length).toBe(1);

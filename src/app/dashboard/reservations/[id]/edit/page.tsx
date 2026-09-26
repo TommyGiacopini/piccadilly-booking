@@ -19,8 +19,10 @@ interface EditReservationPageProps {
 export default async function EditReservationPage({
   params,
 }: EditReservationPageProps) {
-  const user = await requireAuthenticatedUser("/dashboard");
   const { id } = await params;
+  const user = await requireAuthenticatedUser(
+    `/dashboard/reservations/${id}/edit`,
+  );
   const parsedId = z.string().uuid().safeParse(id);
 
   if (!parsedId.success) notFound();

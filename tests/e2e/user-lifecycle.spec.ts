@@ -89,13 +89,29 @@ async function createUserAndReadTemporaryPassword(
 
 async function changePassword(page: Page, current: string, selected: string) {
   await expect(page).toHaveURL(/\/cambia-password$/);
+  await expect(
+    page.getByRole("heading", { name: "Imposta una nuova password" }),
+  ).toBeVisible();
+  await expect(page.locator("#password-rules")).toBeVisible();
+  await expect(page.getByLabel("Nuova password", { exact: true })).toHaveAttribute(
+    "minlength",
+    "15",
+  );
   await page.getByLabel("Password attuale").fill(current);
   await page.getByLabel("Nuova password", { exact: true }).fill(selected);
   await page.getByLabel("Conferma nuova password").fill(selected);
   await page.getByRole("button", { name: "Cambia password" }).click();
-  await expect(page).toHaveURL(/\/login\?passwordChanged=1$/, {
-    timeout: 20_000,
-  });
+  await expect(
+    page.getByRole("status").filter({
+      hasText: "Password aggiornata. Reindirizzamento all’Agenda…",
+    }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(
+    /\/login\?passwordChanged=1&returnTo=%2Fdashboard$/,
+    {
+      timeout: 20_000,
+    },
+  );
 }
 
 async function newStaffPage(browser: Browser): Promise<{
