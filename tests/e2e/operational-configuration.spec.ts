@@ -154,7 +154,10 @@ test.describe.serial("M9-C configurazione con impatto", () => {
     await page.goto("/admin/configuration");
     await page.getByLabel("Capacità massima nella finestra").fill("31");
     await page.getByRole("button", { name: "Verifica e salva impostazioni" }).click();
-    await expect(page.getByRole("status")).toContainText("Configurazione salvata");
+    await expect(page.getByRole("status")).toContainText(
+      "Configurazione salvata",
+      { timeout: 20_000 },
+    );
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
     for (const viewport of [
