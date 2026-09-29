@@ -80,20 +80,28 @@ function reservationData(input: {
   partySize: number;
   status?: "CONFIRMED" | "CANCELLED";
   preferenceRoomCode: string;
+  targetLocalDate?: string;
+  serviceType?: "LUNCH" | "DINNER";
+  arrivalTime?: string;
+  customerFirstName?: string;
+  customerLastName?: string;
+  customerPhone?: string;
+  createdAt?: Date;
 }) {
   const status = input.status ?? "CONFIRMED";
   return {
     id: input.id,
     restaurantId: input.targetRestaurantId,
-    localDate: localDateToDatabase(localDate),
-    serviceType: "DINNER" as const,
-    arrivalTime: operationalTimeToDatabase("19:00"),
+    localDate: localDateToDatabase(input.targetLocalDate ?? localDate),
+    serviceType: input.serviceType ?? ("DINNER" as const),
+    arrivalTime: operationalTimeToDatabase(input.arrivalTime ?? "19:00"),
     partySize: input.partySize,
     status,
     origin: "PHONE" as const,
-    customerFirstName: "Cliente",
-    customerLastName: `Fittizio ${input.id.slice(0, 6)}`,
-    customerPhone: "+39000000000",
+    customerFirstName: input.customerFirstName ?? "Cliente",
+    customerLastName:
+      input.customerLastName ?? `Fittizio ${input.id.slice(0, 6)}`,
+    customerPhone: input.customerPhone ?? "+39000000000",
     customerEmail: null,
     preferences: JSON.stringify({
       roomCode: input.preferenceRoomCode,
@@ -115,6 +123,7 @@ function reservationData(input: {
     createdByUserId:
       input.targetRestaurantId === restaurantId ? userId : otherUserId,
     cancelledAt: status === "CANCELLED" ? now : null,
+    ...(input.createdAt ? { createdAt: input.createdAt } : {}),
   };
 }
 
@@ -530,6 +539,86 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
     });
     expect(JSON.stringify(dashboard)).not.toContain(internalNotesSentinel);
     expect(JSON.stringify(dashboard)).not.toContain("M10C-OTHER");
+  });
+
+  it("isolates the Staff Agenda read model by tenant, date and service without projecting T03 state", async () => {
+    const lunchReservationId = randomUUID();
+    const otherDateReservationId = randomUUID();
+
+    await prisma.reservation.createMany({
+      data: [
+        reservationData({
+          id: lunchReservationId,
+          targetRestaurantId: restaurantId,
+          partySize: 4,
+          preferenceRoomCode: "sala-1",
+          serviceType: "LUNCH",
+          arrivalTime: "12:15",
+          customerFirstName: "José",
+          customerLastName: "Agenda Fittizio",
+          customerPhone: "+39 000 222 3333",
+        }),
+        reservationData({
+          id: otherDateReservationId,
+          targetRestaurantId: restaurantId,
+          partySize: 5,
+          preferenceRoomCode: "sala-1",
+          targetLocalDate: "2099-10-21",
+          customerLastName: "Altra Data Fittizia",
+        }),
+      ],
+    });
+
+    try {
+      const outsideTenantReservation = await prisma.reservation.findFirstOrThrow({
+        where: { restaurantId: otherRestaurantId },
+        select: { id: true },
+      });
+      const lunch = await getDashboardDay({
+        restaurantId,
+        rawDate: localDate,
+        rawService: "LUNCH",
+        now,
+      });
+      const dinner = await getDashboardDay({
+        restaurantId,
+        rawDate: localDate,
+        rawService: "DINNER",
+        now,
+      });
+
+      expect(lunch.reservations).toHaveLength(1);
+      expect(lunch.reservations[0]).toMatchObject({
+        id: lunchReservationId,
+        serviceType: "LUNCH",
+        customerFirstName: "José",
+        customerPhone: "+39 000 222 3333",
+      });
+      expect(lunch.reservations[0]).not.toHaveProperty("arrivedAt");
+      expect(dinner.reservations).toHaveLength(3);
+      expect(
+        dinner.reservations.some(
+          (reservation) => reservation.id === otherDateReservationId,
+        ),
+      ).toBe(false);
+      expect(
+        dinner.reservations.some(
+          (reservation) => reservation.id === lunchReservationId,
+        ),
+      ).toBe(false);
+      expect(
+        dinner.reservations.some(
+          (reservation) => reservation.id === outsideTenantReservation.id,
+        ),
+      ).toBe(false);
+    } finally {
+      await prisma.reservation.deleteMany({
+        where: {
+          restaurantId,
+          id: { in: [lunchReservationId, otherDateReservationId] },
+        },
+      });
+    }
   });
 
   it("projects note presence with a fixed tenant-scoped query without selecting note text", async () => {
