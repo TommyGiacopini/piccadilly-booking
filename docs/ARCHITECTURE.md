@@ -205,7 +205,7 @@ Ogni provider call riceve un `AbortSignal` creato dal worker e ha una deadline a
 
 Il worker long-running usa inoltre una policy runtime infrastrutturale iniettata, separata dal delivery retry: l'application associa le eccezioni alle phase allow-listed, continua dopo failure per singolo item e ritenta soltanto failure runtime riconosciute da codici stabili. Il backoff runtime è `1/2/5/10/30` secondi con cap a 30 secondi e reset dopo un batch valido; unknown e incompatibilità di configurazione/schema restano fatal. Logging JSON sanitizzato, classificazione Prisma/PostgreSQL/Node e gestione CLI restano nell'infrastructure, senza dipendenze da Prisma, console o process nell'application.
 
-Il comando full Vitest passa da un runner che accetta soltanto `APP_ENV=development` e PostgreSQL loopback, crea un database univoco rigidamente validato, applica le 13 migration e il seed fittizio in ambiente process-local, esegue i test e rimuove/verifica il database in `finally`. La suite outbox usa fixture e assertion scenario-scoped; il repository worker produttivo conserva intenzionalmente la semantica globale M12.
+Il comando full Vitest passa da un runner che accetta soltanto `APP_ENV=development` e PostgreSQL loopback, crea un database univoco rigidamente validato, applica le 14 migration e il seed fittizio in ambiente process-local, esegue i test e rimuove/verifica il database in `finally`. La suite outbox usa fixture e assertion scenario-scoped; il repository worker produttivo conserva intenzionalmente la semantica globale M12.
 
 ## 6. Regole di dipendenza
 
@@ -478,7 +478,15 @@ M10-B integra reschedule, cancellazione e impatto delle configurazioni. Data, se
 
 M10-C, approvata da Work e merged su `main` con la PR #12, completa la dashboard operativa: preferenza e collocazione finale sono proiezioni distinte, `DA ASSEGNARE` deriva dall'assenza dell'assegnazione attiva, filtri e riepiloghi sono calcolati server-side e le cancellate non entrano nei conteggi operativi. Il pannello usa esclusivamente GET/PUT/DELETE M10-A, mostra min/max posti come informazione, conserva riferimenti grandfathered e, su `VERSION_CONFLICT`, non ripete la scelta umana ma richiede una rilettura esplicita. Con M10-A e M10-B già merged su `main` con la PR #11, M10 è completata e merged; M11 è stata successivamente approvata da Work e squash-merged su `main` con la PR #14. M12 è stata successivamente approvata da Work e squash-merged su `main` con la PR #16. M13 FASE A è merged con la PR #18; PR #19, #20 e #21 hanno consolidato rispettivamente auth LAN, idempotenza client e isolamento test/resilienza worker. La riconciliazione M13 sulla baseline post-PR #21 è locale e attende il Final QG Work; FASE C resta sospesa e non iniziata.
 
-### 12.6 Esportazioni
+### 12.6 Lifecycle di arrivo T03
+
+`Reservation.arrivedAt` è un timestamp UTC nullable dell'intera prenotazione: `null` indica che l'arrivo non è registrato, mentre un valore indica che è registrato. Lo stato operativo `ATTESO` è soltanto una derivazione della Staff Agenda e, per giornate storiche o prenotazioni cancellate senza timestamp, diventa `ARRIVO NON REGISTRATO`; non esiste un enum arrival persistito. Il dato è disponibile nei DTO Staff e resta escluso da DTO, API e link pubblici.
+
+La mutazione desired-state `PUT /api/staff/reservations/{id}/arrival` è riservata a Staff/Admin, usa timestamp server-side, payload Zod strict, same-origin e risposta `no-store`. Dentro una breve transazione `SERIALIZABLE` acquisisce il lock advisory della prenotazione, rilegge prenotazione e attore tenant-scoped, riconosce il no-op prima del controllo versione e applica versione ottimistica solo ai cambi reali. Aggiornamento, incremento versione e audit `ARRIVAL_RECORDED`/`ARRIVAL_REVERTED` con snapshot minimale condividono il commit; un errore audit annulla tutto. Non acquisisce lock capacità/configurazione e non crea intent di notifica.
+
+La cancellazione non azzera `arrivedAt` e il lifecycle resta disponibile per correzioni storiche e prenotazioni cancellate. Il riepilogo Agenda partiziona esclusivamente i coperti `CONFIRMED` in arrivati e attesi/senza arrivo registrato, senza influire su capacità, disponibilità, cutoff o assegnazioni. La migration additiva #14 aggiunge la colonna nullable senza default o backfill e le due azioni audit.
+
+### 12.7 Esportazioni
 
 Il PDF presenta nell'ordine:
 
@@ -552,7 +560,7 @@ Segreti e configurazione infrastrutturale restano nelle variabili d'ambiente. Le
 - web con validazione fail-fast, bind `0.0.0.0:$PORT`, health PostgreSQL e
   pre-deploy `migrate deploy` seguito dal seed fittizio;
 - worker senza HTTP e senza migration, avviato solo dopo la verifica delle
-  tredici migration applicate; dopo la readiness delega al runtime PR #21 con
+  quattordici migration applicate; dopo la readiness delega al runtime PR #21 con
   classificazione transient/fatal, backoff `1/2/5/10/30` e log sanitizzati;
 - HTTP Basic esterno alle superfici applicative, banner demo, noindex globale e
   cookie Secure;

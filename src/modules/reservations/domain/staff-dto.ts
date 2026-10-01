@@ -14,6 +14,7 @@ export interface StaffReservationDto {
   origin: "PUBLIC" | "PHONE" | "STAFF";
   version: number;
   updatedAt: string;
+  arrivedAt: string | null;
   customer: {
     firstName: string;
     lastName: string;
@@ -54,6 +55,7 @@ export function toStaffReservationDto(
     origin: reservation.origin,
     version: reservation.version,
     updatedAt: reservation.updatedAt.toISOString(),
+    arrivedAt: reservation.arrivedAt?.toISOString() ?? null,
     customer: {
       firstName: reservation.customerFirstName,
       lastName: reservation.customerLastName,

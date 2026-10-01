@@ -11,7 +11,7 @@ const migrationPath = resolve(migrationsDirectory, notificationMigrations[0] ?? 
 
 describe("M12 additive notification migration", () => {
   it("is the single thirteenth migration with the reviewed bytes", () => {
-    expect(migrationNames).toHaveLength(13);
+    expect(migrationNames).toHaveLength(14);
     expect(notificationMigrations).toHaveLength(1);
     expect(createHash("sha256").update(readFileSync(migrationPath)).digest("hex").toUpperCase()).toBe(
       "42BA74FC5E64A7FC8D16E9847BE10464E9F0D91980E3E40900EFDA90B34E6C21",

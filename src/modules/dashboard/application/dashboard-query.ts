@@ -25,6 +25,7 @@ export interface DashboardDayView {
   restaurantName: string;
   timezone: string;
   localDate: string;
+  isHistorical: boolean;
   previousDate: string;
   nextDate: string;
   filters: DashboardFilters;
@@ -74,6 +75,7 @@ export async function getDashboardDay(input: {
     input.rawDate === undefined ||
     resolveDashboardDate(input.rawDate, now, context.timezone) === input.rawDate;
   const localDate = resolveDashboardDate(input.rawDate, now, context.timezone);
+  const isHistorical = localDate < restaurantToday(now, context.timezone);
   const parsedFilters = dashboardFiltersSchema.safeParse({
     service: input.rawService ?? "ALL",
     status: input.rawStatus ?? "ALL",
@@ -127,6 +129,7 @@ export async function getDashboardDay(input: {
     restaurantName: context.restaurantName,
     timezone: context.timezone,
     localDate,
+    isHistorical,
     previousDate: shiftLocalDate(localDate, -1),
     nextDate: shiftLocalDate(localDate, 1),
     filters,
@@ -136,9 +139,7 @@ export async function getDashboardDay(input: {
       toDashboardReservation(
         reservation,
         roomsByCode,
-        localDate < restaurantToday(now, context.timezone)
-          ? null
-          : roomAvailability,
+        isHistorical ? null : roomAvailability,
       ),
     ),
     summary: aggregateDashboard(filtered, context.rooms),

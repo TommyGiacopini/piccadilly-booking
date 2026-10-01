@@ -47,6 +47,7 @@ function reservationFixture(
     createdAt: new Date("2099-01-01T10:00:00.000Z"),
     updatedAt: new Date("2099-01-01T10:00:00.000Z"),
     cancelledAt: null,
+    arrivedAt: null,
     version: 3,
     ...overrides,
   };

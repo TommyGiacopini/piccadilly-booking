@@ -258,6 +258,14 @@ La dashboard M10-C riceve il tenant esclusivamente dall'utente autenticato rilet
 
 Il componente client non riceve tenant, attore o correlation ID, non accede a Prisma e non mantiene uno stato autorevole. PUT e DELETE continuano a usare versione, same-origin e validazione strict delle API M10-A. `VERSION_CONFLICT` non attiva retry automatici: la scelta locale viene respinta, lo stato corrente deve essere ricaricato e l'operatore deve rivalutarlo. Sale o tavoli grandfathered restano visibili, ma le opzioni inattive o indisponibili che non appartengono all'assegnazione corrente sono disabilitate anche nel client; il server resta l'autorità finale.
 
+## 9.5 Sicurezza del lifecycle di arrivo T03
+
+La route arrival è riservata a Staff e Admin con sessione valida, account attivo, `disabledAt` nullo, `mustChangePassword=false`, stessa origine e JSON strict. Tenant, attore, ruolo, timestamp e correlation ID derivano dal server; una prenotazione di un altro tenant è indistinguibile da una inesistente. L'attore viene riletto nella transazione e il ruolo registrato nell'audit è quello corrente nel database.
+
+La mutazione desired-state usa il lock advisory della prenotazione, transazione `SERIALIZABLE`, retry transitori bounded e versione ottimistica per i soli cambi reali. Il no-op non aggiorna versione, `updatedAt` o audit ed è valido anche con una versione client obsoleta. `arrivedAt`, incremento versione e audit condividono il commit; gli snapshot allow-listed contengono soltanto `arrival.recorded` e `arrival.arrivedAt`, senza nome, contatti, note, esigenze o altri dati personali. Un fallimento dell'audit provoca rollback completo.
+
+`arrivedAt` è esposto soltanto ai read model Staff autenticati. Non entra nei DTO/API pubblici, nei link di gestione, nei log o nelle notifiche e non genera outbox. La cancellazione lo conserva; capacità, cutoff, disponibilità e assegnazioni restano semanticamente indipendenti.
+
 ## 10. Segreti e configurazione
 
 - `.env` e varianti con segreti sono esclusi da Git.

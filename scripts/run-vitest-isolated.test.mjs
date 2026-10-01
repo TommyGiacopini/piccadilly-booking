@@ -49,7 +49,7 @@ function fakeDependencies(input = {}) {
         }
         return result;
       },
-      migrationCount: async () => 13,
+      migrationCount: async () => 14,
       runChild: async (step, childEnvironment, vitestArguments) => {
         calls.push(step);
         childEnvironments.push({ step, childEnvironment, vitestArguments });

@@ -184,8 +184,8 @@ test.describe.serial("T02 Staff Agenda", () => {
       const summaryPairs = page.locator(
         'section[aria-label="Riepilogo operativo"] dl > div',
       );
-      await expect(summaryPairs).toHaveCount(6);
-      for (let index = 0; index < 6; index += 1) {
+      await expect(summaryPairs).toHaveCount(8);
+      for (let index = 0; index < 8; index += 1) {
         expect(
           await summaryPairs.nth(index).evaluate((pair) =>
             Array.from(pair.children).map((child) => child.tagName),
@@ -253,6 +253,10 @@ test.describe.serial("T02 Staff Agenda", () => {
         "DA ASSEGNARE",
       );
       await expect(oldestCard.getByTestId("unassigned-badge")).toBeVisible();
+      await expect(oldestCard.getByTestId("arrival-state")).toHaveText("ATTESO");
+      await expect(
+        oldestCard.getByRole("button", { name: "Segna arrivato" }),
+      ).toBeVisible();
       await expect(oldestCard.getByRole("link", { name: "Modifica" })).toBeVisible();
       await expect(oldestCard.getByRole("button", { name: "Cancella" })).toBeVisible();
 

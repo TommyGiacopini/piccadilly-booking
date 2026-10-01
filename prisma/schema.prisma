@@ -70,6 +70,8 @@ enum ReservationAuditAction {
   ASSIGNED
   REASSIGNED
   UNASSIGNED
+  ARRIVAL_RECORDED
+  ARRIVAL_REVERTED
 }
 
 enum PublicContentLocale {
@@ -436,6 +438,7 @@ model Reservation {
   createdAt              DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
   cancelledAt            DateTime?                   @map("cancelled_at") @db.Timestamptz(3)
+  arrivedAt              DateTime?                   @map("arrived_at") @db.Timestamptz(3)
   version                Int                         @default(1)
   restaurant             Restaurant                  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   createdByUser          User?                       @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)

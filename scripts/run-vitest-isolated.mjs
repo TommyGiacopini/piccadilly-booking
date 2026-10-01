@@ -23,7 +23,7 @@ const projectBinPath = fileURLToPath(
 
 export const TEMP_DATABASE_NAME_PATTERN =
   /^piccadilly_vitest_[0-9a-f]{32}$/u;
-export const EXPECTED_MIGRATION_COUNT = 13;
+export const EXPECTED_MIGRATION_COUNT = 14;
 
 const CHILD_OS_ENVIRONMENT_KEYS = [
   "PATH",

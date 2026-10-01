@@ -12,6 +12,7 @@ import {
   hashReservationRequest,
 } from "@/modules/reservations/domain/idempotency";
 import { canUseCapacityOverride } from "@/modules/reservations/domain/override";
+import { toStaffReservationDto } from "@/modules/reservations/domain/staff-dto";
 import type {
   CreateReservationCommand,
   StoredReservation,
@@ -43,7 +44,9 @@ function validCommand(): CreateReservationCommand {
   return createReservationSchema.parse(validPhonePayload());
 }
 
-function storedReservation(): StoredReservation {
+function storedReservation(
+  overrides: Partial<StoredReservation> = {},
+): StoredReservation {
   return {
     id: "00000000-0000-4000-8000-000000000601",
     restaurantId: "00000000-0000-4000-8000-000000000001",
@@ -73,7 +76,9 @@ function storedReservation(): StoredReservation {
     createdAt: new Date("2099-01-01T10:00:00.000Z"),
     updatedAt: new Date("2099-01-01T10:00:00.000Z"),
     cancelledAt: null,
+    arrivedAt: null,
     version: 1,
+    ...overrides,
   };
 }
 
@@ -240,6 +245,18 @@ describe("M6 reservation domain", () => {
     expect(serialized).not.toContain("privacyPolicyVersion");
     expect(serialized).not.toContain("requestHash");
     expect(serialized).not.toContain("keyHash");
+    expect(serialized).not.toContain("arrivedAt");
+  });
+
+  it("maps arrival timestamp only into the Staff DTO as ISO or null", () => {
+    expect(toStaffReservationDto(storedReservation()).arrivedAt).toBeNull();
+    expect(
+      toStaffReservationDto(
+        storedReservation({
+          arrivedAt: new Date("2026-09-30T19:42:15.123Z"),
+        }),
+      ).arrivedAt,
+    ).toBe("2026-09-30T19:42:15.123Z");
   });
 
   it("derives stable and isolated advisory lock keys", () => {

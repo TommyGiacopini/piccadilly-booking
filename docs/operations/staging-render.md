@@ -82,8 +82,8 @@ vengono inoltrati al child e il relativo exit code viene conservato.
 Il worker esegue build con typecheck e parte tramite
 `npm run notifications:worker:staging`. Non applica migration. Verifica
 `APP_ENV=staging`, Render, service type e kill gate provider; attende ogni due
-secondi, fino a 120 secondi, che tutte le tredici migration versionate risultino
-applicate. La readiness richiede uguaglianza esatta, cardinalità 13 e assenza di
+secondi, fino a 120 secondi, che tutte le quattordici migration versionate risultino
+applicate. La readiness richiede uguaglianza esatta, cardinalità 14 e assenza di
 duplicati tra inventario directory e migration concluse con successo: una
 migration mancante o inattesa mantiene il worker in attesa. I segnali
 interrompono l'attesa e vengono propagati al CLI corrente. Dopo la readiness il

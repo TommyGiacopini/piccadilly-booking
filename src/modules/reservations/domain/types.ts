@@ -66,5 +66,6 @@ export interface StoredReservation {
   createdAt: Date;
   updatedAt: Date;
   cancelledAt: Date | null;
+  arrivedAt: Date | null;
   version: number;
 }

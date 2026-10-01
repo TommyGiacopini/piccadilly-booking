@@ -85,6 +85,8 @@ const actionLabels: Record<AuditListAction, string> = {
   ASSIGNED: "Sala e tavoli assegnati",
   REASSIGNED: "Assegnazione sala e tavoli aggiornata",
   UNASSIGNED: "Assegnazione sala e tavoli rimossa",
+  ARRIVAL_RECORDED: "Arrivo registrato",
+  ARRIVAL_REVERTED: "Arrivo annullato",
   LOGIN_SUCCEEDED: "Accesso riuscito",
   LOGIN_FAILED: "Accesso non riuscito",
   LOGIN_RATE_LIMITED: "Accesso limitato",
@@ -276,6 +278,41 @@ const reservationAssignmentRules = [
     scalarParser(z.literal("RESERVATION_SCHEDULE_CHANGED")),
   ),
 ] as const;
+
+const arrivalSnapshotSchema = z
+  .strictObject({
+    arrival: z.strictObject({
+      recorded: z.boolean(),
+      arrivedAt: z.string().datetime({ offset: true }).nullable(),
+    }),
+  })
+  .superRefine((value, context) => {
+    if (value.arrival.recorded !== (value.arrival.arrivedAt !== null)) {
+      context.addIssue({
+        code: "custom",
+        message: "Arrival audit state is inconsistent.",
+      });
+    }
+  });
+
+function arrivalDetailFields(root: unknown): AuditDetailFieldDto[] | null {
+  const parsed = arrivalSnapshotSchema.safeParse(root);
+  if (!parsed.success) return null;
+  return [
+    {
+      key: "arrival.recorded",
+      label: "Arrivo registrato",
+      value: parsed.data.arrival.recorded,
+    },
+    ...(parsed.data.arrival.arrivedAt
+      ? [{
+          key: "arrival.arrivedAt",
+          label: "Timestamp arrivo",
+          value: parsed.data.arrival.arrivedAt,
+        }]
+      : []),
+  ];
+}
 
 const identityStateRules = [
   rule("role", "Ruolo", userRole),
@@ -518,6 +555,21 @@ function metadataRules(
 export function projectAuditDetail(record: AuditDetailDatabaseRecord): AuditDetailDto | null {
   const header = parseListHeader(record);
   if (!header) return null;
+  if (
+    header.source === "RESERVATION" &&
+    (header.action === "ARRIVAL_RECORDED" ||
+      header.action === "ARRIVAL_REVERTED")
+  ) {
+    const previousState = arrivalDetailFields(record.previousState);
+    const newState = arrivalDetailFields(record.newState);
+    if (!previousState || !newState) return null;
+    return {
+      ...header,
+      previousState,
+      newState,
+      metadata: [],
+    };
+  }
   const stateRules = header.source === "RESERVATION"
     ? header.action === "ASSIGNED" ||
       header.action === "REASSIGNED" ||

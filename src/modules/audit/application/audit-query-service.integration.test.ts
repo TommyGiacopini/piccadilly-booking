@@ -211,6 +211,57 @@ function query(values: Record<string, string | number>) {
 }
 
 describe.sequential("M9-F unified audit with real PostgreSQL", () => {
+  it("lists and strictly projects T03 arrival audit events", async () => {
+    await withFixture(async (client) => {
+      const eventId = "91000000-0000-4000-8000-000000000017";
+      await client.reservationAuditEvent.create({
+        data: {
+          id: eventId,
+          restaurantId: ids.restaurant,
+          reservationId: ids.reservation,
+          action: "ARRIVAL_RECORDED",
+          actorOrigin: "STAFF",
+          actorUserId: ids.staff,
+          actorRole: "STAFF",
+          correlationId: "92000000-0000-4000-8000-000000000009",
+          previousState: { arrival: { recorded: false, arrivedAt: null } },
+          newState: {
+            arrival: {
+              recorded: true,
+              arrivedAt: "2026-08-13T12:30:00.000Z",
+            },
+          },
+          createdAt: new Date("2026-08-13T12:30:00.000Z"),
+        },
+      });
+
+      const list = await listAuditEvents(
+        actor,
+        query({ action: "ARRIVAL_RECORDED", limit: 100 }),
+        { client, now },
+      );
+      expect(list.items).toEqual([
+        expect.objectContaining({
+          eventId,
+          summary: "Arrivo registrato",
+          actorRole: "STAFF",
+        }),
+      ]);
+      await expect(
+        getAuditEventDetail(actor, "RESERVATION", eventId, { client }),
+      ).resolves.toMatchObject({
+        previousState: [{ key: "arrival.recorded", value: false }],
+        newState: [
+          { key: "arrival.recorded", value: true },
+          {
+            key: "arrival.arrivedAt",
+            value: "2026-08-13T12:30:00.000Z",
+          },
+        ],
+      });
+    });
+  });
+
   it("globally orders and keyset-pages both sources without duplicates or omissions", async () => {
     await withFixture(async (client) => {
       const options = { client, now };
