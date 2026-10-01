@@ -57,6 +57,7 @@ function reservation(
     createdAt: new Date("2026-08-01T10:00:00.000Z"),
     updatedAt: new Date("2026-08-01T10:00:00.000Z"),
     cancelledAt: null,
+    arrivedAt: null,
     version: 1,
     ...overrides,
   };
@@ -203,9 +204,9 @@ describe("M8 dashboard domain", () => {
     ).toHaveLength(0);
   });
 
-  it("aggregates assignment counts and covers by final room, excluding cancelled rows", () => {
+  it("partitions confirmed covers by arrival and excludes cancelled rows", () => {
     const rows = [
-      source({}, assignment()),
+      source({ arrivedAt: new Date("2026-08-10T17:15:00.000Z") }, assignment()),
       source({
           origin: "PHONE",
           partySize: 3,
@@ -225,6 +226,11 @@ describe("M8 dashboard domain", () => {
 
     expect(summary.confirmedReservations).toBe(2);
     expect(summary.confirmedCovers).toBe(5);
+    expect(summary.arrivedCovers).toBe(2);
+    expect(summary.expectedCovers).toBe(3);
+    expect(summary.confirmedCovers).toBe(
+      summary.arrivedCovers + summary.expectedCovers,
+    );
     expect(summary.cancellations).toBe(1);
     expect(summary.origins).toEqual({ PUBLIC: 1, PHONE: 1, STAFF: 0 });
     expect(summary.foodRequests).toBe(2);
@@ -245,6 +251,7 @@ describe("M8 dashboard domain", () => {
         {
           preferences: "Sala libera M6",
           allergies: "Allergia testuale M6",
+          arrivedAt: new Date("2026-08-10T17:15:00.000Z"),
         },
         assignment({
           room: {
@@ -274,5 +281,6 @@ describe("M8 dashboard domain", () => {
       hasUnavailableRoomReference: true,
     });
     expect(row.updatedAt).toBe("2026-08-01T10:00:00.000Z");
+    expect(row.arrivedAt).toBe("2026-08-10T17:15:00.000Z");
   });
 });

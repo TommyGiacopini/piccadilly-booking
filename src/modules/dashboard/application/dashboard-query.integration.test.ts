@@ -541,7 +541,45 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
     expect(JSON.stringify(dashboard)).not.toContain("M10C-OTHER");
   });
 
-  it("isolates the Staff Agenda read model by tenant, date and service without projecting T03 state", async () => {
+  it("projects ISO arrival state, historical context and confirmed-cover partition independently of assignment", async () => {
+    const confirmed = await prisma.reservation.findMany({
+      where: { restaurantId, status: "CONFIRMED" },
+      orderBy: { id: "asc" },
+      select: { id: true, partySize: true },
+    });
+    const arrivedAt = new Date("2099-10-20T17:30:00.000Z");
+    await prisma.reservation.update({
+      where: { id: confirmed[0]!.id },
+      data: { arrivedAt },
+    });
+
+    const current = await getDashboardDay({
+      restaurantId,
+      rawDate: localDate,
+      now,
+    });
+    const historical = await getDashboardDay({
+      restaurantId,
+      rawDate: localDate,
+      now: new Date("2100-01-10T10:00:00.000Z"),
+    });
+
+    expect(current.isHistorical).toBe(false);
+    expect(historical.isHistorical).toBe(true);
+    expect(
+      current.reservations.find((row) => row.id === confirmed[0]!.id)
+        ?.arrivedAt,
+    ).toBe(arrivedAt.toISOString());
+    expect(current.summary.arrivedCovers).toBe(confirmed[0]!.partySize);
+    expect(current.summary.expectedCovers).toBe(
+      current.summary.confirmedCovers - confirmed[0]!.partySize,
+    );
+    expect(current.summary.confirmedCovers).toBe(
+      current.summary.arrivedCovers + current.summary.expectedCovers,
+    );
+  });
+
+  it("isolates the Staff Agenda read model by tenant, date and service while projecting arrival state", async () => {
     const lunchReservationId = randomUUID();
     const otherDateReservationId = randomUUID();
 
@@ -594,7 +632,7 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
         customerFirstName: "José",
         customerPhone: "+39 000 222 3333",
       });
-      expect(lunch.reservations[0]).not.toHaveProperty("arrivedAt");
+      expect(lunch.reservations[0]).toHaveProperty("arrivedAt", null);
       expect(dinner.reservations).toHaveLength(3);
       expect(
         dinner.reservations.some(

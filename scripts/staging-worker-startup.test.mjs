@@ -9,7 +9,7 @@ import {
 } from "./staging-worker-startup.mjs";
 
 describe("M13 staging worker startup", () => {
-  it("waits until all thirteen versioned migrations are applied", async () => {
+  it("waits until all fourteen versioned migrations are applied", async () => {
     let checks = 0;
     const sleep = vi.fn(async () => undefined);
     await waitForStagingSchemaReady({
@@ -25,30 +25,30 @@ describe("M13 staging worker startup", () => {
     expect(sleep).toHaveBeenCalledTimes(2);
   });
 
-  it("accepts exactly the expected thirteen-migration set", () => {
-    const expected = Array.from({ length: 13 }, (_, index) => `migration-${index}`);
+  it("accepts exactly the expected fourteen-migration set", () => {
+    const expected = Array.from({ length: 14 }, (_, index) => `migration-${index}`);
     expect(migrationSetIsReady(expected, expected)).toBe(true);
   });
 
   it("rejects a missing migration", () => {
-    const expected = Array.from({ length: 13 }, (_, index) => `migration-${index}`);
+    const expected = Array.from({ length: 14 }, (_, index) => `migration-${index}`);
     expect(migrationSetIsReady(expected.slice(1), expected)).toBe(false);
   });
 
-  it("rejects an unexpected fourteenth migration", () => {
-    const expected = Array.from({ length: 13 }, (_, index) => `migration-${index}`);
+  it("rejects an unexpected fifteenth migration", () => {
+    const expected = Array.from({ length: 14 }, (_, index) => `migration-${index}`);
     expect(
       migrationSetIsReady([...expected, "migration-unexpected"], expected),
     ).toBe(false);
   });
 
   it("rejects duplicate or inconsistent inventories", () => {
-    const expected = Array.from({ length: 13 }, (_, index) => `migration-${index}`);
+    const expected = Array.from({ length: 14 }, (_, index) => `migration-${index}`);
     expect(
-      migrationSetIsReady([...expected.slice(0, 12), expected[0]], expected),
+      migrationSetIsReady([...expected.slice(0, 13), expected[0]], expected),
     ).toBe(false);
     expect(
-      migrationSetIsReady(expected, [...expected.slice(0, 12), expected[0]]),
+      migrationSetIsReady(expected, [...expected.slice(0, 13), expected[0]]),
     ).toBe(false);
   });
 

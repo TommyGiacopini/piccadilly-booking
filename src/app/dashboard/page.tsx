@@ -229,6 +229,7 @@ export default async function DashboardPage({
         <div className="mt-5 min-w-0">
           <StaffAgenda
             emptyStateIsFiltered={hasSecondaryFilters}
+            historical={dashboard.isHistorical}
             newReservationHref={`/dashboard/reservations/new?date=${dashboard.localDate}`}
             reservations={dashboard.reservations}
             summary={dashboard.summary}

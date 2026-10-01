@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import { buttonClassName } from "@/app/_components/ui/button";
 import { ReservationAssignmentPanel } from "@/app/dashboard/reservation-assignment-panel";
+import { ReservationArrivalControl } from "@/app/dashboard/reservation-arrival-control";
 import { ReservationActions } from "@/app/dashboard/reservation-actions";
 import type {
   DashboardReservation,
@@ -15,6 +16,27 @@ import {
   selectStaffAgendaReservations,
   type StaffAgendaOrder,
 } from "@/modules/dashboard/domain/staff-agenda";
+import { reservationArrivalUiState } from "@/modules/reservations/domain/reservation-arrival";
+
+type ArrivalOverride = { version: number; arrivedAt: string | null };
+
+function reconcileArrivalOverrides(
+  current: Record<string, ArrivalOverride>,
+  reservations: DashboardReservation[],
+): Record<string, ArrivalOverride> {
+  const serverVersions = new Map(
+    reservations.map((reservation) => [reservation.id, reservation.version]),
+  );
+  const entries = Object.entries(current);
+  const retained = entries.filter(([reservationId, override]) => {
+    const serverVersion = serverVersions.get(reservationId);
+    return serverVersion !== undefined && serverVersion < override.version;
+  });
+
+  return retained.length === entries.length
+    ? current
+    : Object.fromEntries(retained);
+}
 
 function originLabel(origin: DashboardReservation["origin"]): string {
   return origin === "PUBLIC"
@@ -42,10 +64,21 @@ function requestBadges(reservation: DashboardReservation): string[] {
   ].filter((value): value is string => value !== null);
 }
 
-function AgendaSummary({ summary }: { summary: DashboardSummary }) {
+function AgendaSummary({
+  historical,
+  summary,
+}: {
+  historical: boolean;
+  summary: DashboardSummary;
+}) {
   const items = [
     ["Prenotazioni confermate", summary.confirmedReservations],
     ["Coperti confermati", summary.confirmedCovers],
+    ["Coperti arrivati", summary.arrivedCovers],
+    [
+      historical ? "Coperti senza arrivo registrato" : "Coperti attesi",
+      summary.expectedCovers,
+    ],
     ["Assegnate", summary.assignedReservations],
     ["Da assegnare", summary.unassignedReservations],
     ["Coperti da assegnare", summary.unassignedCovers],
@@ -57,7 +90,7 @@ function AgendaSummary({ summary }: { summary: DashboardSummary }) {
       aria-label="Riepilogo operativo"
       className="border-y border-border bg-surface"
     >
-      <dl className="grid grid-cols-2 divide-x divide-y divide-border sm:grid-cols-3 xl:grid-cols-6 xl:divide-y-0">
+      <dl className="grid grid-cols-2 divide-x divide-y divide-border sm:grid-cols-4 xl:grid-cols-8 xl:divide-y-0">
         {items.map(([label, value]) => (
           <div
             className="min-w-0 px-3 py-3 sm:px-4"
@@ -89,9 +122,17 @@ function AgendaSummary({ summary }: { summary: DashboardSummary }) {
 
 function ReservationAgendaRow({
   reservation,
+  historical,
+  onArrivalCommitted,
   timezone,
 }: {
   reservation: DashboardReservation;
+  historical: boolean;
+  onArrivalCommitted: (result: {
+    reservationId: string;
+    version: number;
+    arrivedAt: string | null;
+  }) => void;
   timezone: string;
 }) {
   const badges = requestBadges(reservation);
@@ -105,6 +146,11 @@ function ReservationAgendaRow({
     timeStyle: "short",
     timeZone: timezone,
   }).format(new Date(reservation.updatedAt));
+  const arrivalState = reservationArrivalUiState({
+    arrivedAt: reservation.arrivedAt,
+    status: reservation.status,
+    isHistorical: historical,
+  });
 
   return (
     <article
@@ -114,6 +160,7 @@ function ReservationAgendaRow({
           : "border-border"
       }`}
       data-reservation-id={reservation.id}
+      data-reservation-version={reservation.version}
     >
       <div className="grid min-w-0 gap-3 border-b border-border px-4 py-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(7rem,.45fr)_minmax(8rem,.55fr)_auto] lg:items-center">
         <div className="min-w-0">
@@ -143,15 +190,33 @@ function ReservationAgendaRow({
           </p>
         </div>
 
-        <span
-          className={`w-fit rounded-full px-2.5 py-1 text-xs font-semibold ${
-            reservation.status === "CONFIRMED"
-              ? "bg-success/10 text-success"
-              : "bg-border text-text-secondary"
-          }`}
-        >
-          {reservation.status === "CONFIRMED" ? "Confermata" : "Cancellata"}
-        </span>
+        <div className="flex flex-wrap gap-2">
+          <span
+            className={`w-fit rounded-full px-2.5 py-1 text-xs font-semibold ${
+              reservation.status === "CONFIRMED"
+                ? "bg-success/10 text-success"
+                : "bg-border text-text-secondary"
+            }`}
+          >
+            {reservation.status === "CONFIRMED" ? "Confermata" : "Cancellata"}
+          </span>
+          <span
+            className={`w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${
+              arrivalState === "ARRIVED"
+                ? "border-success/30 bg-success/10 text-success"
+                : arrivalState === "EXPECTED"
+                  ? "border-border-strong bg-surface-muted text-text-primary"
+                  : "border-border bg-surface-muted text-text-muted"
+            }`}
+            data-testid="arrival-state"
+          >
+            {arrivalState === "ARRIVED"
+              ? "ARRIVATO"
+              : arrivalState === "EXPECTED"
+                ? "ATTESO"
+                : "ARRIVO NON REGISTRATO"}
+          </span>
+        </div>
       </div>
 
       <div className="grid min-w-0 gap-4 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -334,6 +399,19 @@ function ReservationAgendaRow({
             hasAssignment={reservation.assignment !== null}
             reservationId={reservation.id}
           />
+          <ReservationArrivalControl
+            arrivedAt={reservation.arrivedAt}
+            cancelled={reservation.status === "CANCELLED"}
+            historical={historical}
+            onCommitted={(result) =>
+              onArrivalCommitted({
+                reservationId: reservation.id,
+                ...result,
+              })
+            }
+            reservationId={reservation.id}
+            version={reservation.version}
+          />
           <ReservationActions
             cancelled={reservation.status === "CANCELLED"}
             reservationId={reservation.id}
@@ -347,25 +425,63 @@ function ReservationAgendaRow({
 
 export function StaffAgenda({
   emptyStateIsFiltered,
+  historical,
   newReservationHref,
   reservations,
   summary,
   timezone,
 }: {
   emptyStateIsFiltered: boolean;
+  historical: boolean;
   newReservationHref: string;
   reservations: DashboardReservation[];
   summary: DashboardSummary;
   timezone: string;
 }) {
+  const [arrivalOverrides, setArrivalOverrides] = useState<
+    Record<string, ArrivalOverride>
+  >({});
   const [query, setQuery] = useState("");
   const [order, setOrder] = useState<StaffAgendaOrder>(
     DEFAULT_STAFF_AGENDA_ORDER,
   );
-  const visibleReservations = useMemo(
-    () => selectStaffAgendaReservations(reservations, { query, order }),
-    [order, query, reservations],
+
+  const reconciledArrivalOverrides = reconcileArrivalOverrides(
+    arrivalOverrides,
+    reservations,
   );
+  if (reconciledArrivalOverrides !== arrivalOverrides) {
+    setArrivalOverrides(reconciledArrivalOverrides);
+  }
+
+  const agendaReservations = useMemo(
+    () =>
+      reservations.map((reservation) => {
+        const override = reconciledArrivalOverrides[reservation.id];
+        return override && override.version > reservation.version
+          ? { ...reservation, ...override }
+          : reservation;
+      }),
+    [reconciledArrivalOverrides, reservations],
+  );
+  const visibleReservations = useMemo(
+    () => selectStaffAgendaReservations(agendaReservations, { query, order }),
+    [agendaReservations, order, query],
+  );
+  const arrivalSummary = useMemo(() => {
+    const confirmed = agendaReservations.filter(
+      (reservation) => reservation.status === "CONFIRMED",
+    );
+    return {
+      ...summary,
+      arrivedCovers: confirmed
+        .filter((reservation) => reservation.arrivedAt !== null)
+        .reduce((total, reservation) => total + reservation.partySize, 0),
+      expectedCovers: confirmed
+        .filter((reservation) => reservation.arrivedAt === null)
+        .reduce((total, reservation) => total + reservation.partySize, 0),
+    };
+  }, [agendaReservations, summary]);
   const normalizedQuery = query.trim();
 
   return (
@@ -456,7 +572,7 @@ export function StaffAgenda({
       </section>
 
       <div className="mt-4">
-        <AgendaSummary summary={summary} />
+        <AgendaSummary historical={historical} summary={arrivalSummary} />
       </div>
 
       <section aria-labelledby="agenda-list-title" className="mt-6 min-w-0">
@@ -499,6 +615,16 @@ export function StaffAgenda({
             {visibleReservations.map((reservation) => (
               <li className="min-w-0" key={reservation.id}>
                 <ReservationAgendaRow
+                  historical={historical}
+                  onArrivalCommitted={(result) =>
+                    setArrivalOverrides((current) => ({
+                      ...current,
+                      [result.reservationId]: {
+                        arrivedAt: result.arrivedAt,
+                        version: result.version,
+                      },
+                    }))
+                  }
                   reservation={reservation}
                   timezone={timezone}
                 />

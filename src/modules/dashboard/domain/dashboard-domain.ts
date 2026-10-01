@@ -61,6 +61,7 @@ export interface DashboardReservation {
   overrideReason: string | null;
   createdAt: string;
   updatedAt: string;
+  arrivedAt: string | null;
   assignment: DashboardAssignmentSummary | null;
   notificationHealth: DashboardNotificationHealth;
 }
@@ -152,6 +153,8 @@ export interface DashboardAssignmentSummary {
 export interface DashboardSummary {
   confirmedReservations: number;
   confirmedCovers: number;
+  arrivedCovers: number;
+  expectedCovers: number;
   cancellations: number;
   origins: Record<"PUBLIC" | "PHONE" | "STAFF", number>;
   foodRequests: number;
@@ -282,6 +285,7 @@ export function toDashboardReservation(
     overrideReason: reservation.capacityOverrideReason,
     createdAt: reservation.createdAt.toISOString(),
     updatedAt: reservation.updatedAt.toISOString(),
+    arrivedAt: reservation.arrivedAt?.toISOString() ?? null,
     assignment: assignment
       ? {
           roomCode: assignment.room.code,
@@ -311,6 +315,12 @@ export function aggregateDashboard(
   );
   const assigned = confirmed.filter(({ assignment }) => assignment !== null);
   const unassigned = confirmed.filter(({ assignment }) => assignment === null);
+  const arrived = confirmed.filter(
+    ({ reservation }) => reservation.arrivedAt !== null,
+  );
+  const expected = confirmed.filter(
+    ({ reservation }) => reservation.arrivedAt === null,
+  );
   const roomTotals = new Map<string, number>();
 
   for (const { reservation, assignment } of assigned) {
@@ -330,6 +340,14 @@ export function aggregateDashboard(
   return {
     confirmedReservations: confirmed.length,
     confirmedCovers: confirmed.reduce(
+      (total, { reservation }) => total + reservation.partySize,
+      0,
+    ),
+    arrivedCovers: arrived.reduce(
+      (total, { reservation }) => total + reservation.partySize,
+      0,
+    ),
+    expectedCovers: expected.reduce(
       (total, { reservation }) => total + reservation.partySize,
       0,
     ),

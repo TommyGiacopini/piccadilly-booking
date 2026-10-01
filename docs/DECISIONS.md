@@ -313,9 +313,9 @@ una sola istanza per servizio, preview e auto-deploy disabilitati. La cifra di
 Render imposta `NODE_ENV=production`; `APP_ENV=production` vieta sempre il seed
 demo. Il web valida fail-fast l'ambiente Render, il proxy fidato, l'URL HTTPS
 `*.onrender.com`, le configurazioni applicative e i secret obbligatori. Il
-pre-deploy applica le tredici migration versionate e poi il seed fittizio. Il
+pre-deploy applica le quattordici migration versionate e poi il seed fittizio. Il
 worker non esegue migration: attende per massimo 120 secondi che tutte le
-tredici migration risultino applicate, quindi avvia il CLI corrente. Il runtime
+quattordici migration risultino applicate, quindi avvia il CLI corrente. Il runtime
 PR #21 mantiene classificazione transient/fatal, backoff `1/2/5/10/30`, log
 strutturati sanitizzati e lifecycle di loop separato dai retry delivery M12.
 
@@ -355,6 +355,14 @@ hardcoded o inclusi nelle evidence.
 
 La riconciliazione locale non crea risorse, non esegue test remoti e non completa
 M13. FASE C resta sospesa e non iniziata fino ai successivi gate Controller.
+
+### D-041 — Lifecycle di arrivo della prenotazione T03
+
+L'arrivo appartiene all'intera prenotazione ed è persistito come `Reservation.arrivedAt` nullable in UTC. `ATTESO` e `ARRIVO NON REGISTRATO` sono derivazioni UI dipendenti dal contesto temporale, non stati o enum del database; `ReservationStatus` resta indipendente e la cancellazione non rimuove un arrivo registrato. La migration additiva #14 non usa default, backfill o indice.
+
+Staff e Admin usano un unico comando desired-state reversibile. Un no-op precede il controllo versione e non modifica versione, `updatedAt` o audit; un cambio reale richiede la versione corrente, incrementa una sola volta e registra atomicamente `ARRIVAL_RECORDED` o `ARRIVAL_REVERTED`. La transazione `SERIALIZABLE` usa il solo lock advisory della prenotazione e rilegge prenotazione e attore tenant-scoped: non acquisisce lock capacità/configurazione, non cambia disponibilità e non genera notifiche.
+
+Gli snapshot audit contengono esclusivamente il booleano registrato e il timestamp arrival nullable. Il dato è Staff-only, non entra nei contratti pubblici e nella Staff Agenda alimenta riepiloghi dei soli coperti confermati. Timestamp dettagliato, filtri/ordinamenti arrival, arrivi parziali e logiche no-show restano fuori da T03.
 
 ## 3. Decisioni reversibili
 

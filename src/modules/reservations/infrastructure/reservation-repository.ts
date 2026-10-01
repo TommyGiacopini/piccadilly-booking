@@ -97,6 +97,7 @@ export function mapReservation(row: PrismaReservation): StoredReservation {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     cancelledAt: row.cancelledAt,
+    arrivedAt: row.arrivedAt,
     version: row.version,
   };
 }

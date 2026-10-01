@@ -136,3 +136,122 @@ export async function updatePublicManagementExpiry(
   });
   return result.count === 1;
 }
+
+export interface FreshArrivalActor {
+  id: string;
+  restaurantId: string;
+  role: "ADMIN" | "STAFF";
+}
+
+export async function readFreshArrivalActor(
+  client: Prisma.TransactionClient,
+  input: { actorId: string; restaurantId: string },
+): Promise<FreshArrivalActor | null> {
+  const actor = await client.user.findFirst({
+    where: { id: input.actorId, restaurantId: input.restaurantId },
+    select: {
+      id: true,
+      restaurantId: true,
+      role: true,
+      isActive: true,
+      disabledAt: true,
+      mustChangePassword: true,
+    },
+  });
+
+  if (
+    !actor ||
+    !actor.isActive ||
+    actor.disabledAt !== null ||
+    actor.mustChangePassword ||
+    (actor.role !== "ADMIN" && actor.role !== "STAFF")
+  ) {
+    return null;
+  }
+
+  return { id: actor.id, restaurantId: actor.restaurantId, role: actor.role };
+}
+
+export async function readArrivalReservation(
+  client: Prisma.TransactionClient,
+  input: { restaurantId: string; reservationId: string },
+) {
+  const rows = await client.$queryRaw<
+    Array<{
+      id: string;
+      restaurantId: string;
+      version: number;
+      arrivedAt: Date | null;
+      updatedAt: Date;
+    }>
+  >(Prisma.sql`
+    SELECT
+      id,
+      restaurant_id AS "restaurantId",
+      version,
+      arrived_at AS "arrivedAt",
+      updated_at AS "updatedAt"
+    FROM reservations
+    WHERE id = ${input.reservationId}::uuid
+      AND restaurant_id = ${input.restaurantId}::uuid
+    FOR UPDATE
+  `);
+  return rows[0] ?? null;
+}
+
+export async function updateReservationArrival(
+  client: Prisma.TransactionClient,
+  input: {
+    restaurantId: string;
+    reservationId: string;
+    expectedVersion: number;
+    arrivedAt: Date | null;
+    updatedAt: Date;
+  },
+) {
+  const result = await client.reservation.updateMany({
+    where: {
+      id: input.reservationId,
+      restaurantId: input.restaurantId,
+      version: input.expectedVersion,
+    },
+    data: {
+      arrivedAt: input.arrivedAt,
+      updatedAt: input.updatedAt,
+      version: { increment: 1 },
+    },
+  });
+
+  if (result.count !== 1) return null;
+  return readArrivalReservation(client, input);
+}
+
+export async function insertReservationArrivalAudit(
+  client: Prisma.TransactionClient,
+  input: {
+    actor: FreshArrivalActor;
+    reservationId: string;
+    action: "ARRIVAL_RECORDED" | "ARRIVAL_REVERTED";
+    correlationId: string;
+    previousState: Prisma.InputJsonValue;
+    newState: Prisma.InputJsonValue;
+    createdAt: Date;
+  },
+): Promise<void> {
+  await client.reservationAuditEvent.create({
+    data: {
+      restaurantId: input.actor.restaurantId,
+      reservationId: input.reservationId,
+      action: input.action,
+      actorOrigin: "STAFF",
+      actorUserId: input.actor.id,
+      actorRole: input.actor.role,
+      correlationId: input.correlationId,
+      previousState: input.previousState,
+      newState: input.newState,
+      capacityOverride: false,
+      capacityOverrideReason: null,
+      createdAt: input.createdAt,
+    },
+  });
+}

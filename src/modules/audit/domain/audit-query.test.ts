@@ -11,6 +11,18 @@ import {
 const eventId = "10000000-0000-4000-8000-000000000001";
 
 describe("audit query contract", () => {
+  it.each(["ARRIVAL_RECORDED", "ARRIVAL_REVERTED"])(
+    "accepts the T03 reservation action %s",
+    (action) => {
+      const parsed = parseAuditListQuery(
+        new URLSearchParams(`source=RESERVATION&action=${action}`),
+        "Europe/Rome",
+        new Date("2026-09-30T20:00:00.000Z"),
+      );
+      expect(parsed.filters.action).toBe(action);
+    },
+  );
+
   it("uses the last 30 local days and DST-safe exclusive boundaries", () => {
     const parsed = parseAuditListQuery(
       new URLSearchParams(),
