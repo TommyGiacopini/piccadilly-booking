@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { partyCompositionFields, validatePartyComposition } from "@/modules/reservations/domain/party-composition";
 
 import {
   isLocalDate,
@@ -6,6 +7,7 @@ import {
 } from "@/modules/configuration/domain/operational-time";
 import { PRIVACY_CONSENT_METHODS } from "@/modules/reservations/domain/types";
 
+// Raw/user-controlled text limits, never limits for serialized JSON envelopes.
 export const RESERVATION_TEXT_LIMITS = {
   customerName: 80,
   customerPhone: 40,
@@ -16,6 +18,11 @@ export const RESERVATION_TEXT_LIMITS = {
   capacityOverrideReason: 500,
   idempotencyKey: 200,
 } as const;
+
+// Internal-only: serializers consume individually validated fields (or persisted
+// historical state). Preserve their representation without a second encoding cap
+// or text normalization. Request schemas below retain the raw limits.
+export const serializedReservationEnvelopeSchema = z.string();
 
 export function normalizePersonName(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
@@ -104,6 +111,8 @@ export const createReservationSchema = z
     origin: z.enum(["STAFF", "PHONE"], {
       error: "L'origine deve essere STAFF o PHONE.",
     }),
+    childrenCount: partyCompositionFields.childrenCount.default(null),
+    gameRoomPreference: partyCompositionFields.gameRoomPreference.default(null),
     customerFirstName: requiredNormalizedString(
       "Il nome",
       RESERVATION_TEXT_LIMITS.customerName,
@@ -144,6 +153,7 @@ export const createReservationSchema = z
     ),
   })
   .strict()
+  .superRefine(validatePartyComposition)
   .superRefine((value, context) => {
     const expectedMethod =
       value.origin === "PHONE" ? "VERBAL" : "STAFF_RECORDED";

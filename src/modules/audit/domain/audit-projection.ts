@@ -244,6 +244,8 @@ const reservationRules = [
   rule("serviceType", "Servizio", serviceType),
   rule("arrivalTime", "Orario", localTime),
   rule("partySize", "Persone", positiveCount),
+  rule("childrenCount", "Bambini", scalarParser(z.number().int().min(0).max(1_000_000).nullable().transform((value) => value ?? "Non specificato"))),
+  rule("gameRoomPreference", "Sala con i Giochi richiesta", scalarParser(z.boolean().nullable().transform((value) => value ?? "Non specificata"))),
   rule("status", "Stato", scalarParser(z.enum(["CONFIRMED", "CANCELLED"]))),
   rule("origin", "Origine", scalarParser(z.enum(["STAFF", "PHONE", "PUBLIC"]))),
   rule("version", "Versione", positiveCount),

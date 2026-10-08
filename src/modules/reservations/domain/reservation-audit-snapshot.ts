@@ -25,6 +25,8 @@ export function reservationAuditSnapshot(reservation: StoredReservation) {
     serviceType: reservation.serviceType,
     arrivalTime: reservation.arrivalTime,
     partySize: reservation.partySize,
+    childrenCount: reservation.childrenCount,
+    gameRoomPreference: reservation.gameRoomPreference,
     status: reservation.status,
     origin: reservation.origin,
     version: reservation.version,

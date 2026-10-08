@@ -34,7 +34,8 @@ function phonePayload(localDate: string, suffix: string) {
     serviceType: "DINNER" as const,
     arrivalTime: "19:00",
     partySize: 2,
-    roomCode: "sala-1",
+    childrenCount: 0,
+    gameRoomPreference: null,
     customerFirstName: e2eReservationFirstName,
     customerLastName: `Notifications ${suffix}`,
     customerPhone: "+390000001212",
@@ -42,7 +43,6 @@ function phonePayload(localDate: string, suffix: string) {
     highChair: false,
     stroller: false,
     accessibility: false,
-    children: false,
     celiac: false,
     allergies: null,
     intolerances: null,
@@ -164,7 +164,7 @@ test.describe.serial("M12 notification surfaces", () => {
     await page.getByLabel("Nome", { exact: true }).fill(e2eReservationFirstName);
     await page.getByLabel("Cognome").fill("Optout UI");
     await page.getByLabel("Telefono").fill("+390000001213");
-    await page.getByLabel("Sala preferita (non garantita)").selectOption("sala-1");
+    await page.getByRole("radio", { name: "Non specificato", exact: true }).check();
     await expect(page.getByLabel("Slot configurato").locator("option[value='19:00']")).toHaveCount(1);
     await page.getByLabel("Slot configurato").selectOption("19:00");
     await checkbox.uncheck();

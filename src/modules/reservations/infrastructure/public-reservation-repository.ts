@@ -159,6 +159,8 @@ export async function insertPublicReservation(
       serviceType: input.command.serviceType,
       arrivalTime: operationalTimeToDatabase(input.command.arrivalTime),
       partySize: input.command.partySize,
+      childrenCount: input.command.childrenCount,
+      gameRoomPreference: input.command.gameRoomPreference,
       status: "CONFIRMED",
       origin: "PUBLIC",
       customerFirstName: input.command.customerFirstName,
@@ -202,6 +204,8 @@ export async function updatePublicReservation(
     reservationId: string;
     command: PublicUpdateReservationInput;
     viewExpiresAt: Date;
+    preferences: string;
+    allergies: string;
   },
 ): Promise<StoredReservation> {
   const reservation = await client.reservation.update({
@@ -211,9 +215,11 @@ export async function updatePublicReservation(
       serviceType: input.command.serviceType,
       arrivalTime: operationalTimeToDatabase(input.command.arrivalTime),
       partySize: input.command.partySize,
+      childrenCount: input.command.childrenCount,
+      gameRoomPreference: input.command.gameRoomPreference,
       notes: input.command.notes,
-      preferences: serializePublicPreferences(input.command),
-      allergies: serializePublicAllergies(input.command),
+      preferences: input.preferences,
+      allergies: input.allergies,
       version: { increment: 1 },
     },
   });

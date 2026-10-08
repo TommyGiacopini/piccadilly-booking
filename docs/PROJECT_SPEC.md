@@ -1,5 +1,22 @@
 # Piccadilly Booking — Specifiche funzionali
 
+## Contratto Owner Change v2 — Foundation A (2026-10-07)
+
+Questa sezione prevale sui riferimenti storici alla scelta cliente di una sala fisica e al solo booleano bambini presenti nelle sezioni successive.
+
+- `partySize` è il totale coperti, bambini inclusi. `childrenCount` nullable è il numero bambini; gli adulti sono derivati, mai persistiti separatamente.
+- `childrenCount=null` e `gameRoomPreference=null` significano **composizione non specificata**. Nessun backfill o deduzione da preferenze legacy, assignment, Sala 3 o testo libero.
+- Una nuova Public richiede tutti adulti (`0/null`) oppure bambini (`1..partySize` con preferenza giochi esplicita Sì/No). PHONE ammette anche Non specificato (`null/null`).
+- Public, PHONE, modifica Staff e link personale non chiedono più una sala fisica. `gameRoomPreference` è una richiesta cliente non garantita per la Sala con i Giochi, non un'assegnazione né una riserva di capacità. Nessuna allocazione automatica.
+- Cambiare solo composizione/preferenza non rimuove l'assegnazione operativa. Il clear per data, servizio o orario resta quello canonico. L'arrivo T03 resta indipendente.
+- Un legacy sconosciuto può restare tale durante modifiche non pertinenti; cambiare il totale richiede una dichiarazione coerente. Una composizione già dichiarata non torna implicitamente sconosciuta.
+- `preferences` conserva le altre richieste. `roomCode` storico resta leggibile e viene preservato server-side; nuove prenotazioni non ricevono una sala preferita fisica. Il booleano legacy `children`, ove serializzato per compatibilità, è derivato dal conteggio noto o preservato come indicazione non autorevole se sconosciuto. Non è un secondo input cliente.
+- I nuovi campi fanno parte di equivalenza/no-op/audit e hash idempotency. Un payload vecchio può solo ripetere un record idempotency preesistente, corrispondente e non scaduto; non crea nuovi record e non riscrive gli hash storici.
+
+Copy italiano congelato: «In quanti siete? (coperti totali)», «Ci sono bambini?», «No, siamo tutti adulti», «Sì, ci sono bambini», «Quanti bambini ci sono?», «Preferite un tavolo nella Sala con i Giochi?» con risposte Sì/No. La richiesta non è garantita; in caso di più richieste la priorità segue, per quanto possibile, l'ordine di prenotazione. La disposizione tavoli/sale è definita dal ristorante per esigenze organizzative e di servizio. L'inglese mantiene identica semantica, senza promesse aggiuntive.
+
+Foundation A aggiunge soltanto la migration #15 con due colonne nullable senza default/indice e constraint di coerenza. T04 revised e T05 restano separati e non implementati in questa tranche. Il T04 locale parziale è preservato nel suo worktree e non incorporato.
+
 
 
 **Versione:** 1.0

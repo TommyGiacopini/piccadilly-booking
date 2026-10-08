@@ -17,6 +17,8 @@ function agendaReservation(
     serviceType: "DINNER",
     arrivalTime: "19:00",
     partySize: 2,
+    childrenCount: null,
+    gameRoomPreference: null,
     status: "CONFIRMED",
     origin: "PHONE",
     customerFirstName: "Mario",

@@ -24,6 +24,8 @@ export interface CreateReservationCommand {
   serviceType: ReservationServiceType;
   arrivalTime: string;
   partySize: number;
+  childrenCount: number | null;
+  gameRoomPreference: boolean | null;
   origin: ReservationOrigin;
   customerFirstName: string;
   customerLastName: string;
@@ -44,6 +46,8 @@ export interface StoredReservation {
   serviceType: ReservationServiceType;
   arrivalTime: string;
   partySize: number;
+  childrenCount: number | null;
+  gameRoomPreference: boolean | null;
   status: ReservationStatus;
   origin: ReservationOrigin;
   customerFirstName: string;

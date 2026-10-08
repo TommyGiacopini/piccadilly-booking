@@ -13,6 +13,8 @@ function reservationFixture(
     serviceType: "DINNER",
     arrivalTime: "20:00",
     partySize: 4,
+    childrenCount: null,
+    gameRoomPreference: null,
     status: "CONFIRMED",
     origin: "PUBLIC",
     customerFirstName: "Nome Sensibile",

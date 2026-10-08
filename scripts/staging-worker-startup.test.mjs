@@ -26,24 +26,24 @@ describe("M13 staging worker startup", () => {
   });
 
   it("accepts exactly the expected fourteen-migration set", () => {
-    const expected = Array.from({ length: 14 }, (_, index) => `migration-${index}`);
+    const expected = Array.from({ length: 15 }, (_, index) => `migration-${index}`);
     expect(migrationSetIsReady(expected, expected)).toBe(true);
   });
 
   it("rejects a missing migration", () => {
-    const expected = Array.from({ length: 14 }, (_, index) => `migration-${index}`);
+    const expected = Array.from({ length: 15 }, (_, index) => `migration-${index}`);
     expect(migrationSetIsReady(expected.slice(1), expected)).toBe(false);
   });
 
   it("rejects an unexpected fifteenth migration", () => {
-    const expected = Array.from({ length: 14 }, (_, index) => `migration-${index}`);
+    const expected = Array.from({ length: 15 }, (_, index) => `migration-${index}`);
     expect(
       migrationSetIsReady([...expected, "migration-unexpected"], expected),
     ).toBe(false);
   });
 
   it("rejects duplicate or inconsistent inventories", () => {
-    const expected = Array.from({ length: 14 }, (_, index) => `migration-${index}`);
+    const expected = Array.from({ length: 15 }, (_, index) => `migration-${index}`);
     expect(
       migrationSetIsReady([...expected.slice(0, 13), expected[0]], expected),
     ).toBe(false);

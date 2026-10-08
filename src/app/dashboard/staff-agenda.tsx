@@ -17,6 +17,7 @@ import {
   type StaffAgendaOrder,
 } from "@/modules/dashboard/domain/staff-agenda";
 import { reservationArrivalUiState } from "@/modules/reservations/domain/reservation-arrival";
+import { partyCompositionLabel } from "@/modules/reservations/domain/party-composition";
 
 type ArrivalOverride = { version: number; arrivedAt: string | null };
 
@@ -55,7 +56,8 @@ function requestBadges(reservation: DashboardReservation): string[] {
     reservation.highChair ? "Seggiolone" : null,
     reservation.stroller ? "Passeggino" : null,
     reservation.accessibility ? "Accessibilità" : null,
-    reservation.children ? "Bambini" : null,
+    reservation.childrenCount === null && reservation.children ? "Bambini segnalati · numero non specificato" : null,
+    reservation.gameRoomPreference === true ? "SALA GIOCHI RICHIESTA" : null,
     reservation.celiac ? "Celiachia" : null,
     reservation.allergies ? "Allergie" : null,
     reservation.intolerances ? "Intolleranze" : null,
@@ -172,12 +174,12 @@ function ReservationAgendaRow({
           </p>
         </div>
 
-        <div>
+        <div className="min-w-0">
           <p className="tabular-nums text-lg font-semibold text-text-primary">
             {reservation.partySize}
           </p>
           <p className="text-xs text-text-muted">
-            {reservation.partySize === 1 ? "coperto" : "coperti"}
+            {partyCompositionLabel(reservation)}
           </p>
         </div>
 

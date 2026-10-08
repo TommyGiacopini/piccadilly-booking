@@ -35,6 +35,21 @@ function reservationRow(overrides: Partial<AuditListDatabaseRow> = {}): AuditLis
 }
 
 describe("audit list projection", () => {
+  it("projects known zero/false and explicit unknown composition, while historical snapshots remain readable", () => {
+    const project = (state: object) => projectAuditDetail({ ...reservationRow(), previousState: null, newState: state, metadata: null })?.newState;
+    expect(project({ childrenCount: 0, gameRoomPreference: null })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "childrenCount", value: 0 }),
+      expect.objectContaining({ key: "gameRoomPreference", value: "Non specificata" }),
+    ]));
+    expect(project({ childrenCount: 2, gameRoomPreference: false })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "childrenCount", value: 2 }),
+      expect.objectContaining({ key: "gameRoomPreference", value: false }),
+    ]));
+    expect(project({ childrenCount: null, gameRoomPreference: null })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "childrenCount", value: "Non specificato" }),
+    ]));
+    expect(project({ partySize: 6 })).toEqual([expect.objectContaining({ key: "partySize", value: 6 })]);
+  });
   it("normalizes reservation headers, public actor, entity and outcome", () => {
     expect(projectAuditListRow(reservationRow())).toEqual({
       source: "RESERVATION",

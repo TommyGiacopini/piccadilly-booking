@@ -6,7 +6,7 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function canonicalRequest(command: CreateReservationCommand): string {
+function canonicalRequest(command: CreateReservationCommand, legacy = false): string {
   return JSON.stringify({
     localDate: command.localDate,
     serviceType: command.serviceType,
@@ -23,6 +23,7 @@ function canonicalRequest(command: CreateReservationCommand): string {
     privacyConsentMethod: command.privacyConsentMethod,
     capacityOverride: command.capacityOverride,
     capacityOverrideReason: command.capacityOverrideReason,
+    ...(legacy ? {} : { childrenCount: command.childrenCount, gameRoomPreference: command.gameRoomPreference }),
   });
 }
 
@@ -49,6 +50,11 @@ export function hashPhoneReservationRequest(
       sendWhatsAppConfirmation,
     }),
   );
+}
+
+// Exact old request representation, never used for a new reservation write.
+export function hashLegacyPhoneReservationRequest(command: CreateReservationCommand, sendWhatsAppConfirmation: boolean): string {
+  return sha256(JSON.stringify({ reservation: canonicalRequest(command, true), sendWhatsAppConfirmation }));
 }
 
 export function classifyIdempotencyRequest(

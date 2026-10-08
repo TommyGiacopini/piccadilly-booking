@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { PublicContactLinks } from "@/app/_components/public-contact-links";
+import { PartyCompositionFields, compositionFormState, compositionPayload, restaurantDiscretionCopy } from "@/app/prenota/party-composition-fields";
 import type {
   PublicContacts,
   PublicContentSet,
@@ -18,14 +19,8 @@ interface AvailabilitySlot {
   remainingCapacity: number;
 }
 
-interface RoomOption {
-  code: string;
-  name: string;
-}
-
 interface AvailabilityResponse {
   slots?: AvailabilitySlot[];
-  rooms?: RoomOption[];
   isOpen?: boolean;
   error?: string;
 }
@@ -38,9 +33,8 @@ const text = {
     service: "Servizio",
     lunch: "Pranzo",
     dinner: "Cena",
-    partySize: "Persone",
+    partySize: "In quanti siete? (coperti totali)",
     slot: "Orario disponibile",
-    room: "Sala preferita",
     firstName: "Nome",
     lastName: "Cognome",
     phone: "Telefono",
@@ -49,7 +43,6 @@ const text = {
     highChair: "Seggiolone",
     stroller: "Passeggino",
     accessibility: "Accessibilità",
-    children: "Presenza di bambini",
     celiac: "Celiachia",
     animals: "Animali",
     allergies: "Allergie (facoltative)",
@@ -58,8 +51,6 @@ const text = {
     notes: "Note (facoltative)",
     privacy: "Accetto l’informativa privacy tecnica di prova.",
     terms: "Accetto le condizioni di prenotazione tecniche di prova.",
-    disclaimer:
-      "La sala indicata rappresenta una preferenza. Il Piccadilly si riserva il diritto di modificare la collocazione del tavolo per esigenze organizzative, disponibilità o condizioni atmosferiche.",
     loading: "Verifica disponibilità…",
     submit: "Conferma prenotazione",
     submitting: "Conferma in corso…",
@@ -74,9 +65,8 @@ const text = {
     service: "Service",
     lunch: "Lunch",
     dinner: "Dinner",
-    partySize: "Guests",
+    partySize: "How many are you? (total covers)",
     slot: "Available time",
-    room: "Preferred room",
     firstName: "First name",
     lastName: "Last name",
     phone: "Phone",
@@ -85,7 +75,6 @@ const text = {
     highChair: "High chair",
     stroller: "Stroller",
     accessibility: "Accessibility",
-    children: "Children",
     celiac: "Coeliac needs",
     animals: "Animals",
     allergies: "Allergies (optional)",
@@ -94,8 +83,6 @@ const text = {
     notes: "Notes (optional)",
     privacy: "I accept the technical demo privacy notice.",
     terms: "I accept the technical demo booking terms.",
-    disclaimer:
-      "The selected room is a preference. Piccadilly may change the table location for operational, availability or weather reasons.",
     loading: "Checking availability…",
     submit: "Confirm booking",
     submitting: "Confirming…",
@@ -130,6 +117,7 @@ export function PublicBookingForm({
   const [date, setDate] = useState("");
   const [service, setService] = useState<"LUNCH" | "DINNER">("DINNER");
   const [partySize, setPartySize] = useState(2);
+  const [composition, setComposition] = useState(compositionFormState());
   const [availability, setAvailability] = useState<AvailabilityResponse>({});
   const [availabilityPending, setAvailabilityPending] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -191,7 +179,7 @@ export function PublicBookingForm({
         serviceType: service,
         arrivalTime: value(formData, "arrivalTime"),
         partySize,
-        roomCode: value(formData, "roomCode"),
+        ...compositionPayload(composition),
         customerFirstName: value(formData, "customerFirstName"),
         customerLastName: value(formData, "customerLastName"),
         customerPhone: value(formData, "customerPhone"),
@@ -199,7 +187,6 @@ export function PublicBookingForm({
         highChair: checked(formData, "highChair"),
         stroller: checked(formData, "stroller"),
         accessibility: checked(formData, "accessibility"),
-        children: checked(formData, "children"),
         celiac: checked(formData, "celiac"),
         allergies: value(formData, "allergies"),
         intolerances: value(formData, "intolerances"),
@@ -322,18 +309,12 @@ export function PublicBookingForm({
               {copy.partySize}
               <input className={inputClass} min="1" onChange={(event) => { setAvailabilityPending(Boolean(date)); setPartySize(Number(event.target.value)); }} required step="1" type="number" value={partySize} />
             </label>
+            <div className="min-w-0 md:col-span-2 lg:col-span-4"><PartyCompositionFields language={language} onChange={setComposition} partySize={partySize} state={composition} /></div>
             <label className="text-sm font-bold text-zinc-800">
               {copy.slot}
               <select className={inputClass} disabled={availableSlots.length === 0} name="arrivalTime" required>
                 <option value="">—</option>
                 {availableSlots.map((slot) => <option key={slot.time} value={slot.time}>{slot.time}</option>)}
-              </select>
-            </label>
-            <label className="text-sm font-bold text-zinc-800 md:col-span-2">
-              {copy.room}
-              <select className={inputClass} disabled={!availability.rooms?.length} name="roomCode" required>
-                <option value="">—</option>
-                {availability.rooms?.map((room) => <option key={room.code} value={room.code}>{room.name}</option>)}
               </select>
             </label>
             <label className="text-sm font-bold text-zinc-800">
@@ -357,7 +338,7 @@ export function PublicBookingForm({
           <section className="mt-8 rounded-3xl bg-zinc-100 p-6 sm:p-8">
             <h2 className="text-xl font-black">{copy.needs}</h2>
             <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {(["highChair", "stroller", "accessibility", "children", "celiac", "animals"] as const).map((name) => (
+              {(["highChair", "stroller", "accessibility", "celiac", "animals"] as const).map((name) => (
                 <label className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm font-bold" key={name}>
                   <input className="size-4 accent-orange-500" name={name} type="checkbox" />
                   {copy[name]}
@@ -373,7 +354,7 @@ export function PublicBookingForm({
           </section>
 
           <p className="mt-7 rounded-2xl border border-orange-200 bg-orange-50 p-5 text-sm leading-6 text-orange-950">
-            {copy.disclaimer}
+            {restaurantDiscretionCopy[language]}
           </p>
           <div className="mt-6 space-y-3">
             <label className="flex items-start gap-3 text-sm font-bold"><input className="mt-1 size-4 accent-orange-500" name="privacyAccepted" required type="checkbox" />{copy.privacy}</label>

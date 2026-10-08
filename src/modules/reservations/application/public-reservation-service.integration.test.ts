@@ -51,6 +51,9 @@ import {
   PUBLIC_RATE_LIMIT_CLEANUP_BATCH_SIZE,
 } from "@/server/security/public-rate-limit";
 import { prisma } from "@/server/db/prisma";
+import { hashIdempotencyKey } from "@/modules/reservations/domain/idempotency";
+import { hashPublicReservationRequest } from "@/modules/reservations/domain/public-idempotency";
+import { legacyPublicCreateReservationSchema, parsePublicPreferences, parsePublicAllergies } from "@/modules/reservations/domain/public-validation";
 
 const restaurantId = randomUUID();
 const standardDate = "2099-10-19";
@@ -116,7 +119,8 @@ function payload(overrides: Record<string, unknown> = {}) {
     serviceType: "DINNER",
     arrivalTime: "19:00",
     partySize: 2,
-    roomCode: "sala-test",
+    childrenCount: 0,
+    gameRoomPreference: null,
     customerFirstName: "Cliente",
     customerLastName: "M7 Fittizio",
     customerPhone: "+39 000 000 0700",
@@ -124,7 +128,6 @@ function payload(overrides: Record<string, unknown> = {}) {
     highChair: false,
     stroller: false,
     accessibility: false,
-    children: false,
     celiac: false,
     allergies: null,
     intolerances: null,
@@ -163,11 +166,11 @@ function updatePayload(overrides: Record<string, unknown> = {}) {
     serviceType: "DINNER",
     arrivalTime: "19:30",
     partySize: 2,
-    roomCode: "sala-test",
+    childrenCount: 0,
+    gameRoomPreference: null,
     highChair: false,
     stroller: false,
     accessibility: true,
-    children: false,
     celiac: false,
     allergies: null,
     intolerances: null,
@@ -257,6 +260,202 @@ async function expectNoPublicCreationArtifacts(): Promise<void> {
 }
 
 describe.sequential("M7 public booking with real PostgreSQL", () => {
+  it.each([
+    { allergies: '"'.repeat(300), intolerances: "\\".repeat(300) },
+    { allergies: "A\n".repeat(149) + "AA", intolerances: "I\t".repeat(149) + "II" },
+  ])("R3 Public and management persist escaped boundaries, authoritative legacy and raw no-op", async (fields) => {
+    const key = randomUUID();
+    const created = await serviceCreate(fields, key);
+    const initial = await prisma.reservation.findFirstOrThrow({ where: { restaurantId } });
+    expect(parsePublicAllergies(initial.allergies)).toMatchObject(fields);
+    expect(JSON.parse(initial.allergies!)).not.toHaveProperty("legacyText");
+    expect((await serviceCreate(fields, key)).replayed).toBe(true);
+    await expect(serviceCreate({ ...fields, allergies: "Changed" }, key)).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    const legacy = '"\\\nX'.repeat(250);
+    await prisma.reservation.update({ where: { id: initial.id }, data: { preferences: legacy, allergies: legacy, childrenCount: null, gameRoomPreference: null, arrivedAt: earlyNow } });
+    const room = await prisma.room.findFirstOrThrow({ where: { restaurantId } });
+    const user = await prisma.user.create({ data: { restaurantId, username: `storage.${randomUUID()}`, passwordHash: "not-used-in-storage-tests", role: "STAFF" } });
+    const table = await prisma.diningTable.create({ data: { roomId: room.id, name: "Storage R3", minimumSeats: 1, maximumSeats: 8 } });
+    const assignment = await prisma.reservationAssignment.create({ data: { restaurantId, reservationId: initial.id, roomId: room.id, assignedByUserId: user.id, updatedByUserId: user.id } });
+    await prisma.reservationAssignmentTable.create({ data: { restaurantId, assignmentId: assignment.id, roomId: room.id, diningTableId: table.id } });
+    try {
+      const before = await prisma.reservation.findUniqueOrThrow({ where: { id: initial.id } });
+      const assignmentBefore = await prisma.reservationAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: { tables: true } });
+      const tokenBefore = await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: initial.id } });
+      const same = updatePayload({ localDate: standardDate, arrivalTime: "19:00", accessibility: false, notes: before.notes, childrenCount: null, gameRoomPreference: null });
+      const update = (overrides: Record<string, unknown> = {}) => updateManagedPublicReservation({ restaurantId, rawToken: tokenFromPath(created.managementPath), rawPayload: { ...same, ...overrides }, now: earlyNow });
+      await update();
+      expect(await prisma.reservation.findUniqueOrThrow({ where: { id: initial.id } })).toEqual(before);
+      expect(await prisma.reservationAuditEvent.count({ where: { reservationId: initial.id } })).toBe(1);
+      await update({ notes: "Storage note-only synthetic update" });
+      const afterNote = await prisma.reservation.findUniqueOrThrow({ where: { id: initial.id } });
+      expect(afterNote.preferences).toBe(legacy);
+      expect(afterNote.allergies).toBe(legacy);
+      await update({ notes: afterNote.notes, childrenCount: 1, gameRoomPreference: true, ...fields });
+      const after = await prisma.reservation.findUniqueOrThrow({ where: { id: initial.id } });
+      expect(after).toMatchObject({ childrenCount: 1, gameRoomPreference: true, version: afterNote.version + 1, arrivedAt: before.arrivedAt });
+      expect(parsePublicPreferences(after.preferences).legacyText).toBe(legacy);
+      expect(parsePublicAllergies(after.allergies)).toMatchObject(fields);
+      expect(parsePublicAllergies(after.allergies).legacyText).toBe(legacy);
+      expect(await prisma.reservationAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: { tables: true } })).toEqual(assignmentBefore);
+      expect(await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: initial.id } })).toEqual(tokenBefore);
+      await update({ notes: afterNote.notes, childrenCount: 1, gameRoomPreference: true, ...fields });
+      expect(await prisma.reservation.findUniqueOrThrow({ where: { id: initial.id } })).toEqual(after);
+      const audits = await prisma.reservationAuditEvent.findMany({ where: { reservationId: initial.id, action: "UPDATED" } });
+      expect(audits).toHaveLength(2);
+      expect(JSON.stringify(audits)).not.toContain(legacy);
+    } finally {
+      await prisma.reservationAssignmentTable.deleteMany({ where: { assignmentId: assignment.id } });
+      await prisma.reservationAssignment.delete({ where: { id: assignment.id } });
+      await prisma.diningTable.delete({ where: { id: table.id } });
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
+
+  it.each(["plain", "structured"] as const)("F-01 preserves %s legacy text through management edits, composition change and no-op", async (format) => {
+    const created = await serviceCreate();
+    const initial = await prisma.reservation.findFirstOrThrow({ where: { restaurantId } });
+    const text = "Richiesta storica sintetica Management — città\n".repeat(10);
+    const original = format === "plain" ? text.trim() : JSON.stringify({ ...JSON.parse(initial.preferences!), legacyText: text }, null, 2);
+    await prisma.reservation.update({ where: { id: initial.id }, data: { childrenCount: null, gameRoomPreference: null, preferences: original } });
+    const before = await prisma.reservation.findUniqueOrThrow({ where: { id: initial.id } });
+    const tokenBefore = await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: before.id } });
+    const auditCount = await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } });
+    const same = updatePayload({ localDate: standardDate, arrivalTime: "19:00", accessibility: false, notes: before.notes, childrenCount: null, gameRoomPreference: null });
+    const update = (overrides: Record<string, unknown> = {}) => updateManagedPublicReservation({ restaurantId, rawToken: tokenFromPath(created.managementPath), rawPayload: { ...same, ...overrides }, now: earlyNow });
+    await update();
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } })).toEqual(before);
+    expect(await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } })).toBe(auditCount);
+    await expect(update({ legacyText: "Client replacement" })).rejects.toMatchObject({ code: "VALIDATION" });
+    await update({ notes: "Nota sintetica aggiornata" });
+    expect((await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } })).preferences).toBe(original);
+    await update({ notes: "Nota sintetica aggiornata", childrenCount: 1, gameRoomPreference: true });
+    const stored = await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } });
+    expect(parsePublicPreferences(stored.preferences).legacyText).toBe(parsePublicPreferences(original).legacyText);
+    expect(parsePublicPreferences(stored.preferences).children).toBe(true);
+    expect(stored.version).toBe(before.version + 2);
+    const audits = await prisma.reservationAuditEvent.findMany({ where: { reservationId: before.id, action: "UPDATED" } });
+    expect(audits).toHaveLength(2);
+    for (const audit of audits) {
+      expect(audit.newState).toMatchObject({ requests: { legacyPreferencePresent: true } });
+      expect(JSON.stringify(audit)).not.toContain("Richiesta storica sintetica");
+    }
+    await update({ notes: "Nota sintetica aggiornata", childrenCount: 1, gameRoomPreference: true });
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } })).toEqual(stored);
+    expect(await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } })).toBe(auditCount + 2);
+    expect(await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: before.id } })).toEqual(tokenBefore);
+  });
+
+  it("F-01 rolls back legacy preferences and composition when management audit fails", async () => {
+    const created = await serviceCreate();
+    const initial = await prisma.reservation.findFirstOrThrow({ where: { restaurantId } });
+    await prisma.reservation.update({ where: { id: initial.id }, data: { preferences: '"\\\nX'.repeat(250), allergies: "H".repeat(1000), arrivedAt: earlyNow } });
+    const before = await prisma.reservation.findUniqueOrThrow({ where: { id: initial.id } });
+    const tokenBefore = await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: before.id } });
+    const audits = await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } });
+    await prisma.$executeRawUnsafe(`CREATE FUNCTION foundation_f01_reject_public_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.restaurant_id='${restaurantId}'::uuid AND NEW.action='UPDATED' THEN RAISE EXCEPTION 'synthetic F01 public audit failure'; END IF; RETURN NEW; END; $$`);
+    await prisma.$executeRawUnsafe("CREATE TRIGGER foundation_f01_reject_public_audit BEFORE INSERT ON reservation_audit_events FOR EACH ROW EXECUTE FUNCTION foundation_f01_reject_public_audit()");
+    try {
+      await expect(updateManagedPublicReservation({ restaurantId, rawToken: tokenFromPath(created.managementPath), rawPayload: updatePayload({ localDate: standardDate, arrivalTime: "19:00", accessibility: false, notes: before.notes, childrenCount: 1, gameRoomPreference: true, allergies: '"'.repeat(300), intolerances: "\\".repeat(300) }), now: earlyNow })).rejects.toThrow("synthetic F01 public audit failure");
+    } finally {
+      await prisma.$executeRawUnsafe("DROP TRIGGER foundation_f01_reject_public_audit ON reservation_audit_events");
+      await prisma.$executeRawUnsafe("DROP FUNCTION foundation_f01_reject_public_audit()");
+    }
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } })).toEqual(before);
+    expect(await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: before.id } })).toEqual(tokenBefore);
+    expect(await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } })).toBe(audits);
+  });
+
+  it("treats game-room preference as a request even when physical rooms are inactive", async () => {
+    const rooms = await prisma.room.findMany({ where: { restaurantId }, select: { id: true, isActive: true } });
+    await prisma.room.updateMany({ where: { restaurantId }, data: { isActive: false } });
+    try {
+      const result = await serviceCreate({ childrenCount: 1, gameRoomPreference: true });
+      expect(result.reservation).toMatchObject({ childrenCount: 1, gameRoomPreference: true });
+      expect(await prisma.reservationAssignment.count({ where: { restaurantId } })).toBe(0);
+    } finally {
+      for (const room of rooms) await prisma.room.update({ where: { id: room.id }, data: { isActive: room.isActive } });
+    }
+  });
+  it.each([
+    { childrenCount: 0, gameRoomPreference: null },
+    { childrenCount: 1, gameRoomPreference: true },
+    { childrenCount: 1, gameRoomPreference: false },
+  ])("persists authoritative Public composition $childrenCount/$gameRoomPreference without room choice", async (composition) => {
+    const created = await serviceCreate(composition);
+    const stored = await prisma.reservation.findFirstOrThrow({ where: { restaurantId }, include: { auditEvents: true } });
+    expect(stored).toMatchObject(composition);
+    expect(JSON.parse(stored.preferences!)).toMatchObject({ roomCode: "", children: composition.childrenCount > 0 });
+    expect(stored.auditEvents).toHaveLength(1);
+    expect(stored.auditEvents[0].newState).toMatchObject(composition);
+    const read = await readPublicReservation({ restaurantId, rawToken: tokenFromPath(created.managementPath), now: earlyNow });
+    expect(read).toMatchObject(composition);
+    expect(read).not.toHaveProperty("assignment");
+    expect(read).not.toHaveProperty("arrivedAt");
+  });
+
+  it("hashes children count and game preference independently for new Public replays", async () => {
+    const key = randomUUID();
+    const first = await serviceCreate({ childrenCount: 1, gameRoomPreference: true }, key);
+    expect((await serviceCreate({ childrenCount: 1, gameRoomPreference: true }, key)).replayed).toBe(true);
+    for (const changed of [{ childrenCount: 2, gameRoomPreference: true }, { childrenCount: 1, gameRoomPreference: false }]) {
+      await expect(serviceCreate(changed, key)).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    }
+    expect((await prisma.reservation.findFirstOrThrow({ where: { restaurantId } })).version).toBe(1);
+    expect(first.replayed).toBe(false);
+    expect(await prisma.reservationAuditEvent.count({ where: { restaurantId } })).toBe(1);
+  });
+
+  it("replays only a matching legacy record and never creates or rewrites an obsolete submission", async () => {
+    const key = randomUUID();
+    const created = await serviceCreate({}, key);
+    const current = Object.fromEntries(Object.entries(payload()).filter(([field]) => !["childrenCount", "gameRoomPreference"].includes(field)));
+    const oldPayload = { ...current, roomCode: "sala-m7", children: true };
+    const oldHash = hashPublicReservationRequest(legacyPublicCreateReservationSchema.parse(oldPayload));
+    const record = await prisma.reservationIdempotencyKey.findFirstOrThrow({ where: { restaurantId } });
+    await prisma.reservationIdempotencyKey.update({ where: { id: record.id }, data: { requestHash: oldHash } });
+    const stored = await prisma.reservation.findFirstOrThrow({ where: { restaurantId } });
+    await prisma.reservation.update({ where: { id: stored.id }, data: { childrenCount: null, gameRoomPreference: null, preferences: JSON.stringify({ ...JSON.parse(stored.preferences!), roomCode: "sala-m7", children: true }) } });
+    const replay = await createPublicReservation({ restaurantId, managementSecret: secret, rawPayload: oldPayload, rawIdempotencyKey: key, now: earlyNow });
+    expect(replay).toMatchObject({ replayed: true, managementPath: created.managementPath });
+    expect((await prisma.reservationIdempotencyKey.findUniqueOrThrow({ where: { id: record.id } })).requestHash).toBe(oldHash);
+    expect((await prisma.reservation.findFirstOrThrow({ where: { restaurantId } })).childrenCount).toBeNull();
+    await expect(createPublicReservation({ restaurantId, managementSecret: secret, rawPayload: oldPayload, rawIdempotencyKey: randomUUID(), now: earlyNow })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(createPublicReservation({ restaurantId, managementSecret: secret, rawPayload: { ...oldPayload, children: false }, rawIdempotencyKey: key, now: earlyNow })).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    await expect(createPublicReservation({ restaurantId, managementSecret: secret, rawPayload: oldPayload, rawIdempotencyKey: key, now: new Date(record.expiresAt.getTime() + 1) })).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(await prisma.reservation.count({ where: { restaurantId } })).toBe(1);
+    expect(await prisma.reservationIdempotencyKey.count({ where: { restaurantId, keyHash: hashIdempotencyKey(restaurantId, `public\u0000${key}`) } })).toBe(1);
+  });
+
+  it("preserves unknown legacy composition on unrelated management edits and requires declaration on size change", async () => {
+    const created = await serviceCreate();
+    const stored = await prisma.reservation.findFirstOrThrow({ where: { restaurantId } });
+    await prisma.reservation.update({ where: { id: stored.id }, data: { childrenCount: null, gameRoomPreference: null, preferences: JSON.stringify({ ...JSON.parse(stored.preferences!), children: true, roomCode: "sala-m7" }) } });
+    const rawToken = tokenFromPath(created.managementPath);
+    const tokenBefore = await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: stored.id } });
+    const unchanged = { localDate: standardDate, arrivalTime: "19:00", accessibility: false, notes: stored.notes, childrenCount: null, gameRoomPreference: null };
+    const updated = await updateManagedPublicReservation({ restaurantId, rawToken, rawPayload: updatePayload({ ...unchanged, notes: "Nuova nota sintetica" }), now: earlyNow });
+    expect(updated).toMatchObject({ childrenCount: null, gameRoomPreference: null, children: true, roomCode: "sala-m7" });
+    await expect(updateManagedPublicReservation({ restaurantId, rawToken, rawPayload: updatePayload({ ...unchanged, partySize: 3 }), now: earlyNow })).rejects.toMatchObject({ code: "VALIDATION" });
+    const declared = await updateManagedPublicReservation({ restaurantId, rawToken, rawPayload: updatePayload({ ...unchanged, partySize: 3, childrenCount: 1, gameRoomPreference: false }), now: earlyNow });
+    expect(declared).toMatchObject({ partySize: 3, childrenCount: 1, gameRoomPreference: false });
+    expect(await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: stored.id } })).toEqual(tokenBefore);
+  });
+
+  it("keeps Public no-op version/timestamp/audit unchanged and audits only real preference changes", async () => {
+    const created = await serviceCreate({ childrenCount: 1, gameRoomPreference: true });
+    const rawToken = tokenFromPath(created.managementPath);
+    const stored = await prisma.reservation.findFirstOrThrow({ where: { restaurantId } });
+    const same = updatePayload({ localDate: standardDate, arrivalTime: "19:00", accessibility: false, notes: stored.notes, childrenCount: 1, gameRoomPreference: true });
+    await updateManagedPublicReservation({ restaurantId, rawToken, rawPayload: same, now: earlyNow });
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: stored.id } })).toEqual(stored);
+    expect(await prisma.reservationAuditEvent.count({ where: { restaurantId } })).toBe(1);
+    await updateManagedPublicReservation({ restaurantId, rawToken, rawPayload: { ...same, gameRoomPreference: false }, now: earlyNow });
+    const audit = await prisma.reservationAuditEvent.findFirstOrThrow({ where: { restaurantId, action: "UPDATED" } });
+    expect(audit.previousState).toMatchObject({ childrenCount: 1, gameRoomPreference: true });
+    expect(audit.newState).toMatchObject({ childrenCount: 1, gameRoomPreference: false });
+    expect(JSON.stringify(audit)).not.toContain(stored.customerPhone);
+  });
   beforeAll(async () => {
     process.env.APP_ENV = "development";
     process.env.AUTH_RESTAURANT_ID = restaurantId;
@@ -618,7 +817,7 @@ describe.sequential("M7 public booking with real PostgreSQL", () => {
     expect(new Set([auditBefore[0]?.correlationId, ...outboxBefore.map((row) => row.originCorrelationId)])).toEqual(new Set([auditBefore[0]?.correlationId]));
 
     await withRejectedPublicNotificationInsert(async () => {
-      await expect(updateManagedPublicReservation({ restaurantId, rawToken, rawPayload: updatePayload(), now: earlyNow })).rejects.toThrow(
+      await expect(updateManagedPublicReservation({ restaurantId, rawToken, rawPayload: updatePayload({ childrenCount: 1, gameRoomPreference: true }), now: earlyNow })).rejects.toThrow(
         "synthetic M12 public notification failure",
       );
     });

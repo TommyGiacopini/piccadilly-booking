@@ -416,6 +416,8 @@ model Reservation {
   serviceType            ServiceType                 @map("service_type")
   arrivalTime            DateTime                    @map("arrival_time") @db.Time(0)
   partySize              Int                         @map("party_size")
+  childrenCount          Int?                        @map("children_count")
+  gameRoomPreference     Boolean?                    @map("game_room_preference")
   status                 ReservationStatus           @default(CONFIRMED)
   origin                 ReservationOrigin
   customerFirstName      String                      @map("customer_first_name") @db.VarChar(80)
@@ -423,8 +425,8 @@ model Reservation {
   customerPhone          String                      @map("customer_phone") @db.VarChar(40)
   customerEmail          String?                     @map("customer_email") @db.VarChar(254)
   notes                  String?                     @db.VarChar(1000)
-  preferences            String?                     @db.VarChar(1000)
-  allergies              String?                     @db.VarChar(1000)
+  preferences            String?                     @db.Text
+  allergies              String?                     @db.Text
   privacyPolicyVersion   String                      @map("privacy_policy_version") @db.VarChar(64)
   privacyConsentAt       DateTime                    @map("privacy_consent_at") @db.Timestamptz(3)
   privacyConsentMethod   PrivacyConsentMethod        @map("privacy_consent_method")

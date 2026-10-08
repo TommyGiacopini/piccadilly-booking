@@ -1,6 +1,8 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+import type { z } from "zod";
+import { compositionChangeIsDeclared } from "@/modules/reservations/domain/party-composition";
 
 import { calculateAvailability } from "@/modules/availability/domain/availability-engine";
 import type { AvailabilityReason } from "@/modules/availability/domain/types";
@@ -13,10 +15,10 @@ import {
 import {
   classifyIdempotencyRequest,
   hashPhoneReservationRequest,
+  hashLegacyPhoneReservationRequest,
   hashIdempotencyKey,
 } from "@/modules/reservations/domain/idempotency";
 import {
-  parsePublicPreferences,
   serializePublicAllergies,
   serializePublicPreferences,
 } from "@/modules/reservations/domain/public-validation";
@@ -27,6 +29,7 @@ import {
 import { reservationAuditSnapshot } from "@/modules/reservations/domain/reservation-audit-snapshot";
 import {
   phoneReservationSchema,
+  legacyPhoneReservationSchema,
   staffCancelReservationSchema,
   staffUpdateReservationSchema,
   type PhoneReservationInput,
@@ -66,7 +69,6 @@ import {
   updateReservationForStaff,
 } from "@/modules/reservations/infrastructure/staff-reservation-repository";
 import {
-  findAvailableRoomForService,
   materializeServiceInstance,
 } from "@/modules/rooms/infrastructure/service-instance-repository";
 import { clearReservationAssignmentForScheduleChange } from "@/modules/rooms/application/reservation-assignment-service";
@@ -104,11 +106,12 @@ function validationError(message: string): ReservationApplicationError {
 function parsePhoneInput(
   rawPayload: unknown,
   rawIdempotencyKey: string | null | undefined,
-): { command: PhoneReservationInput; idempotencyKey: string } {
+): { command: PhoneReservationInput | z.infer<typeof legacyPhoneReservationSchema>; idempotencyKey: string; legacyReplayOnly: boolean } {
   const payload = phoneReservationSchema.safeParse(rawPayload);
+  const legacy = payload.success ? null : legacyPhoneReservationSchema.safeParse(rawPayload);
   const key = idempotencyKeySchema.safeParse(rawIdempotencyKey);
 
-  if (!payload.success) {
+  if (!payload.success && !legacy?.success) {
     throw validationError(
       payload.error.issues[0]?.message ?? "I dati non sono validi.",
     );
@@ -121,7 +124,9 @@ function parsePhoneInput(
     );
   }
 
-  return { command: payload.data, idempotencyKey: key.data };
+  if (payload.success) return { command: payload.data, idempotencyKey: key.data, legacyReplayOnly: false };
+  if (legacy?.success) return { command: legacy.data, idempotencyKey: key.data, legacyReplayOnly: true };
+  throw validationError("I dati non sono validi.");
 }
 
 function parseUpdateInput(rawPayload: unknown): StaffUpdateReservationInput {
@@ -299,6 +304,8 @@ function isSameStaffReservationState(input: {
     input.current.serviceType === input.command.serviceType &&
     input.current.arrivalTime === input.command.arrivalTime &&
     input.current.partySize === input.command.partySize &&
+    input.current.childrenCount === input.command.childrenCount &&
+    input.current.gameRoomPreference === input.command.gameRoomPreference &&
     input.current.customerFirstName === input.command.customerFirstName &&
     input.current.customerLastName === input.command.customerLastName &&
     input.current.customerPhone === input.command.customerPhone &&
@@ -312,12 +319,14 @@ function isSameStaffReservationState(input: {
   );
 }
 
-function phoneCreateCommand(input: PhoneReservationInput): CreateReservationCommand {
+function phoneCreateCommand(input: PhoneReservationInput | z.infer<typeof legacyPhoneReservationSchema>): CreateReservationCommand {
   return {
     localDate: input.localDate,
     serviceType: input.serviceType,
     arrivalTime: input.arrivalTime,
     partySize: input.partySize,
+    childrenCount: "childrenCount" in input ? input.childrenCount : null,
+    gameRoomPreference: "gameRoomPreference" in input ? input.gameRoomPreference : null,
     origin: "PHONE",
     customerFirstName: input.customerFirstName,
     customerLastName: input.customerLastName,
@@ -352,7 +361,7 @@ export async function createPhoneReservation(input: {
     input.actor.restaurantId,
     `phone\u0000${parsed.idempotencyKey}`,
   );
-  const requestHash = hashPhoneReservationRequest(
+  const requestHash = (parsed.legacyReplayOnly ? hashLegacyPhoneReservationRequest : hashPhoneReservationRequest)(
     command,
     parsed.command.sendWhatsAppConfirmation,
   );
@@ -366,6 +375,7 @@ export async function createPhoneReservation(input: {
     });
 
     if (existing && existing.expiresAt.getTime() <= now.getTime()) {
+      if (parsed.legacyReplayOnly) throw validationError("Aggiorna il modulo prima di inviare la prenotazione.");
       await deleteIdempotencyKey(client, existing.id);
     } else if (existing) {
       if (
@@ -386,6 +396,7 @@ export async function createPhoneReservation(input: {
       };
     }
 
+    if (parsed.legacyReplayOnly) throw validationError("Aggiorna il modulo prima di inviare la prenotazione.");
     const idempotencyRecordId = await createIdempotencyKey(client, {
       restaurantId: input.actor.restaurantId,
       keyHash,
@@ -413,13 +424,6 @@ export async function createPhoneReservation(input: {
       localDate: command.localDate,
       serviceType: command.serviceType,
     });
-    const room = await findAvailableRoomForService(client, {
-      restaurantId: input.actor.restaurantId,
-      roomCode: parsed.command.roomCode,
-      localDate: command.localDate,
-      serviceType: command.serviceType,
-      now,
-    });
 
     if (!configuration) {
       throw new ReservationApplicationError(
@@ -428,9 +432,6 @@ export async function createPhoneReservation(input: {
       );
     }
 
-    if (!room) {
-      throw validationError("La sala preferita non è disponibile.");
-    }
 
     const overrideResult = assertStaffSlot({
       command: parsed.command,
@@ -559,6 +560,10 @@ export async function updateStaffReservation(input: {
       );
     }
 
+    if (!compositionChangeIsDeclared(current, command)) {
+      throw validationError("Dichiara la composizione prima di cambiare i coperti totali.");
+    }
+
     await acquireCapacityLocks(client, [
       {
         restaurantId: input.actor.restaurantId,
@@ -595,29 +600,12 @@ export async function updateStaffReservation(input: {
           excludeReservationId: current.id,
         })
       : [];
-    const currentRoomCode = parsePublicPreferences(current.preferences).roomCode;
-    const roomSelectionChanged =
-      current.localDate !== command.localDate ||
-      current.serviceType !== command.serviceType ||
-      currentRoomCode !== command.roomCode;
-    const room = roomSelectionChanged
-      ? await findAvailableRoomForService(client, {
-          restaurantId: input.actor.restaurantId,
-          roomCode: command.roomCode,
-          localDate: command.localDate,
-          serviceType: command.serviceType,
-          now,
-        })
-      : true;
 
     if (capacityChanged && !configuration) {
       throw new ReservationApplicationError(
         "CONFIGURATION_INVALID",
         "La configurazione del servizio non è disponibile.",
       );
-    }
-    if (!room) {
-      throw validationError("La sala preferita non è disponibile.");
     }
 
     let overrideResult: CapacityOverrideAuditResult | null = null;
@@ -631,8 +619,8 @@ export async function updateStaffReservation(input: {
       );
     }
 
-    const preferences = serializePublicPreferences(command);
-    const allergies = serializePublicAllergies(command);
+    const preferences = serializePublicPreferences(command, current.preferences);
+    const allergies = serializePublicAllergies(command, current.allergies);
     const effectiveCommand: StaffUpdateReservationInput = capacityChanged
       ? command
       : {

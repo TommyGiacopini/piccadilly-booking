@@ -208,7 +208,8 @@ function staffUpdatePayload(
     serviceType: "DINNER",
     arrivalTime: "19:00",
     partySize: 4,
-    roomCode: "sala-2",
+    childrenCount: null,
+    gameRoomPreference: null,
     customerFirstName: "Cliente",
     customerLastName: "Assegnazione Fittizia",
     customerPhone: "+39 000 000 1010",
@@ -216,7 +217,6 @@ function staffUpdatePayload(
     highChair: false,
     stroller: false,
     accessibility: false,
-    children: false,
     celiac: false,
     allergies: null,
     intolerances: null,
@@ -235,11 +235,11 @@ function publicUpdatePayload(overrides: Record<string, unknown> = {}) {
     serviceType: "DINNER",
     arrivalTime: "19:00",
     partySize: 4,
-    roomCode: "sala-2",
+    childrenCount: null,
+    gameRoomPreference: null,
     highChair: false,
     stroller: false,
     accessibility: false,
-    children: false,
     celiac: false,
     allergies: null,
     intolerances: null,
@@ -1380,8 +1380,8 @@ describe.sequential(
     );
 
     it.each([
-      { label: "numero persone", changed: { partySize: 12 } },
-      { label: "preferenza sala", changed: { roomCode: "sala-1" } },
+      { label: "numero persone", changed: { partySize: 12, childrenCount: 0, gameRoomPreference: null } },
+      { label: "composizione e preferenza giochi", changed: { childrenCount: 2, gameRoomPreference: true } },
       {
         label: "contatti e note",
         changed: {
@@ -1392,6 +1392,7 @@ describe.sequential(
       },
     ])("conserva l'assegnazione Staff per modifiche a $label", async ({ changed }) => {
       const reservation = await createReservation();
+      await prisma.reservation.update({ where: { id: reservation.id }, data: { arrivedAt: now } });
       const assigned = await putReservationAssignment({
         actor: staffActor,
         reservationId: reservation.id,
@@ -1417,6 +1418,7 @@ describe.sequential(
           where: { restaurantId, reservationId: reservation.id, action: "UNASSIGNED" },
         }),
       ).resolves.toBe(0);
+      await expect(prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).resolves.toMatchObject({ arrivedAt: now });
     });
 
     it("mantiene versione, timestamp, assegnazione e audit su no-op Staff", async () => {
@@ -1574,8 +1576,8 @@ describe.sequential(
     );
 
     it.each([
-      { label: "persone", changed: { partySize: 8 } },
-      { label: "preferenza", changed: { roomCode: "sala-1" } },
+      { label: "persone", changed: { partySize: 8, childrenCount: 0, gameRoomPreference: null } },
+      { label: "composizione e preferenza giochi", changed: { childrenCount: 2, gameRoomPreference: true } },
       {
         label: "richieste e note",
         changed: {

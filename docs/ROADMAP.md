@@ -854,7 +854,13 @@ Tutte le milestone precedenti.
 
 Il ristorante può gestire e riprodurre il sistema senza account personali dello sviluppatore.
 
-## 4. Funzioni rinviate oltre la prima versione
+## 4. Replan Design/UX — Owner Change v2
+
+T01/T02/T03 sono concluse. Foundation A implementa composizione totale/bambini e richiesta Sala con i Giochi con migration #15; rimuove la scelta cliente della sala fisica, preserva legacy unknown e replay idempotency. Il DB persistente resta schema14 durante implementazione e QG.
+
+T04 revised riprenderà solo dopo chiusura Foundation A e nuova autorizzazione. Il precedente T04 parziale resta non certificato nel worktree originale. T05 room policy e tutte le tranche successive non sono anticipate. M13 FASE C/Render restano sospesi, senza risorse o spesa.
+
+## 5. Funzioni rinviate oltre la prima versione
 
 - assegnazione automatica e combinazione tavoli;
 - gruppo WhatsApp, salvo disponibilità di API ufficiali;

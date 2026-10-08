@@ -39,7 +39,7 @@ const previousMigrationHashes: Record<string, string> = {
 
 describe("M10-A additive migration", () => {
   it("preserves the M10 migration and all eleven predecessors after additive M12", () => {
-    expect(migrationNames).toHaveLength(14);
+    expect(migrationNames).toHaveLength(15);
     expect(assignmentMigrations).toHaveLength(1);
 
     for (const [name, expectedHash] of Object.entries(

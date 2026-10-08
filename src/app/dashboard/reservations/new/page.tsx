@@ -1,8 +1,6 @@
 import { ReservationCreateForm } from "@/app/dashboard/reservations/new/reservation-create-form";
 import { getStaffReservationFormContext } from "@/modules/dashboard/application/dashboard-query";
-import { listAvailableRoomsForService } from "@/modules/rooms/infrastructure/service-instance-repository";
 import { requireAuthenticatedUser } from "@/server/auth/authorization";
-import { prisma } from "@/server/db/prisma";
 import { resolveReservationConfig } from "@/shared/config/reservation-config";
 
 export const dynamic = "force-dynamic";
@@ -24,12 +22,6 @@ export default async function NewReservationPage({
     rawDate: typeof query.date === "string" ? query.date : undefined,
     now,
   });
-  const initialRooms = await listAvailableRoomsForService(prisma, {
-    restaurantId: user.restaurantId,
-    localDate: context.localDate,
-    serviceType: "DINNER",
-    now,
-  });
 
   return (
     <main className="min-h-screen px-5 py-10 sm:px-8">
@@ -49,7 +41,6 @@ export default async function NewReservationPage({
 
         <ReservationCreateForm
           defaultDate={context.localDate}
-          initialRooms={initialRooms}
           privacyPolicyVersion={config.privacyPolicyVersion}
         />
       </div>
