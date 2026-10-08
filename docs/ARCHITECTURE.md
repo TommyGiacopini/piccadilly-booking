@@ -1,5 +1,17 @@
 # Piccadilly Booking — Architettura
 
+## Foundation A — composizione e preferenza giochi
+
+Owner Change v2 aggiunge a `Reservation` `childrenCount: number|null` e `gameRoomPreference: boolean|null`. Migration #15 additiva, senza backfill/default/indice: `null/null` sconosciuto, `0/null` adulti, `1..partySize` con booleano esplicito per bambini. Constraint SQL gestiscono i NULL esplicitamente. Le migration 1–14 restano immutate.
+
+I moduli prenotazioni esistenti gestiscono schema strict, DTO espliciti, mapping repository, transazioni, audit atomico, no-op e idempotency; non nasce un dominio parallelo. I nuovi campi sono authoritative. Il JSON richieste resta compatibile: `children` è derivato/preservato server-side e `roomCode` storico è conservato ma non accettato come scelta nelle nuove submission. I parser legacy servono esclusivamente a verificare replay di hash vecchi preesistenti, senza nuove prenotazioni o riscritture di hash.
+
+Public/PHONE non risolvono più una sala cliente: disponibilità servizio/slot/capacità totale e cutoff rimangono autorevoli. Una richiesta giochi non dipende dalla disponibilità fisica di Sala 3. Assignment finale, lock di assignment, arrival T03, notifiche ed export non sono ridisegnati. Modifiche di composizione non attivano il clear assignment; reschedule mantiene il lifecycle corrente.
+
+Le UI usano un fieldset nativo condiviso, conteggio validato e Sì/No esplicito. Nessun valore giochi nascosto sopravvive al passaggio ad adulti; tornando ai bambini occorre una scelta nuova. La Staff Agenda mostra conteggio/composizione sconosciuta e badge richiesta giochi senza cambiare ordinamenti o formule.
+
+Durante implementazione/QG, migration #15 viene applicata soltanto ai database temporanei posseduti dai test; il persistent development DB resta a schema14 read-only. Foundation A usa un secondo worktree; il T04 parziale originale resta intatto. Nessuna esecuzione Render è inclusa.
+
 **Stato:** approvata per lo sviluppo iniziale
 **Data:** 31 luglio 2026
 **Ambito:** architettura logica e tecnica; nessuna implementazione

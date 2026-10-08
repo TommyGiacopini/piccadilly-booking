@@ -2,12 +2,9 @@ import { notFound } from "next/navigation";
 import { z } from "zod";
 
 import { ReservationEditForm } from "@/app/dashboard/reservations/[id]/edit/reservation-edit-form";
-import { getStaffReservationFormContext } from "@/modules/dashboard/application/dashboard-query";
 import { ReservationApplicationError } from "@/modules/reservations/application/reservation-errors";
 import { getStaffReservation } from "@/modules/reservations/application/staff-reservation-service";
-import { readEffectiveServiceRooms } from "@/modules/rooms/infrastructure/service-instance-repository";
 import { requireAuthenticatedUser } from "@/server/auth/authorization";
-import { prisma } from "@/server/db/prisma";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -50,21 +47,6 @@ export default async function EditReservationPage({
 
   if (reservation.status === "CANCELLED") notFound();
 
-  const now = new Date();
-  const context = await getStaffReservationFormContext({
-    restaurantId: user.restaurantId,
-    rawDate: reservation.localDate,
-    now,
-  });
-  const roomState = await readEffectiveServiceRooms(prisma, {
-    restaurantId: user.restaurantId,
-    localDate: context.localDate,
-    serviceType: reservation.serviceType,
-    now,
-  });
-  const currentRoom = roomState.rooms.find(
-    (room) => room.code === reservation.roomCode,
-  );
 
   return (
     <main className="min-h-screen px-5 py-10 sm:px-8">
@@ -83,10 +65,6 @@ export default async function EditReservationPage({
 
         <ReservationEditForm
           reservation={reservation}
-          currentRoomName={currentRoom?.name ?? null}
-          rooms={roomState.rooms
-            .filter((room) => room.isAvailable)
-            .map(({ code, name }) => ({ code, name }))}
         />
       </div>
     </main>

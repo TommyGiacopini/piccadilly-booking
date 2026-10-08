@@ -9,6 +9,8 @@ export interface PublicReservationDto {
   serviceType: "LUNCH" | "DINNER";
   arrivalTime: string;
   partySize: number;
+  childrenCount: number | null;
+  gameRoomPreference: boolean | null;
   status: "CONFIRMED" | "CANCELLED";
   customer: {
     firstName: string;
@@ -46,6 +48,8 @@ export function toPublicReservationDto(input: {
     serviceType: input.reservation.serviceType,
     arrivalTime: input.reservation.arrivalTime,
     partySize: input.reservation.partySize,
+    childrenCount: input.reservation.childrenCount,
+    gameRoomPreference: input.reservation.gameRoomPreference,
     status: input.reservation.status,
     customer: {
       firstName: input.reservation.customerFirstName,

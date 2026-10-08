@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { partyCompositionFields, validatePartyComposition } from "@/modules/reservations/domain/party-composition";
 
 import {
   isLocalDate,
@@ -130,7 +131,8 @@ function validateOverride(
   }
 }
 
-export const phoneReservationSchema = z
+// Kept byte-equivalent at parsing/serialization level for pre-existing replay hashes.
+export const legacyPhoneReservationSchema = z
   .object({
     ...operationalSelection,
     ...customer,
@@ -143,6 +145,22 @@ export const phoneReservationSchema = z
   .strict()
   .superRefine(validateOverride);
 
+const foundationSelection = z.object(operationalSelection)
+  .omit({ roomCode: true, children: true })
+  .extend(partyCompositionFields)
+  .shape;
+
+export const phoneReservationSchema = z.object({
+  ...foundationSelection,
+  ...customer,
+  ...override,
+  verbalConsentConfirmed: z.literal(true, { error: "Conferma l'acquisizione del consenso verbale." }),
+  sendWhatsAppConfirmation: z.boolean(),
+})
+  .strict()
+  .superRefine(validateOverride)
+  .superRefine(validatePartyComposition);
+
 export const staffUpdateReservationSchema = z
   .object({
     ...operationalSelection,
@@ -150,8 +168,11 @@ export const staffUpdateReservationSchema = z
     ...override,
     version: z.number().int().positive(),
   })
+  .omit({ roomCode: true, children: true })
+  .extend(partyCompositionFields)
   .strict()
-  .superRefine(validateOverride);
+  .superRefine(validateOverride)
+  .superRefine(validatePartyComposition);
 
 export const staffCancelReservationSchema = z
   .object({ version: z.number().int().positive() })

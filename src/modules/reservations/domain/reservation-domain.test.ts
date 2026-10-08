@@ -55,6 +55,8 @@ function storedReservation(
     arrivalTime: "19:15",
     partySize: 4,
     status: "CONFIRMED",
+    childrenCount: null,
+    gameRoomPreference: null,
     origin: "PHONE",
     customerFirstName: "Mario Demo",
     customerLastName: "Rossi Test",
@@ -83,6 +85,18 @@ function storedReservation(
 }
 
 describe("M6 reservation domain", () => {
+  it.each([
+    { raw: "H".repeat(1000), structured: null, history: "H".repeat(1000) },
+    { raw: "H".repeat(200), structured: null, history: "H".repeat(200) },
+    { raw: JSON.stringify({ celiac: false, allergies: null, intolerances: null, legacyText: "Storico sintetico" }), structured: null, history: "Storico sintetico" },
+    { raw: JSON.stringify({ celiac: false, allergies: "Arachidi", intolerances: null }), structured: "Arachidi", history: null },
+    { raw: JSON.stringify({ celiac: false, allergies: "Arachidi", intolerances: null, legacyText: "Storico sintetico" }), structured: "Arachidi", history: "Storico sintetico" },
+  ])("R4 separates editable structured allergy from Staff-only history", ({ raw, structured, history }) => {
+    const dto = toStaffReservationDto(storedReservation({ allergies: raw }));
+    expect(dto.allergies).toBe(structured);
+    expect(dto.legacyAllergy).toBe(history);
+  });
+
   it("validates and prudently normalizes the required customer fields", () => {
     const result = createReservationSchema.parse(validPhonePayload());
 

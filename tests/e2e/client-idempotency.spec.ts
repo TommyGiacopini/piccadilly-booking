@@ -52,7 +52,7 @@ async function fillPublicReservation(page: Page): Promise<void> {
     page.getByLabel("Orario disponibile").locator("option[value='19:00']"),
   ).toHaveCount(1);
   await page.getByLabel("Orario disponibile").selectOption("19:00");
-  await page.getByLabel("Sala preferita").selectOption({ index: 1 });
+  await page.getByRole("radio", { name: "No, siamo tutti adulti", exact: true }).check();
   await page.getByLabel("Nome", { exact: true }).fill("E2E-UAT-Client");
   await page.getByLabel("Cognome", { exact: true }).fill("Public");
   await page.getByLabel("Telefono").fill("+39 000 000 0801");
@@ -72,7 +72,7 @@ async function fillPhoneReservation(page: Page): Promise<void> {
   await page.goto("/dashboard/reservations/new?date=2099-11-18");
   await page.getByLabel("Data").fill("2099-11-18");
   await page.getByLabel("Servizio").selectOption("DINNER");
-  await page.getByLabel("Persone").fill("2");
+  await page.getByLabel("In quanti siete? (coperti totali)").fill("2");
   await expect(
     page.getByLabel("Slot configurato").locator("option[value='19:00']"),
   ).toHaveCount(1);
@@ -80,9 +80,7 @@ async function fillPhoneReservation(page: Page): Promise<void> {
   await page.getByLabel("Nome", { exact: true }).fill("E2E-UAT-Client");
   await page.getByLabel("Cognome", { exact: true }).fill("Phone");
   await page.getByLabel("Telefono").fill("+39 000 000 0802");
-  await page
-    .getByLabel("Sala preferita (non garantita)")
-    .selectOption({ index: 1 });
+  await page.getByRole("radio", { name: "Non specificato", exact: true }).check();
   await page.getByLabel(/Confermo di avere acquisito verbalmente/).check();
 }
 

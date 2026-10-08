@@ -10,6 +10,8 @@ export interface StaffReservationDto {
   serviceType: "LUNCH" | "DINNER";
   arrivalTime: string;
   partySize: number;
+  childrenCount: number | null;
+  gameRoomPreference: boolean | null;
   status: "CONFIRMED" | "CANCELLED";
   origin: "PUBLIC" | "PHONE" | "STAFF";
   version: number;
@@ -29,6 +31,7 @@ export interface StaffReservationDto {
   children: boolean;
   celiac: boolean;
   allergies: string | null;
+  legacyAllergy: string | null;
   intolerances: string | null;
   celebration: string | null;
   animals: boolean;
@@ -51,6 +54,8 @@ export function toStaffReservationDto(
     serviceType: reservation.serviceType,
     arrivalTime: reservation.arrivalTime,
     partySize: reservation.partySize,
+    childrenCount: reservation.childrenCount,
+    gameRoomPreference: reservation.gameRoomPreference,
     status: reservation.status,
     origin: reservation.origin,
     version: reservation.version,
@@ -69,7 +74,8 @@ export function toStaffReservationDto(
     accessibility: preferences.accessibility,
     children: preferences.children,
     celiac: allergyData.celiac,
-    allergies: allergyData.allergies ?? allergyData.legacyText,
+    allergies: allergyData.allergies,
+    legacyAllergy: allergyData.legacyText,
     intolerances: allergyData.intolerances,
     celebration: preferences.celebration,
     animals: preferences.animals,

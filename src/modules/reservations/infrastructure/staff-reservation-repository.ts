@@ -71,6 +71,8 @@ export async function updateReservationForStaff(
       serviceType: input.command.serviceType,
       arrivalTime: operationalTimeToDatabase(input.command.arrivalTime),
       partySize: input.command.partySize,
+      childrenCount: input.command.childrenCount,
+      gameRoomPreference: input.command.gameRoomPreference,
       customerFirstName: input.command.customerFirstName,
       customerLastName: input.command.customerLastName,
       customerPhone: input.command.customerPhone,

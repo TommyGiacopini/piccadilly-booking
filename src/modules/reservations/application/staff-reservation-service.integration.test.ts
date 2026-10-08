@@ -26,6 +26,7 @@ import {
 import {
   cancelStaffReservation,
   createPhoneReservation,
+  getStaffReservation,
   updateStaffReservation,
 } from "@/modules/reservations/application/staff-reservation-service";
 import { managementViewExpiry } from "@/modules/reservations/domain/management-time";
@@ -34,6 +35,9 @@ import {
   parsePublicPreferences,
 } from "@/modules/reservations/domain/public-validation";
 import { prisma } from "@/server/db/prisma";
+import { hashLegacyPhoneReservationRequest } from "@/modules/reservations/domain/idempotency";
+import { legacyPhoneReservationSchema } from "@/modules/reservations/domain/staff-validation";
+import { serializePublicPreferences, serializePublicAllergies } from "@/modules/reservations/domain/public-validation";
 
 const restaurantId = randomUUID();
 const otherRestaurantId = randomUUID();
@@ -103,7 +107,8 @@ function phonePayload(overrides: Record<string, unknown> = {}) {
     serviceType: "DINNER",
     arrivalTime: "19:00",
     partySize: 2,
-    roomCode: "sala-m8",
+    childrenCount: 1,
+    gameRoomPreference: false,
     customerFirstName: "Cliente",
     customerLastName: "Telefonico Fittizio",
     customerPhone: "+39 000 000 0800",
@@ -111,7 +116,6 @@ function phonePayload(overrides: Record<string, unknown> = {}) {
     highChair: true,
     stroller: false,
     accessibility: false,
-    children: true,
     celiac: false,
     allergies: "Dato fittizio",
     intolerances: null,
@@ -133,11 +137,7 @@ function createPhone(
 ) {
   return createPhoneReservation({
     actor,
-    rawPayload: phonePayload(
-      actor.restaurantId === otherRestaurantId
-        ? { roomCode: "sala-m8-other", ...overrides }
-        : overrides,
-    ),
+    rawPayload: phonePayload(overrides),
     rawIdempotencyKey: key,
     now,
     config,
@@ -182,7 +182,8 @@ function updatePayload(
     serviceType: reservation.serviceType,
     arrivalTime: reservation.arrivalTime,
     partySize: reservation.partySize,
-    roomCode: reservation.roomCode,
+    childrenCount: reservation.childrenCount,
+    gameRoomPreference: reservation.gameRoomPreference,
     customerFirstName: reservation.customer.firstName,
     customerLastName: reservation.customer.lastName,
     customerPhone: reservation.customer.phone,
@@ -190,7 +191,6 @@ function updatePayload(
     highChair: reservation.highChair,
     stroller: reservation.stroller,
     accessibility: reservation.accessibility,
-    children: reservation.children,
     celiac: reservation.celiac,
     allergies: reservation.allergies,
     intolerances: reservation.intolerances,
@@ -209,7 +209,8 @@ function publicPayload(overrides: Record<string, unknown> = {}) {
     serviceType: "DINNER",
     arrivalTime: "19:15",
     partySize: 2,
-    roomCode: "sala-m8",
+    childrenCount: 0,
+    gameRoomPreference: null,
     customerFirstName: "Cliente",
     customerLastName: "Pubblico Fittizio",
     customerPhone: "+39 000 000 0801",
@@ -217,7 +218,6 @@ function publicPayload(overrides: Record<string, unknown> = {}) {
     highChair: false,
     stroller: false,
     accessibility: false,
-    children: false,
     celiac: false,
     allergies: null,
     intolerances: null,
@@ -232,6 +232,243 @@ function publicPayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => {
+  it.each([1000, 200])("R4 fresh Staff DTO preserves raw legacy allergy %i through no-op, note-only and composition", async (length) => {
+    const created = await createPhone(staffActor, { childrenCount: null, gameRoomPreference: null, allergies: null });
+    const id = created.reservation.id;
+    const legacy = "H".repeat(length);
+    await prisma.reservation.update({ where: { id }, data: { allergies: legacy, arrivedAt: now } });
+    const table = await prisma.diningTable.create({ data: { roomId, name: "R4 synthetic", minimumSeats: 1, maximumSeats: 8 } });
+    const assignment = await prisma.reservationAssignment.create({ data: { restaurantId, reservationId: id, roomId, assignedByUserId: staffId, updatedByUserId: staffId } });
+    await prisma.reservationAssignmentTable.create({ data: { restaurantId, assignmentId: assignment.id, roomId, diningTableId: table.id } });
+    try {
+      const before = await prisma.reservation.findUniqueOrThrow({ where: { id } });
+      const assignmentBefore = await prisma.reservationAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: { tables: true } });
+      const auditCount = await prisma.reservationAuditEvent.count({ where: { reservationId: id } });
+      const read = () => getStaffReservation({ actor: staffActor, reservationId: id });
+      const fresh = await read();
+      expect(fresh).toMatchObject({ allergies: null, intolerances: null, legacyAllergy: legacy });
+      const payload = updatePayload(fresh);
+      expect(payload.allergies).toBeNull();
+      expect(payload).not.toHaveProperty("legacyAllergy");
+      expect(JSON.stringify(payload)).not.toContain(legacy);
+      const update = async (overrides: Record<string, unknown> = {}) => updateStaffReservation({ actor: staffActor, reservationId: id, rawPayload: updatePayload(await read(), overrides), now: new Date(now.getTime() + 10_000) });
+      expect((await update()).changed).toBe(false);
+      expect(await prisma.reservation.findUniqueOrThrow({ where: { id } })).toEqual(before);
+      expect(await prisma.reservationAuditEvent.count({ where: { reservationId: id } })).toBe(auditCount);
+      await expect(update({ legacyAllergy: legacy })).rejects.toMatchObject({ code: "VALIDATION" });
+      expect((await update({ notes: "R4 note-only synthetic update" })).changed).toBe(true);
+      expect(await prisma.reservation.findUniqueOrThrow({ where: { id } })).toMatchObject({ notes: "R4 note-only synthetic update", version: before.version + 1, allergies: legacy, arrivedAt: now });
+      expect((await update({ childrenCount: 1, gameRoomPreference: true })).changed).toBe(true);
+      const after = await prisma.reservation.findUniqueOrThrow({ where: { id } });
+      expect(after).toMatchObject({ childrenCount: 1, gameRoomPreference: true, version: before.version + 2, allergies: legacy, arrivedAt: now });
+      expect(await read()).toMatchObject({ allergies: null, legacyAllergy: legacy });
+      expect(await prisma.reservationAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: { tables: true } })).toEqual(assignmentBefore);
+      expect((await update()).changed).toBe(false);
+      expect(await prisma.reservation.findUniqueOrThrow({ where: { id } })).toEqual(after);
+      const audits = await prisma.reservationAuditEvent.findMany({ where: { reservationId: id, action: "UPDATED" } });
+      expect(audits).toHaveLength(2);
+      expect(JSON.stringify(audits)).not.toContain(legacy);
+      expect(await prisma.reservationAuditEvent.count({ where: { reservationId: id } })).toBe(auditCount + 2);
+    } finally {
+      await prisma.reservationAssignmentTable.deleteMany({ where: { assignmentId: assignment.id } });
+      await prisma.reservationAssignment.delete({ where: { id: assignment.id } });
+      await prisma.diningTable.delete({ where: { id: table.id } });
+    }
+  });
+
+  it.each([null, "Arachidi"])("R4 fresh Staff DTO preserves JSON allergy history separately from structured %s", async (structured) => {
+    const created = await createPhone(staffActor, { allergies: null });
+    const id = created.reservation.id;
+    const history = "Segnalazione storica sintetica";
+    const raw = JSON.stringify({ celiac: false, allergies: structured, intolerances: null, legacyText: history });
+    await prisma.reservation.update({ where: { id }, data: { allergies: raw } });
+    const read = () => getStaffReservation({ actor: staffActor, reservationId: id });
+    const fresh = await read();
+    expect(fresh).toMatchObject({ allergies: structured, legacyAllergy: history });
+    const before = await prisma.reservation.findUniqueOrThrow({ where: { id } });
+    const count = await prisma.reservationAuditEvent.count({ where: { reservationId: id } });
+    expect((await updateStaffReservation({ actor: staffActor, reservationId: id, rawPayload: updatePayload(fresh), now })).changed).toBe(false);
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id } })).toEqual(before);
+    expect(await prisma.reservationAuditEvent.count({ where: { reservationId: id } })).toBe(count);
+    const changed = await updateStaffReservation({ actor: staffActor, reservationId: id, rawPayload: updatePayload(await read(), { allergies: "Nuova allergia sintetica" }), now });
+    expect(changed.changed).toBe(true);
+    const after = await prisma.reservation.findUniqueOrThrow({ where: { id } });
+    expect(after.version).toBe(before.version + 1);
+    expect(parsePublicAllergies(after.allergies)).toMatchObject({ allergies: "Nuova allergia sintetica" });
+    expect(parsePublicAllergies(after.allergies).legacyText).toBe(history);
+    expect(await read()).toMatchObject({ allergies: "Nuova allergia sintetica", legacyAllergy: history });
+    expect(await prisma.reservationAuditEvent.count({ where: { reservationId: id, action: "UPDATED" } })).toBe(1);
+  });
+
+  it.each(['"\\\nX'.repeat(250), "P".repeat(1000)])("R3 preserves exact 1000-character legacy envelopes through Staff no-op, note-only and composition", async (legacy) => {
+    expect(legacy).toHaveLength(1000);
+    const created = await createPhone(staffActor, { childrenCount: null, gameRoomPreference: null, highChair: false, allergies: null, sendWhatsAppConfirmation: false });
+    const id = created.reservation.id;
+    await prisma.reservation.update({ where: { id }, data: { preferences: legacy, allergies: legacy, arrivedAt: now } });
+    const table = await prisma.diningTable.create({ data: { roomId, name: "Storage R3", minimumSeats: 1, maximumSeats: 8 } });
+    const assignment = await prisma.reservationAssignment.create({ data: { restaurantId, reservationId: id, roomId, assignedByUserId: staffId, updatedByUserId: staffId } });
+    await prisma.reservationAssignmentTable.create({ data: { restaurantId, assignmentId: assignment.id, roomId, diningTableId: table.id } });
+    try {
+      const before = await prisma.reservation.findUniqueOrThrow({ where: { id } });
+      const assignmentBefore = await prisma.reservationAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: { tables: true } });
+      const auditsBefore = await prisma.reservationAuditEvent.count({ where: { reservationId: id } });
+      const update = (reservation: typeof created.reservation, overrides: Record<string, unknown> = {}) => updateStaffReservation({ actor: staffActor, reservationId: id, rawPayload: updatePayload(reservation, overrides), now });
+      expect((await update(created.reservation)).changed).toBe(false);
+      expect(await prisma.reservation.findUniqueOrThrow({ where: { id } })).toEqual(before);
+      const noteOnly = await update(created.reservation, { notes: "Storage boundary synthetic note" });
+      const afterNote = await prisma.reservation.findUniqueOrThrow({ where: { id } });
+      expect(afterNote.preferences).toBe(legacy);
+      expect(afterNote.allergies).toBe(legacy);
+      const changed = await update(noteOnly.reservation, { childrenCount: 1, gameRoomPreference: true, allergies: '"'.repeat(300), intolerances: "\\".repeat(300) });
+      const stored = await prisma.reservation.findUniqueOrThrow({ where: { id } });
+      expect(stored).toMatchObject({ childrenCount: 1, gameRoomPreference: true, version: afterNote.version + 1, arrivedAt: before.arrivedAt });
+      expect(parsePublicPreferences(stored.preferences).legacyText).toBe(legacy);
+      expect(parsePublicAllergies(stored.allergies)).toMatchObject({ allergies: '"'.repeat(300), intolerances: "\\".repeat(300) });
+      expect(parsePublicAllergies(stored.allergies).legacyText).toBe(legacy);
+      expect(stored.preferences!.length).toBeGreaterThan(1000);
+      expect(stored.allergies!.length).toBeGreaterThan(1249);
+      expect(await prisma.reservationAssignment.findUniqueOrThrow({ where: { id: assignment.id }, include: { tables: true } })).toEqual(assignmentBefore);
+      expect(await prisma.reservationAuditEvent.count({ where: { reservationId: id, action: "UPDATED" } })).toBe(2);
+      expect((await update(changed.reservation)).changed).toBe(false);
+      expect(await prisma.reservation.findUniqueOrThrow({ where: { id } })).toEqual(stored);
+      expect(await prisma.reservationAuditEvent.count({ where: { reservationId: id } })).toBe(auditsBefore + 2);
+      expect(await prisma.notificationOutbox.count({ where: { restaurantId, reservationId: id, eventType: "RESERVATION_CONFIRMED" } })).toBe(0);
+      const audit = await prisma.reservationAuditEvent.findFirstOrThrow({ where: { reservationId: id, action: "UPDATED" } });
+      expect(JSON.stringify(audit)).not.toContain(legacy);
+    } finally {
+      await prisma.reservationAssignmentTable.deleteMany({ where: { assignmentId: assignment.id } });
+      await prisma.reservationAssignment.delete({ where: { id: assignment.id } });
+      await prisma.diningTable.delete({ where: { id: table.id } });
+    }
+  });
+
+  it.each([
+    { allergies: '"'.repeat(300), intolerances: "\\".repeat(300) },
+    { allergies: "A\n".repeat(149) + "AA", intolerances: "I\t".repeat(149) + "II" },
+  ])("R3 PHONE persists bounded escaping and preserves idempotency", async (fields) => {
+    const key = randomUUID();
+    const first = await createPhone(staffActor, { ...fields, sendWhatsAppConfirmation: false }, key);
+    const row = await prisma.reservation.findUniqueOrThrow({ where: { id: first.reservation.id } });
+    expect(parsePublicAllergies(row.allergies)).toMatchObject(fields);
+    expect(JSON.parse(row.allergies!)).not.toHaveProperty("legacyText");
+    expect((await createPhone(staffActor, { ...fields, sendWhatsAppConfirmation: false }, key)).replayed).toBe(true);
+    await expect(createPhone(staffActor, { ...fields, allergies: "changed", sendWhatsAppConfirmation: false }, key)).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    const updated = await updateStaffReservation({ actor: staffActor, reservationId: row.id, rawPayload: updatePayload(first.reservation, { customerFirstName: "Storage Updated" }), now });
+    expect(updated.changed).toBe(true);
+    expect((await prisma.reservation.findUniqueOrThrow({ where: { id: row.id } })).allergies).toBe(row.allergies);
+    expect(await prisma.notificationOutbox.count({ where: { reservationId: row.id } })).toBe(3);
+  });
+
+  it.each(["plain", "structured"] as const)("F-01 preserves %s legacy text through Staff edit, composition change and no-op", async (format) => {
+    const created = await createPhone(staffActor, { childrenCount: null, gameRoomPreference: null, highChair: false, allergies: null });
+    const text = "Richiesta storica sintetica Staff — città\n".repeat(10);
+    const initial = await prisma.reservation.findUniqueOrThrow({ where: { id: created.reservation.id } });
+    const original = format === "plain" ? text.trim() : JSON.stringify({ ...JSON.parse(initial.preferences!), legacyText: text }, null, 2);
+    await prisma.reservation.update({ where: { id: created.reservation.id }, data: { preferences: original } });
+    const before = await prisma.reservation.findUniqueOrThrow({ where: { id: created.reservation.id } });
+    const auditCount = await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } });
+    const update = (reservation: typeof created.reservation, overrides: Record<string, unknown> = {}) => updateStaffReservation({ actor: staffActor, reservationId: before.id, rawPayload: updatePayload(reservation, overrides), now: new Date(now.getTime() + 10_000) });
+    expect((await update(created.reservation)).changed).toBe(false);
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } })).toEqual(before);
+    expect(await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } })).toBe(auditCount);
+    await expect(update(created.reservation, { legacyText: "Client replacement" })).rejects.toMatchObject({ code: "VALIDATION" });
+    const edited = await update(created.reservation, { customerFirstName: "Cliente Sintetico Aggiornato" });
+    expect(edited.changed).toBe(true);
+    expect(edited.reservation.legacyPreference).toBe(parsePublicPreferences(original).legacyText);
+    expect((await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } })).preferences).toBe(original);
+    const composed = await update(edited.reservation, { childrenCount: 1, gameRoomPreference: true });
+    const stored = await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } });
+    expect(parsePublicPreferences(stored.preferences).legacyText).toBe(parsePublicPreferences(original).legacyText);
+    expect(parsePublicPreferences(stored.preferences).children).toBe(true);
+    expect(stored.version).toBe(before.version + 2);
+    const audits = await prisma.reservationAuditEvent.findMany({ where: { reservationId: before.id, action: "UPDATED" } });
+    expect(audits).toHaveLength(2);
+    for (const audit of audits) {
+      expect(audit.newState).toMatchObject({ requests: { legacyPreferencePresent: true } });
+      expect(JSON.stringify(audit)).not.toContain("Richiesta storica sintetica");
+    }
+    expect((await update(composed.reservation)).changed).toBe(false);
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } })).toEqual(stored);
+    expect(await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } })).toBe(auditCount + 2);
+  });
+
+  it("F-01 rolls back legacy text, structured state, version and timestamps when Staff update audit fails", async () => {
+    const created = await createPhone(staffActor, { childrenCount: null, gameRoomPreference: null });
+    await prisma.reservation.update({ where: { id: created.reservation.id }, data: { preferences: '"\\\nX'.repeat(250), allergies: "H".repeat(1000), arrivedAt: now } });
+    const before = await prisma.reservation.findUniqueOrThrow({ where: { id: created.reservation.id } });
+    const audits = await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } });
+    await prisma.$executeRawUnsafe(`CREATE FUNCTION foundation_f01_reject_staff_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.restaurant_id='${restaurantId}'::uuid AND NEW.action='UPDATED' THEN RAISE EXCEPTION 'synthetic F01 staff audit failure'; END IF; RETURN NEW; END; $$`);
+    await prisma.$executeRawUnsafe("CREATE TRIGGER foundation_f01_reject_staff_audit BEFORE INSERT ON reservation_audit_events FOR EACH ROW EXECUTE FUNCTION foundation_f01_reject_staff_audit()");
+    try {
+      await expect(updateStaffReservation({ actor: staffActor, reservationId: before.id, rawPayload: updatePayload(created.reservation, { childrenCount: 1, gameRoomPreference: true, allergies: '"'.repeat(300), intolerances: "\\".repeat(300) }), now })).rejects.toThrow("synthetic F01 staff audit failure");
+    } finally {
+      await prisma.$executeRawUnsafe("DROP TRIGGER foundation_f01_reject_staff_audit ON reservation_audit_events");
+      await prisma.$executeRawUnsafe("DROP FUNCTION foundation_f01_reject_staff_audit()");
+    }
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } })).toEqual(before);
+    expect(await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } })).toBe(audits);
+  });
+
+  it.each([
+    { childrenCount: null, gameRoomPreference: null },
+    { childrenCount: 0, gameRoomPreference: null },
+    { childrenCount: 1, gameRoomPreference: true },
+    { childrenCount: 1, gameRoomPreference: false },
+  ])("persists PHONE composition $childrenCount/$gameRoomPreference and minimized audit", async (composition) => {
+    const result = await createPhone(staffActor, composition);
+    const stored = await prisma.reservation.findUniqueOrThrow({ where: { id: result.reservation.id } });
+    expect(stored).toMatchObject(composition);
+    expect(result.reservation).toMatchObject(composition);
+    expect(result.reservation.roomCode).toBe("");
+    const audit = await prisma.reservationAuditEvent.findFirstOrThrow({ where: { reservationId: stored.id, action: "CREATED" } });
+    expect(audit.newState).toMatchObject(composition);
+    expect(JSON.stringify(audit.newState)).not.toContain(stored.customerPhone);
+  });
+
+  it("hashes both new PHONE fields and accepts only a matching pre-existing legacy replay", async () => {
+    const key = randomUUID();
+    const created = await createPhone(staffActor, { childrenCount: 1, gameRoomPreference: true }, key);
+    expect((await createPhone(staffActor, { childrenCount: 1, gameRoomPreference: true }, key)).replayed).toBe(true);
+    for (const change of [{ childrenCount: 2, gameRoomPreference: true }, { childrenCount: 1, gameRoomPreference: false }]) {
+      await expect(createPhone(staffActor, change, key)).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    }
+    const base = Object.fromEntries(Object.entries(phonePayload()).filter(([field]) => !["childrenCount", "gameRoomPreference"].includes(field)));
+    const old = legacyPhoneReservationSchema.parse({ ...base, roomCode: "sala-m8", children: true });
+    const hash = hashLegacyPhoneReservationRequest({
+      localDate: old.localDate, serviceType: old.serviceType, arrivalTime: old.arrivalTime, partySize: old.partySize,
+      childrenCount: null, gameRoomPreference: null, origin: "PHONE", customerFirstName: old.customerFirstName,
+      customerLastName: old.customerLastName, customerPhone: old.customerPhone, customerEmail: old.customerEmail,
+      notes: old.notes, preferences: serializePublicPreferences(old), allergies: serializePublicAllergies(old),
+      privacyConsentMethod: "VERBAL", capacityOverride: old.capacityOverride, capacityOverrideReason: old.capacityOverrideReason,
+    }, old.sendWhatsAppConfirmation);
+    const record = await prisma.reservationIdempotencyKey.findFirstOrThrow({ where: { restaurantId } });
+    await prisma.reservationIdempotencyKey.update({ where: { id: record.id }, data: { requestHash: hash } });
+    await prisma.reservation.update({ where: { id: created.reservation.id }, data: { childrenCount: null, gameRoomPreference: null, preferences: serializePublicPreferences(old) } });
+    const replay = () => createPhoneReservation({ actor: staffActor, rawPayload: old, rawIdempotencyKey: key, now, config });
+    expect(await replay()).toMatchObject({ replayed: true, reservation: { id: created.reservation.id, childrenCount: null, gameRoomPreference: null } });
+    expect((await prisma.reservationIdempotencyKey.findUniqueOrThrow({ where: { id: record.id } })).requestHash).toBe(hash);
+    await expect(createPhoneReservation({ actor: staffActor, rawPayload: old, rawIdempotencyKey: randomUUID(), now, config })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(createPhoneReservation({ actor: staffActor, rawPayload: old, rawIdempotencyKey: key, now: new Date(record.expiresAt.getTime() + 1), config })).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(await prisma.reservation.count({ where: { restaurantId } })).toBe(1);
+    expect(await prisma.reservationAuditEvent.count({ where: { restaurantId } })).toBe(1);
+  });
+
+  it("preserves unknown for unrelated Staff edits, requires composition for size change and keeps no-op immutable", async () => {
+    const created = await createPhone(staffActor, { childrenCount: null, gameRoomPreference: null });
+    const updated = await updateStaffReservation({ actor: staffActor, reservationId: created.reservation.id, rawPayload: updatePayload(created.reservation, { notes: "Nuova nota Foundation sintetica" }), now });
+    expect(updated.reservation).toMatchObject({ childrenCount: null, gameRoomPreference: null });
+    await expect(updateStaffReservation({ actor: staffActor, reservationId: created.reservation.id, rawPayload: updatePayload(updated.reservation, { partySize: 3 }), now })).rejects.toMatchObject({ code: "VALIDATION" });
+    const known = await updateStaffReservation({ actor: staffActor, reservationId: created.reservation.id, rawPayload: updatePayload(updated.reservation, { partySize: 3, childrenCount: 1, gameRoomPreference: true }), now });
+    const changed = await updateStaffReservation({ actor: staffActor, reservationId: created.reservation.id, rawPayload: updatePayload(known.reservation, { gameRoomPreference: false }), now });
+    expect(changed.reservation).toMatchObject({ childrenCount: 1, gameRoomPreference: false });
+    const before = await prisma.reservation.findUniqueOrThrow({ where: { id: created.reservation.id } });
+    const count = await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } });
+    expect((await updateStaffReservation({ actor: staffActor, reservationId: before.id, rawPayload: updatePayload(changed.reservation), now: new Date(now.getTime() + 10_000) })).changed).toBe(false);
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: before.id } })).toEqual(before);
+    expect(await prisma.reservationAuditEvent.count({ where: { reservationId: before.id } })).toBe(count);
+    const audit = await prisma.reservationAuditEvent.findFirstOrThrow({ where: { reservationId: before.id, action: "UPDATED", newState: { path: ["gameRoomPreference"], equals: false } } });
+    expect(audit.newState).toMatchObject({ childrenCount: 1, gameRoomPreference: false });
+  });
   beforeAll(async () => {
     await prisma.restaurant.createMany({
       data: [
@@ -695,7 +932,7 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
       await expect(updateStaffReservation({
         actor: staffActor,
         reservationId: created.reservation.id,
-        rawPayload: updatePayload(created.reservation, { customerPhone: "+39 000 000 0891" }),
+        rawPayload: updatePayload(created.reservation, { customerPhone: "+39 000 000 0891", gameRoomPreference: true }),
         now,
       })).rejects.toThrow("synthetic M12 staff notification failure");
     });
@@ -799,8 +1036,13 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
     });
   });
 
-  it("grandfathers an unavailable room for unrelated edits and cancellation", async () => {
+  it("preserves historical room preference without constraining roomless edits or cancellation", async () => {
     const created = await createPhone(staffActor);
+    const persisted = await prisma.reservation.findUniqueOrThrow({ where: { id: created.reservation.id } });
+    await prisma.reservation.update({
+      where: { id: persisted.id },
+      data: { preferences: JSON.stringify({ ...JSON.parse(persisted.preferences!), roomCode: "sala-m8" }) },
+    });
     await prisma.room.update({ where: { id: roomId }, data: { isActive: false } });
 
     try {
@@ -818,21 +1060,20 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
         status: "CONFIRMED",
         version: 2,
       });
-      await expect(
-        updateStaffReservation({
+      const moved = await updateStaffReservation({
           actor: staffActor,
           reservationId: created.reservation.id,
           rawPayload: updatePayload(updated.reservation, {
             localDate: movedDate,
           }),
           now,
-        }),
-      ).rejects.toMatchObject({ code: "VALIDATION" });
+        });
+      expect(moved.reservation).toMatchObject({ localDate: movedDate, roomCode: "sala-m8", version: 3 });
       await expect(
         cancelStaffReservation({
           actor: staffActor,
           reservationId: created.reservation.id,
-          rawPayload: { version: updated.reservation.version },
+          rawPayload: { version: moved.reservation.version },
           now,
         }),
       ).resolves.toMatchObject({
@@ -955,7 +1196,8 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
         serviceType: "DINNER",
         arrivalTime: "20:00",
         partySize: publicReservation.reservation.partySize,
-        roomCode: "sala-m8",
+        childrenCount: 0,
+        gameRoomPreference: null,
         customerFirstName: "Cliente",
         customerLastName: "Pubblico Fittizio",
         customerPhone: "+39 000 000 0801",
@@ -963,7 +1205,6 @@ describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => 
         highChair: false,
         stroller: false,
         accessibility: false,
-        children: false,
         celiac: false,
         allergies: null,
         intolerances: null,

@@ -23,6 +23,8 @@ function reservation(
     serviceType: "DINNER",
     arrivalTime: "19:00",
     partySize: 2,
+    childrenCount: null,
+    gameRoomPreference: null,
     status: "CONFIRMED",
     origin: "PUBLIC",
     customerFirstName: "Cliente",
@@ -99,6 +101,20 @@ function assignment(
 }
 
 describe("M8 dashboard domain", () => {
+  it("projects nullable composition and games preference without deriving assignment or arrival", () => {
+    for (const composition of [
+      { childrenCount: null, gameRoomPreference: null },
+      { childrenCount: 0, gameRoomPreference: null },
+      { childrenCount: 1, gameRoomPreference: true },
+      { childrenCount: 1, gameRoomPreference: false },
+    ]) {
+      const original = source(composition);
+      const projected = toDashboardReservation(original, new Map(rooms.map((room) => [room.code, room.name])), null);
+      expect(projected).toMatchObject({ ...composition, assignment: null, arrivedAt: null });
+      const summary = aggregateDashboard([original], rooms);
+      expect(summary).toMatchObject({ assignedReservations: 0, unassignedReservations: 1, unassignedCovers: 2 });
+    }
+  });
   it("derives minimized notification warnings from only the latest non-superseded group", () => {
     const oldGroup = crypto.randomUUID();
     const latestGroup = crypto.randomUUID();

@@ -1,6 +1,6 @@
 export const STAGING_SCHEMA_POLL_INTERVAL_MS = 2_000;
 export const STAGING_SCHEMA_TIMEOUT_MS = 120_000;
-export const EXPECTED_STAGING_MIGRATION_COUNT = 14;
+export const EXPECTED_STAGING_MIGRATION_COUNT = 15;
 
 function createAbortError() {
   const error = new Error("Staging worker startup was interrupted.");

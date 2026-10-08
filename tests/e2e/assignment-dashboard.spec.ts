@@ -1,11 +1,13 @@
 import "dotenv/config";
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { Pool } from "pg";
 
 import {
   e2eAdminUsername,
   e2eDiningTableName,
   e2eReservationFirstName,
+  e2eRestaurantId,
   e2eRunId,
   e2eStaffUsername,
 } from "./e2e-run";
@@ -13,6 +15,9 @@ import {
 const origin = "http://localhost:4000";
 const adminPassword = process.env.AUTH_DEMO_ADMIN_PASSWORD ?? "";
 const staffPassword = process.env.AUTH_DEMO_STAFF_PASSWORD ?? "";
+const database = new Pool({ connectionString: process.env.DATABASE_URL });
+const legacyPreferences = new Map<string, string>();
+test.afterAll(async () => database.end());
 
 interface StaffReservation {
   id: string;
@@ -72,12 +77,14 @@ function staffPayload(input: {
   partySize?: number;
   preference?: string;
 }) {
+  if (input.preference) legacyPreferences.set(input.lastName, input.preference);
   return {
     localDate: input.localDate,
     serviceType: "DINNER" as const,
     arrivalTime: "19:00",
     partySize: input.partySize ?? 2,
-    roomCode: input.preference ?? "sala-2",
+    childrenCount: 0,
+    gameRoomPreference: null,
     customerFirstName: e2eReservationFirstName,
     customerLastName: input.lastName,
     customerPhone: "+390000001020",
@@ -85,7 +92,6 @@ function staffPayload(input: {
     highChair: false,
     stroller: false,
     accessibility: false,
-    children: false,
     celiac: false,
     allergies: null,
     intolerances: null,
@@ -108,7 +114,16 @@ async function createReservation(
     data: input,
   });
   expect(response.ok(), await response.text()).toBe(true);
-  return (await response.json()).reservation as StaffReservation;
+  const reservation = (await response.json()).reservation as StaffReservation;
+  const preference = legacyPreferences.get(input.customerLastName);
+  if (preference) {
+    // A pre-Foundation fixture, not a customer-selectable physical room in the new API.
+    const current = await database.query("SELECT preferences FROM reservations WHERE id=$1 AND restaurant_id=$2 AND customer_first_name=$3", [reservation.id, e2eRestaurantId, e2eReservationFirstName]);
+    expect(current.rowCount).toBe(1);
+    const updated = await database.query("UPDATE reservations SET preferences=$4,children_count=NULL,game_room_preference=NULL WHERE id=$1 AND restaurant_id=$2 AND customer_first_name=$3", [reservation.id, e2eRestaurantId, e2eReservationFirstName, JSON.stringify({ ...JSON.parse(current.rows[0].preferences), roomCode: preference })]);
+    expect(updated.rowCount).toBe(1);
+  }
+  return reservation;
 }
 
 async function readAssignment(

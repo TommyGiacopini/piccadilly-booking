@@ -4,7 +4,8 @@ import {
   isLocalDate,
   isOperationalTime,
 } from "@/modules/configuration/domain/operational-time";
-import { RESERVATION_TEXT_LIMITS } from "@/modules/reservations/domain/validation";
+import { RESERVATION_TEXT_LIMITS, serializedReservationEnvelopeSchema } from "@/modules/reservations/domain/validation";
+import { partyCompositionFields, validatePartyComposition } from "@/modules/reservations/domain/party-composition";
 
 const normalizeRequiredText = (value: string) =>
   value.trim().replace(/\s+/gu, " ");
@@ -66,7 +67,8 @@ const reservationSelection = {
   notes: optionalText(RESERVATION_TEXT_LIMITS.notes),
 } as const;
 
-export const publicCreateReservationSchema = z
+// Frozen pre-Foundation representation: accepted by the service for replay only.
+export const legacyPublicCreateReservationSchema = z
   .object({
     ...reservationSelection,
     customerFirstName: requiredName,
@@ -81,7 +83,17 @@ export const publicCreateReservationSchema = z
 
 export const publicUpdateReservationSchema = z
   .object(reservationSelection)
-  .strict();
+  .omit({ roomCode: true, children: true })
+  .extend(partyCompositionFields)
+  .strict()
+  .superRefine(validatePartyComposition);
+
+export const publicCreateReservationSchema = legacyPublicCreateReservationSchema
+  .omit({ roomCode: true, children: true })
+  .extend(partyCompositionFields)
+  .strict()
+  .superRefine(validatePartyComposition)
+  .refine((value) => value.childrenCount !== null, { path: ["childrenCount"], message: "Dichiara la composizione della prenotazione." });
 
 export type PublicCreateReservationInput = z.infer<
   typeof publicCreateReservationSchema
@@ -115,27 +127,53 @@ export interface ParsedPublicAllergyData extends PublicAllergyData {
 }
 
 export function serializePublicPreferences(
-  input: PublicCreateReservationInput | PublicUpdateReservationInput,
+  input: Omit<PublicPreferenceData, "roomCode" | "children"> &
+    ({ childrenCount: number | null } | { roomCode: string; children: boolean }),
+  previousPreferences: string | null = null,
 ): string {
-  return JSON.stringify({
-    roomCode: input.roomCode,
+  const previous = parsePublicPreferences(previousPreferences);
+  const desired: PublicPreferenceData = {
+    roomCode: "roomCode" in input ? input.roomCode : previous.roomCode,
     highChair: input.highChair,
     stroller: input.stroller,
     accessibility: input.accessibility,
-    children: input.children,
+    children: "children" in input ? input.children : input.childrenCount === null ? previous.children : input.childrenCount > 0,
     celebration: input.celebration,
     animals: input.animals,
-  } satisfies PublicPreferenceData);
+  };
+  // The persisted value, never the request, owns historical preference text.
+  // Keep equivalent legacy/plain-text representations byte-identical for no-op.
+  if (previousPreferences !== null &&
+      (Object.keys(desired) as Array<keyof PublicPreferenceData>)
+        .every((key) => desired[key] === previous[key])) {
+    return previousPreferences;
+  }
+  return serializedReservationEnvelopeSchema.parse(JSON.stringify({
+    ...desired,
+    ...(previous.legacyText === null ? {} : { legacyText: previous.legacyText }),
+  }));
 }
 
 export function serializePublicAllergies(
-  input: PublicCreateReservationInput | PublicUpdateReservationInput,
+  input: PublicAllergyData,
+  previousAllergies: string | null = null,
 ): string {
-  return JSON.stringify({
+  const previous = parsePublicAllergies(previousAllergies);
+  const desired: PublicAllergyData = {
     celiac: input.celiac,
     allergies: input.allergies,
     intolerances: input.intolerances,
-  } satisfies PublicAllergyData);
+  };
+  // Historical health-related text is owned by persisted state, not the browser.
+  if (previousAllergies !== null &&
+      (Object.keys(desired) as Array<keyof PublicAllergyData>)
+        .every((key) => desired[key] === previous[key])) {
+    return previousAllergies;
+  }
+  return serializedReservationEnvelopeSchema.parse(JSON.stringify({
+    ...desired,
+    ...(previous.legacyText === null ? {} : { legacyText: previous.legacyText }),
+  }));
 }
 
 function legacyText(value: string | null): string | null {
@@ -168,11 +206,13 @@ export function parsePublicPreferences(
         children: z.boolean(),
         celebration: z.string().nullable(),
         animals: z.boolean(),
+        legacyText: z.string().nullable().optional(),
       })
       .safeParse(JSON.parse(value ?? "null") as unknown);
 
     if (parsed.success) {
-      return parsedWithLegacyText(parsed.data, null);
+      const { legacyText: storedLegacyText, ...structured } = parsed.data;
+      return parsedWithLegacyText(structured, storedLegacyText ?? null);
     }
   } catch {
     // M6 stored free-form text. It remains readable but is never interpreted as JSON.
@@ -198,11 +238,13 @@ export function parsePublicAllergies(
         celiac: z.boolean(),
         allergies: z.string().nullable(),
         intolerances: z.string().nullable(),
+        legacyText: z.string().nullable().optional(),
       })
       .safeParse(JSON.parse(value ?? "null") as unknown);
 
     if (parsed.success) {
-      return parsedWithLegacyText(parsed.data, null);
+      const { legacyText: storedLegacyText, ...structured } = parsed.data;
+      return parsedWithLegacyText(structured, storedLegacyText ?? null);
     }
   } catch {
     // M6 stored free-form text. Preserve it as a legacy declaration.

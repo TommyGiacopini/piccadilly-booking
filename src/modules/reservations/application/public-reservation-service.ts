@@ -1,6 +1,8 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+import type { z } from "zod";
+import { compositionChangeIsDeclared } from "@/modules/reservations/domain/party-composition";
 
 import { calculateAvailability } from "@/modules/availability/domain/availability-engine";
 import type { AvailabilityReason } from "@/modules/availability/domain/types";
@@ -27,8 +29,8 @@ import {
 } from "@/modules/reservations/domain/management-time";
 import {
   publicCreateReservationSchema,
+  legacyPublicCreateReservationSchema,
   publicUpdateReservationSchema,
-  parsePublicPreferences,
   serializePublicAllergies,
   serializePublicPreferences,
   type PublicCreateReservationInput,
@@ -61,7 +63,6 @@ import {
   type PublicReservationAccess,
 } from "@/modules/reservations/infrastructure/public-reservation-repository";
 import {
-  findAvailableRoomForService,
   materializeServiceInstance,
 } from "@/modules/rooms/infrastructure/service-instance-repository";
 import { clearReservationAssignmentForScheduleChange } from "@/modules/rooms/application/reservation-assignment-service";
@@ -90,18 +91,25 @@ export interface PublicCreateReservationResult {
   replayed: boolean;
 }
 
+type PublicCreationRequest =
+  | { command: PublicCreateReservationInput; legacyReplayOnly: false }
+  | { command: z.infer<typeof legacyPublicCreateReservationSchema>; legacyReplayOnly: true };
+
 function parseCreateInput(
   rawPayload: unknown,
   rawIdempotencyKey: string | null | undefined,
-): { command: PublicCreateReservationInput; idempotencyKey: string } {
+): PublicCreationRequest & { idempotencyKey: string } {
   const payload = publicCreateReservationSchema.safeParse(rawPayload);
+  const legacy = payload.success ? null : legacyPublicCreateReservationSchema.safeParse(rawPayload);
   const key = idempotencyKeySchema.safeParse(rawIdempotencyKey);
 
-  if (!payload.success || !key.success) {
+  if (!key.success || (!payload.success && !legacy?.success)) {
     throw new PublicReservationError("VALIDATION");
   }
 
-  return { command: payload.data, idempotencyKey: key.data };
+  if (payload.success) return { command: payload.data, idempotencyKey: key.data, legacyReplayOnly: false };
+  if (legacy?.success) return { command: legacy.data, idempotencyKey: key.data, legacyReplayOnly: true };
+  throw new PublicReservationError("VALIDATION");
 }
 
 function parseUpdateInput(rawPayload: unknown): PublicUpdateReservationInput {
@@ -230,17 +238,18 @@ export async function createPublicReservation(input: {
   now?: Date;
   config?: ReservationConfig;
 }): Promise<PublicCreateReservationResult> {
-  const { command, idempotencyKey } = parseCreateInput(
+  const parsed = parseCreateInput(
     input.rawPayload,
     input.rawIdempotencyKey,
   );
+  const { idempotencyKey } = parsed;
   const now = input.now ?? new Date();
   const config = input.config ?? resolveReservationConfig();
   const keyHash = hashIdempotencyKey(
     input.restaurantId,
     `public\u0000${idempotencyKey}`,
   );
-  const requestHash = hashPublicReservationRequest(command);
+  const requestHash = hashPublicReservationRequest(parsed.command);
   const correlationId = randomUUID();
 
   return runReservationTransaction(async (client) => {
@@ -251,6 +260,7 @@ export async function createPublicReservation(input: {
     });
 
     if (existing && existing.expiresAt.getTime() <= now.getTime()) {
+      if (parsed.legacyReplayOnly) throw new PublicReservationError("VALIDATION");
       await deleteIdempotencyKey(client, existing.id);
     } else if (existing) {
       if (
@@ -293,6 +303,8 @@ export async function createPublicReservation(input: {
       });
     }
 
+    if (parsed.legacyReplayOnly) throw new PublicReservationError("VALIDATION");
+    const command = parsed.command;
     const idempotencyRecordId = await createIdempotencyKey(client, {
       restaurantId: input.restaurantId,
       keyHash,
@@ -324,19 +336,9 @@ export async function createPublicReservation(input: {
       client,
       input.restaurantId,
     );
-    const room = await findAvailableRoomForService(client, {
-      restaurantId: input.restaurantId,
-      roomCode: command.roomCode,
-      localDate: command.localDate,
-      serviceType: command.serviceType,
-      now,
-    });
 
     if (!configuration || !settings) {
       throw new PublicReservationError("CONFIGURATION_INVALID");
-    }
-    if (!room) {
-      throw new PublicReservationError("VALIDATION");
     }
 
     assertAvailableSlot({
@@ -473,8 +475,9 @@ export async function updateManagedPublicReservation(input: {
       throw new PublicReservationError("CUTOFF_REACHED");
     }
 
-    const requestedPreferences = serializePublicPreferences(command);
-    const requestedAllergies = serializePublicAllergies(command);
+    if (!compositionChangeIsDeclared(access.reservation, command)) throw new PublicReservationError("VALIDATION");
+    const requestedPreferences = serializePublicPreferences(command, access.reservation.preferences);
+    const requestedAllergies = serializePublicAllergies(command, access.reservation.allergies);
     const scheduleChanged =
       access.reservation.localDate !== command.localDate ||
       access.reservation.serviceType !== command.serviceType ||
@@ -482,6 +485,8 @@ export async function updateManagedPublicReservation(input: {
     const changed =
       scheduleChanged ||
       access.reservation.partySize !== command.partySize ||
+      access.reservation.childrenCount !== command.childrenCount ||
+      access.reservation.gameRoomPreference !== command.gameRoomPreference ||
       access.reservation.notes !== command.notes ||
       access.reservation.preferences !== requestedPreferences ||
       access.reservation.allergies !== requestedAllergies;
@@ -520,28 +525,9 @@ export async function updateManagedPublicReservation(input: {
       serviceType: command.serviceType,
       excludeReservationId: access.reservation.id,
     });
-    const currentRoomCode = parsePublicPreferences(
-      access.reservation.preferences,
-    ).roomCode;
-    const roomSelectionChanged =
-      access.reservation.localDate !== command.localDate ||
-      access.reservation.serviceType !== command.serviceType ||
-      currentRoomCode !== command.roomCode;
-    const room = roomSelectionChanged
-      ? await findAvailableRoomForService(client, {
-          restaurantId: input.restaurantId,
-          roomCode: command.roomCode,
-          localDate: command.localDate,
-          serviceType: command.serviceType,
-          now,
-        })
-      : true;
 
     if (!configuration) {
       throw new PublicReservationError("CONFIGURATION_INVALID");
-    }
-    if (!room) {
-      throw new PublicReservationError("VALIDATION");
     }
 
     assertAvailableSlot({
@@ -573,6 +559,8 @@ export async function updateManagedPublicReservation(input: {
       reservationId: access.reservation.id,
       command,
       viewExpiresAt,
+      preferences: requestedPreferences,
+      allergies: requestedAllergies,
     });
     if (
       access.reservation.localDate !== command.localDate ||

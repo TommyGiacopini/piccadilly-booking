@@ -6,6 +6,8 @@ export interface ReservationDto {
   serviceType: "LUNCH" | "DINNER";
   arrivalTime: string;
   partySize: number;
+  childrenCount: number | null;
+  gameRoomPreference: boolean | null;
   status: "CONFIRMED" | "CANCELLED";
   origin: "STAFF" | "PHONE" | "PUBLIC";
   customer: {
@@ -33,6 +35,8 @@ export function toReservationDto(
     serviceType: reservation.serviceType,
     arrivalTime: reservation.arrivalTime,
     partySize: reservation.partySize,
+    childrenCount: reservation.childrenCount,
+    gameRoomPreference: reservation.gameRoomPreference,
     status: reservation.status,
     origin: reservation.origin,
     customer: {

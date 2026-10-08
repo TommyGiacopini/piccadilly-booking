@@ -50,13 +50,13 @@ async function fillPhoneReservation(
     overrideReason?: string;
   },
 ) {
-  await page.getByLabel("Persone").fill(String(input.partySize));
+  await page.getByLabel("In quanti siete? (coperti totali)").fill(String(input.partySize));
   await expect(page.getByLabel("Slot configurato").locator("option[value='19:00']")).toHaveCount(1);
   await page.getByLabel("Slot configurato").selectOption("19:00");
   await page.getByLabel("Nome", { exact: true }).fill(input.firstName);
   await page.getByLabel("Cognome", { exact: true }).fill(input.lastName);
   await page.getByLabel("Telefono").fill("+39 000 000 0900");
-  await page.getByLabel("Sala preferita (non garantita)").selectOption({ index: 1 });
+  await page.getByRole("radio", { name: "Non specificato", exact: true }).check();
   await page.getByLabel(/Confermo di avere acquisito verbalmente/).check();
 
   if (input.overrideReason) {

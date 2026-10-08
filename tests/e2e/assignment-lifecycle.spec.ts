@@ -27,6 +27,8 @@ interface StaffReservation {
   serviceType: "LUNCH" | "DINNER";
   arrivalTime: string;
   partySize: number;
+  childrenCount: number | null;
+  gameRoomPreference: boolean | null;
   version: number;
   customer: {
     firstName: string;
@@ -96,7 +98,8 @@ function staffPayload(input: {
     serviceType: "DINNER" as const,
     arrivalTime: input.arrivalTime ?? "19:00",
     partySize: 2,
-    roomCode: input.roomCode ?? "sala-2",
+    childrenCount: 0,
+    gameRoomPreference: null,
     customerFirstName: e2eReservationFirstName,
     customerLastName: input.lastName,
     customerPhone: "+390000001010",
@@ -104,7 +107,6 @@ function staffPayload(input: {
     highChair: false,
     stroller: false,
     accessibility: false,
-    children: false,
     celiac: false,
     allergies: null,
     intolerances: null,
@@ -122,11 +124,11 @@ function publicPayload(localDate: string, lastName: string, arrivalTime = "19:00
     serviceType: "DINNER" as const,
     arrivalTime,
     partySize: 2,
-    roomCode: "sala-2",
+    childrenCount: 0,
+    gameRoomPreference: null,
     highChair: false,
     stroller: false,
     accessibility: false,
-    children: false,
     celiac: false,
     allergies: null,
     intolerances: null,
@@ -312,11 +314,11 @@ test.describe.serial("M10-B lifecycle assegnazioni", () => {
         serviceType: publicUpdate.serviceType,
         arrivalTime: publicUpdate.arrivalTime,
         partySize: publicUpdate.partySize,
-        roomCode: publicUpdate.roomCode,
+        childrenCount: publicUpdate.childrenCount,
+        gameRoomPreference: publicUpdate.gameRoomPreference,
         highChair: publicUpdate.highChair,
         stroller: publicUpdate.stroller,
         accessibility: publicUpdate.accessibility,
-        children: publicUpdate.children,
         celiac: publicUpdate.celiac,
         allergies: publicUpdate.allergies,
         intolerances: publicUpdate.intolerances,
@@ -345,7 +347,6 @@ test.describe.serial("M10-B lifecycle assegnazioni", () => {
     const original = staffPayload({
       localDate,
       lastName: `Impact lifecycle ${e2eRunId}`,
-      roomCode: "sala-2",
     });
     const reservation = await createStaffReservation(page.request, original);
     let room:
@@ -426,7 +427,6 @@ test.describe.serial("M10-B lifecycle assegnazioni", () => {
       staffPayload({
         localDate,
         lastName: `Stale UI lifecycle ${e2eRunId}`,
-        roomCode: "sala-2",
       }),
     );
     let restoreProposal: unknown;

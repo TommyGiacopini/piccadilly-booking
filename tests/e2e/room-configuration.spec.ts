@@ -129,9 +129,15 @@ test.describe.serial("M9-D sale e tavoli", () => {
     await apply(page.request, { ...proposal, isAvailable: true });
     let reservation: { id: string; status: string; version: number } | undefined;
     try {
-      const created = await page.request.post("/api/staff/reservations", { headers: { origin, "Idempotency-Key": crypto.randomUUID() }, data: { localDate: date, serviceType: service, arrivalTime: "19:00", partySize: 2, roomCode: "sala-1", customerFirstName: e2eReservationFirstName, customerLastName: "Room", customerPhone: "+39000000000", customerEmail: null, highChair: false, stroller: false, accessibility: false, children: false, celiac: false, allergies: null, intolerances: null, celebration: null, animals: false, notes: null, verbalConsentConfirmed: true, sendWhatsAppConfirmation: true, capacityOverride: false, capacityOverrideReason: null } });
+      const created = await page.request.post("/api/staff/reservations", { headers: { origin, "Idempotency-Key": crypto.randomUUID() }, data: { localDate: date, serviceType: service, arrivalTime: "19:00", partySize: 2, childrenCount: 0,
+      gameRoomPreference: null, customerFirstName: e2eReservationFirstName, customerLastName: "Room", customerPhone: "+39000000000", customerEmail: null, highChair: false, stroller: false, accessibility: false,  celiac: false, allergies: null, intolerances: null, celebration: null, animals: false, notes: null, verbalConsentConfirmed: true, sendWhatsAppConfirmation: true, capacityOverride: false, capacityOverrideReason: null } });
       expect(created.ok(), await created.text()).toBe(true);
       reservation = (await created.json()).reservation as { id: string; status: string; version: number };
+      // Preserve this historical impact scenario as a pre-Foundation preference fixture.
+      const legacy = await database.query("SELECT preferences FROM reservations WHERE id=$1 AND restaurant_id=$2 AND customer_first_name=$3", [reservation.id, e2eRestaurantId, e2eReservationFirstName]);
+      expect(legacy.rowCount).toBe(1);
+      const prepared = await database.query("UPDATE reservations SET preferences=$4,children_count=NULL,game_room_preference=NULL WHERE id=$1 AND restaurant_id=$2 AND customer_first_name=$3", [reservation.id, e2eRestaurantId, e2eReservationFirstName, JSON.stringify({ ...JSON.parse(legacy.rows[0].preferences), roomCode: "sala-1" })]);
+      expect(prepared.rowCount).toBe(1);
       const impact = await apply(page.request, proposal);
       expect(impact.impact.reservationCount).toBeGreaterThan(0);
       for (const path of ["/api/public/availability", "/api/staff/availability"]) {
@@ -220,7 +226,8 @@ test.describe.serial("M9-D sale e tavoli", () => {
         serviceType: "DINNER",
         arrivalTime: "19:00",
         partySize: 2,
-        roomCode: "sala-1",
+        childrenCount: 0,
+        gameRoomPreference: null,
         customerFirstName: e2eReservationFirstName,
         customerLastName: "ReadOnly",
         customerPhone: "+39000000000",
@@ -228,7 +235,6 @@ test.describe.serial("M9-D sale e tavoli", () => {
         highChair: false,
         stroller: false,
         accessibility: false,
-        children: false,
         celiac: false,
         allergies: null,
         intolerances: null,

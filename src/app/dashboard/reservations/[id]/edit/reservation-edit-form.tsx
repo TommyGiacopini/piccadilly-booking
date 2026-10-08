@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
+import { PartyCompositionFields, compositionFormState, compositionPayload } from "@/app/prenota/party-composition-fields";
 
 import type { StaffReservationDto } from "@/modules/reservations/domain/staff-dto";
 
@@ -19,8 +20,6 @@ function checked(formData: FormData, name: string): boolean {
 
 export function ReservationEditForm(props: {
   reservation: StaffReservationDto;
-  currentRoomName: string | null;
-  rooms: { code: string; name: string }[];
 }) {
   const [localDate, setLocalDate] = useState(props.reservation.localDate);
   const [serviceType, setServiceType] = useState<"LUNCH" | "DINNER">(
@@ -37,8 +36,7 @@ export function ReservationEditForm(props: {
       reason: "CURRENT",
     },
   ]);
-  const [rooms, setRooms] = useState(props.rooms);
-  const [roomCode, setRoomCode] = useState(props.reservation.roomCode);
+  const [composition, setComposition] = useState(compositionFormState(props.reservation));
   const [version, setVersion] = useState(props.reservation.version);
   const [availabilityMessage, setAvailabilityMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -46,13 +44,6 @@ export function ReservationEditForm(props: {
     kind: "success" | "error";
     text: string;
   } | null>(null);
-  const originalServiceSelected =
-    localDate === props.reservation.localDate &&
-    serviceType === props.reservation.serviceType;
-  const showGrandfatheredRoom =
-    originalServiceSelected &&
-    props.reservation.roomCode.length > 0 &&
-    !rooms.some((room) => room.code === props.reservation.roomCode);
   const partySizeIsValid = Number.isInteger(Number(partySize)) && Number(partySize) > 0;
 
   useEffect(() => {
@@ -76,7 +67,6 @@ export function ReservationEditForm(props: {
         const body = (await response.json()) as {
           error?: string;
           slots?: { time: string; remainingCapacity: number; reason?: string }[];
-          rooms?: { code: string; name: string }[];
         };
         if (!response.ok) throw new Error(body.error);
 
@@ -95,18 +85,6 @@ export function ReservationEditForm(props: {
           });
         }
         setSlots(nextSlots);
-        const nextRooms = body.rooms ?? [];
-        setRooms(nextRooms);
-        if (
-          !(
-            localDate === props.reservation.localDate &&
-            serviceType === props.reservation.serviceType &&
-            roomCode === props.reservation.roomCode
-          ) &&
-          !nextRooms.some((room) => room.code === roomCode)
-        ) {
-          setRoomCode("");
-        }
         setAvailabilityMessage(
           "L’anteprima è indicativa; il server esclude questa prenotazione nel controllo definitivo.",
         );
@@ -117,7 +95,7 @@ export function ReservationEditForm(props: {
       });
 
     return () => controller.abort();
-  }, [localDate, partySize, props.reservation, roomCode, serviceType]);
+  }, [localDate, partySize, props.reservation, serviceType]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -132,7 +110,7 @@ export function ReservationEditForm(props: {
       serviceType,
       arrivalTime,
       partySize: Number(partySize),
-      roomCode,
+      ...compositionPayload(composition),
       customerFirstName: stringValue(formData, "customerFirstName"),
       customerLastName: stringValue(formData, "customerLastName"),
       customerPhone: stringValue(formData, "customerPhone"),
@@ -140,7 +118,6 @@ export function ReservationEditForm(props: {
       highChair: checked(formData, "highChair"),
       stroller: checked(formData, "stroller"),
       accessibility: checked(formData, "accessibility"),
-      children: checked(formData, "children"),
       celiac: checked(formData, "celiac"),
       allergies: stringValue(formData, "allergies"),
       intolerances: stringValue(formData, "intolerances"),
@@ -194,18 +171,18 @@ export function ReservationEditForm(props: {
   return (
     <form className="mt-6 rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-9" onSubmit={submit}>
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        <label className="text-sm font-bold text-zinc-800">Data<input className={fieldClassName} name="localDate" onChange={(event) => { setLocalDate(event.target.value); setRoomCode(""); }} required type="date" value={localDate} /></label>
-        <label className="text-sm font-bold text-zinc-800">Servizio<select className={fieldClassName} name="serviceType" onChange={(event) => { setServiceType(event.target.value as "LUNCH" | "DINNER"); setRoomCode(""); }} value={serviceType}><option value="LUNCH">Pranzo</option><option value="DINNER">Cena</option></select></label>
-        <label className="text-sm font-bold text-zinc-800">Persone<input className={fieldClassName} min="1" name="partySize" onChange={(event) => setPartySize(event.target.value)} required step="1" type="number" value={partySize} /></label>
+        <label className="text-sm font-bold text-zinc-800">Data<input className={fieldClassName} name="localDate" onChange={(event) => setLocalDate(event.target.value)} required type="date" value={localDate} /></label>
+        <label className="text-sm font-bold text-zinc-800">Servizio<select className={fieldClassName} name="serviceType" onChange={(event) => setServiceType(event.target.value as "LUNCH" | "DINNER")} value={serviceType}><option value="LUNCH">Pranzo</option><option value="DINNER">Cena</option></select></label>
+        <label className="text-sm font-bold text-zinc-800">In quanti siete? (coperti totali)<input className={fieldClassName} min="1" name="partySize" onChange={(event) => setPartySize(event.target.value)} required step="1" type="number" value={partySize} /></label>
+        <div className="min-w-0 sm:col-span-2 lg:col-span-4"><PartyCompositionFields allowUnknown={props.reservation.childrenCount === null && Number(partySize) === props.reservation.partySize} onChange={setComposition} partySize={Number(partySize)} state={composition} /></div>
         <label className="text-sm font-bold text-zinc-800">Slot<select className={fieldClassName} name="arrivalTime" onChange={(event) => setArrivalTime(event.target.value)} required value={arrivalTime}><option value="">Seleziona…</option>{(partySizeIsValid ? slots : []).map((slot) => <option key={slot.time} value={slot.time}>{slot.time}{slot.reason === "CURRENT" ? " · attuale" : ` · ${slot.remainingCapacity} posti residui`}</option>)}</select><span className="mt-2 block text-xs font-normal leading-5 text-zinc-500">{partySizeIsValid ? availabilityMessage : "Inserisci un numero di persone valido."}</span></label>
         <label className="text-sm font-bold text-zinc-800">Nome<input className={fieldClassName} defaultValue={props.reservation.customer.firstName} maxLength={80} name="customerFirstName" required /></label>
         <label className="text-sm font-bold text-zinc-800">Cognome<input className={fieldClassName} defaultValue={props.reservation.customer.lastName} maxLength={80} name="customerLastName" required /></label>
         <label className="text-sm font-bold text-zinc-800">Telefono<input className={fieldClassName} defaultValue={props.reservation.customer.phone} maxLength={40} name="customerPhone" required type="tel" /></label>
         <label className="text-sm font-bold text-zinc-800">Email<input className={fieldClassName} defaultValue={props.reservation.customer.email ?? ""} maxLength={254} name="customerEmail" type="email" /></label>
-        <label className="text-sm font-bold text-zinc-800 sm:col-span-2">Sala preferita (non definitiva)<select className={fieldClassName} name="roomCode" onChange={(event) => setRoomCode(event.target.value)} required value={roomCode}><option value="">Seleziona una sala disponibile…</option>{showGrandfatheredRoom ? <option value={props.reservation.roomCode}>{props.currentRoomName ?? props.reservation.roomCode} · preferenza attuale non selezionabile per nuove richieste</option> : null}{rooms.map((room) => <option key={room.code} value={room.code}>{room.name}</option>)}</select></label>
       </div>
 
-      {props.reservation.legacyPreference ? <p className="mt-4 rounded-xl bg-amber-50 p-4 text-sm font-bold text-amber-900">Preferenza M6 precedente: {props.reservation.legacyPreference}. Seleziona una sala configurata prima di salvare.</p> : null}
+      {props.reservation.legacyPreference || props.reservation.roomCode ? <p className="mt-4 text-sm text-text-secondary [overflow-wrap:anywhere]">Preferenza storica: {props.reservation.legacyPreference ?? props.reservation.roomCode}. Non è un’assegnazione definitiva.</p> : null}
 
       <fieldset className="mt-6 rounded-2xl bg-zinc-100 p-5">
         <legend className="px-1 font-black text-zinc-950">Esigenze e indicatori</legend>
@@ -214,11 +191,11 @@ export function ReservationEditForm(props: {
             ["highChair", "Seggiolone", props.reservation.highChair],
             ["stroller", "Passeggino", props.reservation.stroller],
             ["accessibility", "Accessibilità", props.reservation.accessibility],
-            ["children", "Presenza di bambini", props.reservation.children],
             ["celiac", "Celiachia", props.reservation.celiac],
             ["animals", "Animali", props.reservation.animals],
           ].map(([name, label, defaultChecked]) => <label className="flex items-center gap-3 text-sm font-bold text-zinc-800" key={String(name)}><input className="size-4 accent-orange-500" defaultChecked={Boolean(defaultChecked)} name={String(name)} type="checkbox" />{String(label)}</label>)}
         </div>
+        {props.reservation.legacyAllergy !== null ? <section aria-label="Allergia storica" className="mt-5 text-sm text-text-secondary [overflow-wrap:anywhere]"><h2 className="font-bold">Allergia storica</h2><p className="whitespace-pre-wrap">{props.reservation.legacyAllergy}</p><p className="mt-1">Sola lettura</p></section> : null}
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <label className="text-sm font-bold text-zinc-800">Allergie dichiarate<textarea className={fieldClassName} defaultValue={props.reservation.allergies ?? ""} maxLength={300} name="allergies" rows={2} /></label>
           <label className="text-sm font-bold text-zinc-800">Intolleranze<textarea className={fieldClassName} defaultValue={props.reservation.intolerances ?? ""} maxLength={300} name="intolerances" rows={2} /></label>

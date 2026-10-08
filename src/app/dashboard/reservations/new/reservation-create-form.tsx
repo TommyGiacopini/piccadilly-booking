@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { PartyCompositionFields, compositionFormState, compositionPayload, restaurantDiscretionCopy } from "@/app/prenota/party-composition-fields";
 
 import {
   resolveClientSubmissionIdentity,
@@ -10,7 +11,6 @@ import {
 
 interface ReservationCreateFormProps {
   defaultDate: string;
-  initialRooms: { code: string; name: string }[];
   privacyPolicyVersion: string;
 }
 
@@ -23,7 +23,6 @@ interface AvailabilityResponse {
     remainingCapacity: number;
     reason?: string;
   }[];
-  rooms?: { code: string; name: string }[];
 }
 
 const fieldClassName =
@@ -60,7 +59,6 @@ function responseError(value: unknown): string | null {
 
 export function ReservationCreateForm({
   defaultDate,
-  initialRooms,
   privacyPolicyVersion,
 }: ReservationCreateFormProps) {
   const [localDate, setLocalDate] = useState(defaultDate);
@@ -69,7 +67,7 @@ export function ReservationCreateForm({
   );
   const [partySize, setPartySize] = useState("2");
   const [slots, setSlots] = useState<AvailabilityResponse["slots"]>([]);
-  const [rooms, setRooms] = useState(initialRooms);
+  const [composition, setComposition] = useState(compositionFormState({ partySize: 2, childrenCount: null, gameRoomPreference: null }));
   const [availabilityMessage, setAvailabilityMessage] = useState(
     "Caricamento degli slot configurati…",
   );
@@ -107,7 +105,6 @@ export function ReservationCreateForm({
           (slot) => slot.reason !== "SLOT_IN_PAST",
         );
         setSlots(configuredSlots);
-        setRooms(body.rooms ?? initialRooms);
         setAvailabilityMessage(
           body.isOpen
             ? configuredSlots.length > 0
@@ -123,7 +120,7 @@ export function ReservationCreateForm({
       });
 
     return () => controller.abort();
-  }, [initialRooms, localDate, partySize, serviceType]);
+  }, [localDate, partySize, serviceType]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -138,7 +135,7 @@ export function ReservationCreateForm({
         serviceType,
         arrivalTime: stringValue(formData, "arrivalTime"),
         partySize: Number(partySize),
-        roomCode: stringValue(formData, "roomCode"),
+        ...compositionPayload(composition),
         customerFirstName: stringValue(formData, "customerFirstName"),
         customerLastName: stringValue(formData, "customerLastName"),
         customerPhone: stringValue(formData, "customerPhone"),
@@ -146,7 +143,6 @@ export function ReservationCreateForm({
         highChair: checked(formData, "highChair"),
         stroller: checked(formData, "stroller"),
         accessibility: checked(formData, "accessibility"),
-        children: checked(formData, "children"),
         celiac: checked(formData, "celiac"),
         allergies: stringValue(formData, "allergies"),
         intolerances: stringValue(formData, "intolerances"),
@@ -241,7 +237,7 @@ export function ReservationCreateForm({
         </label>
 
         <label className="text-sm font-bold text-zinc-800">
-          Persone
+          In quanti siete? (coperti totali)
           <input
             className={fieldClassName}
             min="1"
@@ -254,6 +250,7 @@ export function ReservationCreateForm({
           />
         </label>
 
+        <div className="min-w-0 sm:col-span-2 lg:col-span-4"><PartyCompositionFields allowUnknown onChange={setComposition} partySize={Number(partySize)} state={composition} /></div>
         <label className="text-sm font-bold text-zinc-800">
           Slot configurato
           <select className={fieldClassName} name="arrivalTime" required>
@@ -289,15 +286,6 @@ export function ReservationCreateForm({
           <input className={fieldClassName} maxLength={254} name="customerEmail" type="email" />
         </label>
 
-        <label className="text-sm font-bold text-zinc-800 sm:col-span-2">
-          Sala preferita (non garantita)
-          <select className={fieldClassName} name="roomCode" required>
-            <option value="">Seleziona…</option>
-            {rooms.map((room) => (
-              <option key={room.code} value={room.code}>{room.name}</option>
-            ))}
-          </select>
-        </label>
       </div>
 
       <fieldset className="mt-6 rounded-2xl bg-zinc-100 p-5">
@@ -307,7 +295,6 @@ export function ReservationCreateForm({
             ["highChair", "Seggiolone"],
             ["stroller", "Passeggino"],
             ["accessibility", "Accessibilità"],
-            ["children", "Presenza di bambini"],
             ["celiac", "Celiachia"],
             ["animals", "Animali"],
           ].map(([name, label]) => (
@@ -324,6 +311,8 @@ export function ReservationCreateForm({
           <label className="text-sm font-bold text-zinc-800">Note<textarea className={fieldClassName} maxLength={1000} name="notes" rows={2} /></label>
         </div>
       </fieldset>
+
+      <p className="mt-4 text-sm text-text-secondary">{restaurantDiscretionCopy.it}</p>
 
       <section className="mt-6 rounded-2xl border border-sky-200 bg-sky-50 p-5">
         <label className="flex items-start gap-3 text-sm font-black text-sky-950">

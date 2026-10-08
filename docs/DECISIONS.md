@@ -364,6 +364,37 @@ Staff e Admin usano un unico comando desired-state reversibile. Un no-op precede
 
 Gli snapshot audit contengono esclusivamente il booleano registrato e il timestamp arrival nullable. Il dato è Staff-only, non entra nei contratti pubblici e nella Staff Agenda alimenta riepiloghi dei soli coperti confermati. Timestamp dettagliato, filtri/ordinamenti arrival, arrivi parziali e logiche no-show restano fuori da T03.
 
+### D-042 — Owner Change v2: composizione del gruppo e richiesta Sala con i Giochi
+
+`partySize` resta il totale coperti; `childrenCount` nullable e `gameRoomPreference` nullable sono la sola nuova source of truth. Unknown non equivale a zero. Public nuova deve dichiarare composizione; PHONE può registrare Non specificato. Un legacy unknown può essere conservato per modifiche estranee, non per un cambio totale; una composizione nota non viene degradata implicitamente.
+
+La sala fisica non è più una scelta cliente nei nuovi flussi Public/PHONE/edit/management. Le preferenze storiche restano leggibili e non diventano assignment. Il booleano `preferences.children` rimane solo compatibilità derivata dal conteggio noto oppure legacy non autorevole. Il client non invia due verità. Preferenza giochi non garantita, priorità best-effort per ordine prenotazione, nessuna auto-assegnazione o capacità Sala 3.
+
+Migration #15 senza default, indice o backfill. No-op comprende entrambi i campi; audit minimizzato non aggiunge PII/action. I nuovi hash includono i campi. Parser della forma precedente sono replay-only di record non scaduti e corrispondenti: nessuna nuova prenotazione legacy e nessuna riscrittura degli hash persistenti.
+
+Foundation A precede T04 revised/T05. Non integra il T04 parziale; assignment/arrival/collision/capacità/notifiche conservano i contratti già approvati.
+
+### D-043 — Foundation A: storage degli envelope e limiti degli input
+
+`Reservation.preferences` e `Reservation.allergies` contengono rappresentazioni
+JSON interne: migration Foundation #15 le converte a PostgreSQL `TEXT`, senza
+backfill o modifica dei valori. `notes` resta `VARCHAR(1000)`. Migration 1–14
+non cambiano; non viene creata migration16 e il DB persistente resta schema14
+durante l'implementazione locale.
+
+I limiti raw/user-facing restano invariati: preferenze legacy 1000, allergie e
+intolleranze 300 ciascuna, note 1000, ricorrenza 200 e sala legacy 80. Il limite
+raw 1000 non si applica al risultato interno di JSON.stringify: envelope ed
+escaping possono espandere input individualmente bounded. Lo schema raw resta
+distinto dal validator interno lossless; nessuna request accetta legacyText.
+
+Gli update Staff/management preservano preferenze e allergie storiche dal valore
+persistito letto nella transazione. Uno stato equivalente conserva la stringa
+originale byte-identica e non genera versione, timestamp o audit; una modifica
+reale conserva il testo storico nel solo envelope storage. Le nuove create non
+inventano legacyText. Hash idempotency, audit minimizzato, esposizione Public,
+notifiche, export, assignment e arrival non cambiano.
+
 ## 3. Decisioni reversibili
 
 Le seguenti scelte possono cambiare senza alterare il dominio, purché il cambiamento venga testato e documentato:

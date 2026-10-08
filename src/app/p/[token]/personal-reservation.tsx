@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { PublicContactLinks } from "@/app/_components/public-contact-links";
+import { PartyCompositionFields, compositionFormState, compositionPayload, restaurantDiscretionCopy } from "@/app/prenota/party-composition-fields";
 import type {
   PublicContacts,
   PublicContentSet,
@@ -13,6 +14,8 @@ interface ReservationView {
   serviceType: "LUNCH" | "DINNER";
   arrivalTime: string;
   partySize: number;
+  childrenCount: number | null;
+  gameRoomPreference: boolean | null;
   status: "CONFIRMED" | "CANCELLED";
   customer: { firstName: string; lastName: string; phone: string; email: string | null };
   roomCode: string;
@@ -31,11 +34,10 @@ interface ReservationView {
   viewExpiresAt: string;
 }
 
-type EditableReservation = Omit<ReservationView, "status" | "customer" | "canModify" | "canCancel" | "viewExpiresAt">;
+type EditableReservation = Omit<ReservationView, "status" | "customer" | "canModify" | "canCancel" | "viewExpiresAt" | "roomCode" | "children">;
 
 interface AvailabilityView {
   slots?: Array<{ time: string; available: boolean }>;
-  rooms?: Array<{ code: string; name: string }>;
 }
 
 const inputClass = "mt-2 block w-full rounded-2xl border border-zinc-300 bg-white px-4 py-3 text-base outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-100";
@@ -51,11 +53,11 @@ function editableFromReservation(reservation: ReservationView): EditableReservat
     serviceType: reservation.serviceType,
     arrivalTime: reservation.arrivalTime,
     partySize: reservation.partySize,
-    roomCode: reservation.roomCode,
+    childrenCount: reservation.childrenCount,
+    gameRoomPreference: reservation.gameRoomPreference,
     highChair: reservation.highChair,
     stroller: reservation.stroller,
     accessibility: reservation.accessibility,
-    children: reservation.children,
     celiac: reservation.celiac,
     allergies: reservation.allergies,
     intolerances: reservation.intolerances,
@@ -79,6 +81,7 @@ export function PersonalReservation({
   const [language, setLanguage] = useState<"it" | "en">(initialLanguage);
   const [reservation, setReservation] = useState<ReservationView | null>(null);
   const [draft, setDraft] = useState<EditableReservation | null>(null);
+  const [composition, setComposition] = useState(compositionFormState());
   const [availability, setAvailability] = useState<AvailabilityView>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"save" | "cancel" | null>(null);
@@ -106,6 +109,7 @@ export function PersonalReservation({
         if (!response.ok || !body.reservation) throw new Error();
         setReservation(body.reservation);
         setDraft(editableFromReservation(body.reservation));
+        setComposition(compositionFormState(body.reservation));
       })
       .catch(() => { if (!controller.signal.aborted) setError(t.invalid); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -129,10 +133,10 @@ export function PersonalReservation({
     if (!draft) return;
     setBusy("save"); setError(null); setNotice(null);
     try {
-      const response = await fetch(endpoint, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+      const response = await fetch(endpoint, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, ...compositionPayload(composition) }) });
       const body = (await response.json()) as { reservation?: ReservationView; error?: string };
       if (!response.ok || !body.reservation) { setError(language === "it" ? body.error ?? t.genericError : t.genericError); return; }
-      setReservation(body.reservation); setDraft(editableFromReservation(body.reservation)); setNotice(t.updated);
+      setReservation(body.reservation); setDraft(editableFromReservation(body.reservation)); setComposition(compositionFormState(body.reservation)); setNotice(t.updated);
     } catch { setError(t.genericError); } finally { setBusy(null); }
   }
 
@@ -152,13 +156,6 @@ export function PersonalReservation({
 
   const canEdit = reservation.canModify && reservation.status === "CONFIRMED";
   const availableTimes = Array.from(new Set([...(draft.arrivalTime ? [draft.arrivalTime] : []), ...(availability.slots?.filter((slot) => slot.available).map((slot) => slot.time) ?? [])])).sort();
-  const originalServiceSelected =
-    draft.localDate === reservation.localDate &&
-    draft.serviceType === reservation.serviceType;
-  const showGrandfatheredRoom =
-    originalServiceSelected &&
-    reservation.roomCode.length > 0 &&
-    !availability.rooms?.some((room) => room.code === reservation.roomCode);
 
   return (
     <main className="min-h-screen bg-zinc-100 px-4 py-8 sm:px-8">
@@ -174,16 +171,17 @@ export function PersonalReservation({
         {reservation.status === "CANCELLED" ? <p className="mx-7 mt-7 rounded-2xl bg-zinc-200 p-5 font-bold sm:mx-10">{t.cancelled}</p> : !canEdit ? <p className="mx-7 mt-7 rounded-2xl bg-orange-50 p-5 font-bold text-orange-950 sm:mx-10">{t.readOnly}</p> : null}
         <form className="p-7 sm:p-10" onSubmit={save}>
           <fieldset className="grid gap-5 sm:grid-cols-2" disabled={!canEdit || busy !== null}>
-            <label className="text-sm font-bold">{t.date}<input className={inputClass} onChange={(event) => setDraft({ ...draft, localDate: event.target.value, arrivalTime: "", roomCode: "" })} required type="date" value={draft.localDate} /></label>
-            <label className="text-sm font-bold">{t.service}<select className={inputClass} onChange={(event) => setDraft({ ...draft, serviceType: event.target.value as "LUNCH" | "DINNER", arrivalTime: "", roomCode: "" })} value={draft.serviceType}><option value="LUNCH">{t.lunch}</option><option value="DINNER">{t.dinner}</option></select></label>
-            <label className="text-sm font-bold">{t.guests}<input className={inputClass} min="1" onChange={(event) => setDraft({ ...draft, partySize: Number(event.target.value) })} required step="1" type="number" value={draft.partySize} /></label>
+            <label className="text-sm font-bold">{t.date}<input className={inputClass} onChange={(event) => setDraft({ ...draft, localDate: event.target.value, arrivalTime: "" })} required type="date" value={draft.localDate} /></label>
+            <label className="text-sm font-bold">{t.service}<select className={inputClass} onChange={(event) => setDraft({ ...draft, serviceType: event.target.value as "LUNCH" | "DINNER", arrivalTime: "" })} value={draft.serviceType}><option value="LUNCH">{t.lunch}</option><option value="DINNER">{t.dinner}</option></select></label>
+            <label className="text-sm font-bold">{language === "it" ? "In quanti siete? (coperti totali)" : "How many are you? (total covers)"}<input className={inputClass} min="1" onChange={(event) => setDraft({ ...draft, partySize: Number(event.target.value) })} required step="1" type="number" value={draft.partySize} /></label>
+            <div className="min-w-0 sm:col-span-2"><PartyCompositionFields allowUnknown={reservation.childrenCount === null && draft.partySize === reservation.partySize} language={language} onChange={setComposition} partySize={draft.partySize} state={composition} /></div>
             <label className="text-sm font-bold">{t.time}<select className={inputClass} onChange={(event) => setDraft({ ...draft, arrivalTime: event.target.value })} required value={draft.arrivalTime}><option value="">—</option>{availableTimes.map((time) => <option key={time}>{time}</option>)}</select></label>
-            <label className="text-sm font-bold sm:col-span-2">{t.room}<select className={inputClass} onChange={(event) => setDraft({ ...draft, roomCode: event.target.value })} required value={draft.roomCode}><option value="">—</option>{showGrandfatheredRoom ? <option value={reservation.roomCode}>{reservation.roomCode} · {language === "it" ? "preferenza attuale" : "current preference"}</option> : null}{availability.rooms?.map((room) => <option key={room.code} value={room.code}>{room.name}</option>)}</select></label>
-            <div className="grid gap-3 sm:col-span-2 sm:grid-cols-3">{(["highChair", "stroller", "accessibility", "children", "celiac", "animals"] as const).map((field) => <label className="flex items-center gap-3 rounded-2xl bg-zinc-100 p-4 text-sm font-bold" key={field}><input checked={draft[field]} className="size-4 accent-orange-500" onChange={(event) => setDraft({ ...draft, [field]: event.target.checked })} type="checkbox" />{t[field]}</label>)}</div>
+            <div className="grid gap-3 sm:col-span-2 sm:grid-cols-3">{(["highChair", "stroller", "accessibility", "celiac", "animals"] as const).map((field) => <label className="flex items-center gap-3 rounded-2xl bg-zinc-100 p-4 text-sm font-bold" key={field}><input checked={draft[field]} className="size-4 accent-orange-500" onChange={(event) => setDraft({ ...draft, [field]: event.target.checked })} type="checkbox" />{t[field]}</label>)}</div>
             <label className="text-sm font-bold">{t.allergies}<textarea className={inputClass} maxLength={300} onChange={(event) => setDraft({ ...draft, allergies: event.target.value || null })} rows={3} value={draft.allergies ?? ""} /></label>
             <label className="text-sm font-bold">{t.intolerances}<textarea className={inputClass} maxLength={300} onChange={(event) => setDraft({ ...draft, intolerances: event.target.value || null })} rows={3} value={draft.intolerances ?? ""} /></label>
             <label className="text-sm font-bold">{t.celebration}<input className={inputClass} maxLength={200} onChange={(event) => setDraft({ ...draft, celebration: event.target.value || null })} value={draft.celebration ?? ""} /></label>
             <label className="text-sm font-bold">{t.notes}<textarea className={inputClass} maxLength={1000} onChange={(event) => setDraft({ ...draft, notes: event.target.value || null })} rows={3} value={draft.notes ?? ""} /></label>
+            <p className="text-sm text-text-secondary sm:col-span-2">{restaurantDiscretionCopy[language]}</p>
           </fieldset>
           {error ? <p className="mt-6 rounded-2xl bg-red-50 p-4 font-bold text-red-800" role="alert">{error}</p> : null}
           {notice ? <p className="mt-6 rounded-2xl bg-emerald-50 p-4 font-bold text-emerald-800" role="status">{notice}</p> : null}
