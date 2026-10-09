@@ -262,6 +262,7 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
   });
 
   beforeEach(async () => {
+    await prisma.reservationAuditEvent.deleteMany({ where: { restaurantId: { in: [restaurantId, otherRestaurantId] } } });
     await prisma.notificationSimulationReceipt.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -343,6 +344,7 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
   });
 
   afterAll(async () => {
+    await prisma.reservationAuditEvent.deleteMany({ where: { restaurantId: { in: [restaurantId, otherRestaurantId] } } });
     await prisma.notificationSimulationReceipt.deleteMany({
       where: { restaurantId: { in: [restaurantId, otherRestaurantId] } },
     });
@@ -502,6 +504,22 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
     expect(dashboard.reservations.find((row) => row.id === deadId)?.notificationHealth).toBe("NOT_DELIVERED");
     expect(JSON.stringify(dashboard.reservations.map((row) => row.notificationHealth))).not.toMatch(/destination|payload|provider|attempt/iu);
     expect(dashboard.reservations.some((row) => row.id === otherReservation.id)).toBe(false);
+  });
+
+  it("projects room-only through the existing tenant/date/service read model and assigned filters", async () => {
+    const reservation = await prisma.reservation.findFirstOrThrow({ where: { restaurantId, status: "CONFIRMED", assignment: null } });
+    await putReservationAssignment({ actor: { id: userId, restaurantId }, reservationId: reservation.id, rawPayload: { version: reservation.version, roomId: roomOneId, tableIds: [], internalNotes: internalNotesSentinel }, now });
+    const dashboard = await getDashboardDay({ restaurantId, rawDate: localDate, now });
+    const row = dashboard.reservations.find(({ id }) => id === reservation.id)!;
+    expect(row.assignment).toMatchObject({ roomCode: "sala-1", roomName: "Sala 1", tableNames: [], tableCount: 0, internalNotesPresent: true });
+    expect(row.arrivedAt).toBeNull();
+    expect(dashboard.summary).toMatchObject({ assignedReservations: 2, unassignedReservations: 0, unassignedCovers: 0 });
+    const assigned = await getDashboardDay({ restaurantId, rawDate: localDate, rawAssignment: "ASSIGNED", rawFinalRoom: "sala-1", rawService: "DINNER", rawStatus: "CONFIRMED", now });
+    expect(assigned.reservations.map(({ id }) => id)).toEqual([reservation.id]);
+    const unassigned = await getDashboardDay({ restaurantId, rawDate: localDate, rawAssignment: "UNASSIGNED", now });
+    expect(unassigned.reservations).toHaveLength(0);
+    expect(JSON.stringify(dashboard)).not.toContain(internalNotesSentinel);
+    expect(JSON.stringify(dashboard)).not.toContain("M10C-OTHER");
   });
 
   it("projects assignment state, keeps preference separate and aggregates final rooms", async () => {

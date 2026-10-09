@@ -46,7 +46,6 @@ export const putReservationAssignmentSchema = z
     roomId: uuidSchema,
     tableIds: z
       .array(uuidSchema)
-      .min(1, "È richiesto almeno un tavolo.")
       .max(
         MAX_RESERVATION_ASSIGNMENT_TABLES,
         `Non è possibile assegnare più di ${MAX_RESERVATION_ASSIGNMENT_TABLES} tavoli.`,

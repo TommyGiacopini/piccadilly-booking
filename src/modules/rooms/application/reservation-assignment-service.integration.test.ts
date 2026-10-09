@@ -31,6 +31,7 @@ import {
 } from "@/modules/identity/application/identity-service";
 import {
   cancelStaffReservation,
+  getStaffReservation,
   updateStaffReservation,
 } from "@/modules/reservations/application/staff-reservation-service";
 import {
@@ -43,6 +44,7 @@ import {
 } from "@/modules/reservations/domain/management-token";
 import { managementViewExpiry } from "@/modules/reservations/domain/management-time";
 import { ReservationAssignmentError } from "@/modules/rooms/application/reservation-assignment-errors";
+import { putReservationArrival } from "@/modules/reservations/application/reservation-arrival-service";
 import {
   deleteReservationAssignment,
   getReservationAssignmentContext,
@@ -740,6 +742,338 @@ describe.sequential(
       } else {
         process.env.AUTH_RATE_LIMIT_SECRET = originalAuthRateLimitSecret;
       }
+    });
+
+    it("persists all room-only transitions with exactly one version and minimized audit per change", async () => {
+      const reservation = await createReservation();
+      const call = (version: number, roomId: string, tableIds: string[]) => putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(version, { roomId, tableIds }), now: new Date(now.getTime() + version * 1_000) });
+      const steps = [
+        { roomId: roomOneId, tableIds: [], action: "ASSIGNED" },
+        { roomId: roomOneId, tableIds: [tableOneId], action: "REASSIGNED" },
+        { roomId: roomOneId, tableIds: [], action: "REASSIGNED" },
+        { roomId: roomTwoId, tableIds: [], action: "REASSIGNED" },
+        { roomId: roomOneId, tableIds: [tableOneId], action: "REASSIGNED" },
+        { roomId: roomTwoId, tableIds: [], action: "REASSIGNED" },
+        { roomId: roomTwoId, tableIds: [tableThreeId], action: "REASSIGNED" },
+      ];
+      let assignmentId: string | undefined;
+      for (const [index, step] of steps.entries()) {
+        const version = index + 1;
+        const result = await call(version, step.roomId, step.tableIds);
+        expect(result).toMatchObject({ changed: true, reservationVersion: version + 1 });
+        expect(result.assignment?.room.id).toBe(step.roomId);
+        expect(result.assignment?.tables.map(({ id }) => id)).toEqual(step.tableIds);
+        assignmentId ??= result.assignment!.id;
+        expect(result.assignment?.id).toBe(assignmentId);
+        await expect(prisma.reservationAssignmentTable.count({ where: { assignmentId } })).resolves.toBe(step.tableIds.length);
+        const audits = await prisma.reservationAuditEvent.findMany({ where: { reservationId: reservation.id }, orderBy: { createdAt: "asc" } });
+        expect(audits).toHaveLength(version);
+        expect(audits[index]).toMatchObject({ action: step.action, newState: { assignment: { tableCount: step.tableIds.length, tableIds: step.tableIds } } });
+      }
+      await call(8, roomTwoId, []);
+      const clear = await deleteReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: 9 }, now });
+      expect(clear).toEqual({ changed: true, reservationVersion: 10, assignment: null });
+      await expect(prisma.reservationAssignment.findUniqueOrThrow({ where: { id: assignmentId } })).resolves.toMatchObject({ clearedAt: now });
+      const reactivated = await call(10, roomOneId, []);
+      expect(reactivated.assignment).toMatchObject({ id: assignmentId, tables: [] });
+      const actions = await prisma.reservationAuditEvent.findMany({ where: { reservationId: reservation.id }, select: { action: true } });
+      expect(actions.filter(({ action }) => action === "ASSIGNED")).toHaveLength(2);
+      expect(actions.filter(({ action }) => action === "UNASSIGNED")).toHaveLength(1);
+    });
+
+    it.each([{ tableIds: [] }, { tableIds: [tableOneId] }])("accepts stale identical PUT $tableIds without any timestamp/version/audit write", async ({ tableIds }) => {
+      const reservation = await createReservation();
+      const rawPayload = putPayload(1, { tableIds });
+      await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload, now });
+      const before = await databaseFingerprint();
+      const response = await putAssignmentRoute(assignmentMutationRequest({ cookie: staffCookie, reservationId: reservation.id, method: "PUT", body: rawPayload }), { params: Promise.resolve({ id: reservation.id }) });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ changed: false, reservationVersion: 2 });
+      expect(await databaseFingerprint()).toBe(before);
+      await expect(putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: { ...rawPayload, internalNotes: "Nuova nota sintetica" }, now })).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+      await deleteReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: 2 }, now });
+      const afterClear = await databaseFingerprint();
+      expect(await deleteReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: 1 }, now })).toMatchObject({ changed: false, reservationVersion: 3 });
+      expect(await databaseFingerprint()).toBe(afterClear);
+    });
+
+    it("converges identical concurrent room-only PUT to one write and one stale no-op", async () => {
+      const reservation = await createReservation();
+      const results = await Promise.all([staffActor, adminActor].map((actor) => putReservationAssignment({ actor, reservationId: reservation.id, rawPayload: putPayload(1, { tableIds: [] }), now })));
+      expect(results.map(({ changed }) => changed).sort()).toEqual([false, true]);
+      expect(results.map(({ reservationVersion }) => reservationVersion)).toEqual([2, 2]);
+      await expect(prisma.reservationAuditEvent.count({ where: { reservationId: reservation.id, action: "ASSIGNED" } })).resolves.toBe(1);
+      await expect(prisma.reservationAssignmentTable.count({ where: { assignment: { reservationId: reservation.id } } })).resolves.toBe(0);
+    });
+
+    it("rejects opposite concurrent room-only states with one VERSION_CONFLICT", async () => {
+      const reservation = await createReservation();
+      const results = await Promise.allSettled([roomOneId, roomTwoId].map((roomId) => putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(1, { roomId, tableIds: [] }), now })));
+      expect(fulfilledCount(results)).toBe(1);
+      expect(results.find((result) => result.status === "rejected")).toMatchObject({ reason: { code: "VERSION_CONFLICT" } });
+      await expect(prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).resolves.toMatchObject({ version: 2 });
+      await expect(prisma.reservationAuditEvent.count({ where: { reservationId: reservation.id } })).resolves.toBe(1);
+    });
+
+    it.each([{ arrivalTime: "19:15" }, { serviceType: "LUNCH", arrivalTime: "12:30" }, { localDate: "2099-06-17" }])("clears room-only atomically on real schedule change %j", async (changed) => {
+      const reservation = await createReservation();
+      await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(1, { tableIds: [] }), now });
+      const result = await updateStaffReservation({ actor: { ...staffActor, role: "STAFF" }, reservationId: reservation.id, rawPayload: staffUpdatePayload(2, changed), now });
+      expect(result).toMatchObject({ changed: true, reservation: { version: 3 } });
+      expect((await getReservationAssignmentContext({ actor: staffActor, reservationId: reservation.id, now })).assignment).toBeNull();
+      const audits = await prisma.reservationAuditEvent.findMany({ where: { reservationId: reservation.id, action: { in: ["UPDATED", "UNASSIGNED"] } } });
+      expect(audits).toHaveLength(2);
+      expect(new Set(audits.map(({ correlationId }) => correlationId)).size).toBe(1);
+      expect(audits.find(({ action }) => action === "UNASSIGNED")?.newState).toEqual({ assignment: null, reason: "RESERVATION_SCHEDULE_CHANGED" });
+    });
+
+    it("keeps room-only cancelled history and forbids both assignment mutations", async () => {
+      const reservation = await createReservation();
+      await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(1, { tableIds: [] }), now });
+      await cancelStaffReservation({ actor: { ...staffActor, role: "STAFF" }, reservationId: reservation.id, rawPayload: { version: 2 }, now });
+      expect((await getReservationAssignmentContext({ actor: staffActor, reservationId: reservation.id, now })).assignment).toMatchObject({ room: { id: roomOneId }, tables: [] });
+      const before = await databaseFingerprint();
+      for (const method of ["PUT", "DELETE"] as const) {
+        const request = assignmentMutationRequest({ cookie: staffCookie, reservationId: reservation.id, method, body: method === "PUT" ? putPayload(3, { tableIds: [] }) : { version: 3 } });
+        const response = await (method === "PUT" ? putAssignmentRoute : deleteAssignmentRoute)(request, { params: Promise.resolve({ id: reservation.id }) });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ code: "RESERVATION_CANCELLED" });
+      }
+      expect(await databaseFingerprint()).toBe(before);
+    });
+
+    it("retains grandfathered room-only state as a stale no-op but rejects new invalid rooms", async () => {
+      const reservation = await createReservation();
+      const rawPayload = putPayload(1, { tableIds: [] });
+      await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload, now });
+      await prisma.room.update({ where: { id: roomOneId }, data: { isActive: false } });
+      const before = await databaseFingerprint();
+      expect(await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload, now })).toMatchObject({ changed: false, assignment: { hasInactiveReferences: true, tables: [] } });
+      expect(await databaseFingerprint()).toBe(before);
+      const other = await createReservation();
+      await expect(putReservationAssignment({ actor: staffActor, reservationId: other.id, rawPayload, now })).rejects.toMatchObject({ code: "ROOM_UNAVAILABLE" });
+      await expect(putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(2, { roomId: unavailableRoomId, tableIds: [] }), now })).rejects.toMatchObject({ code: "ROOM_UNAVAILABLE" });
+    });
+
+    it("preserves arrival through room-only/table/clear changes and emits no notification intent or delivery", async () => {
+      const reservation = await createReservation();
+      const recorded = await putReservationArrival({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: 1, arrived: true }, now });
+      expect(recorded).toMatchObject({ changed: true });
+      const arrival = (await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).arrivedAt;
+      for (const [index, tableIds] of [[], [tableOneId], []].entries()) {
+        await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(index + 2, { tableIds }), now });
+        await expect(prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).resolves.toMatchObject({ arrivedAt: arrival });
+      }
+      await deleteReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: 5 }, now });
+      await expect(prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).resolves.toMatchObject({ arrivedAt: arrival, version: 6 });
+      await expect(prisma.notificationOutbox.count({ where: { reservationId: reservation.id } })).resolves.toBe(0);
+      await expect(prisma.notificationAttempt.count({ where: { restaurantId } })).resolves.toBe(0);
+      await expect(prisma.notificationSimulationReceipt.count({ where: { restaurantId } })).resolves.toBe(0);
+    });
+
+    it("rolls back removing tables to room-only including assignment and reservation timestamps on audit failure", async () => {
+      const reservation = await createReservation();
+      await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(1), now });
+      const before = await databaseFingerprint();
+      await prisma.$executeRawUnsafe(`CREATE FUNCTION t04_reject_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.restaurant_id = '${restaurantId}'::uuid AND NEW.action::text = 'REASSIGNED' THEN RAISE EXCEPTION 'synthetic T04 audit failure'; END IF; RETURN NEW; END; $$;`);
+      await prisma.$executeRawUnsafe("CREATE TRIGGER t04_reject_audit BEFORE INSERT ON reservation_audit_events FOR EACH ROW EXECUTE FUNCTION t04_reject_audit()");
+      try {
+        await expect(putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(2, { tableIds: [] }), now: new Date(now.getTime() + 1_000) })).rejects.toThrow("synthetic T04 audit failure");
+      } finally {
+        await prisma.$executeRawUnsafe("DROP TRIGGER t04_reject_audit ON reservation_audit_events");
+        await prisma.$executeRawUnsafe("DROP FUNCTION t04_reject_audit()");
+      }
+      expect(await databaseFingerprint()).toBe(before);
+    });
+
+    it.each([
+      { childrenCount: null, gameRoomPreference: null },
+      { childrenCount: 0, gameRoomPreference: null },
+      { childrenCount: 2, gameRoomPreference: true },
+      { childrenCount: 2, gameRoomPreference: false },
+    ].flatMap((composition) => [false, true].map((arrived) => ({ ...composition, arrived }))))(
+      "preserves Foundation composition %j through room-only mutation and stale no-op",
+      async ({ childrenCount, gameRoomPreference, arrived }) => {
+        const reservation = await createReservation();
+        await prisma.reservation.update({ where: { id: reservation.id }, data: { childrenCount, gameRoomPreference } });
+        if (arrived) await putReservationArrival({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: 1, arrived: true }, now });
+        const before = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
+        const result = await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(before.version, { roomId: roomTwoId, tableIds: [] }), now });
+        const after = await prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } });
+        expect(after).toEqual({ ...before, version: before.version + 1, updatedAt: after.updatedAt });
+        expect(result.assignment).toMatchObject({ room: { id: roomTwoId }, tables: [] });
+        const dto = await getStaffReservation({ actor: { ...staffActor, role: "STAFF" }, reservationId: reservation.id });
+        expect(dto).toMatchObject({ childrenCount, gameRoomPreference, arrivedAt: before.arrivedAt?.toISOString() ?? null });
+        const fingerprint = await databaseFingerprint();
+        expect(await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(1, { roomId: roomTwoId, tableIds: [] }), now })).toMatchObject({ changed: false, reservationVersion: before.version + 1 });
+        expect(await databaseFingerprint()).toBe(fingerprint);
+      },
+    );
+
+    it.each([
+      { label: "plaintext", preferences: "Preferenza storica sintetica", allergies: "Allergia storica sintetica" },
+      { label: "plaintext1000", preferences: "P".repeat(1000), allergies: "H".repeat(1000) },
+      { label: "JSON", preferences: JSON.stringify({ roomCode: "sala-3", children: true, highChair: true, stroller: false, accessibility: false, celebration: null, animals: false }), allergies: JSON.stringify({ celiac: true, allergies: "Sintetica", intolerances: null }) },
+      { label: "escaped-envelope", preferences: JSON.stringify({ roomCode: "", children: true, highChair: false, stroller: false, accessibility: false, celebration: null, animals: false, legacyText: '"'.repeat(1000) }), allergies: JSON.stringify({ celiac: false, allergies: '"'.repeat(300), intolerances: "\\".repeat(300), legacyText: "H".repeat(1000) }) },
+    ])("preserves byte-identical legacy $label preferences/allergies without client echo", async ({ label, preferences, allergies }) => {
+      if (label === "escaped-envelope") { expect(preferences.length).toBeGreaterThan(1000); expect(allergies.length).toBeGreaterThan(1000); }
+      const reservation = await createReservation();
+      await prisma.reservation.update({ where: { id: reservation.id }, data: { preferences, allergies } });
+      for (const version of [1, 1]) {
+        await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(version, { tableIds: [] }), now });
+        await expect(prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).resolves.toMatchObject({ preferences, allergies });
+      }
+      const dto = await getStaffReservation({ actor: { ...staffActor, role: "STAFF" }, reservationId: reservation.id });
+      expect(dto).not.toHaveProperty("preferences");
+      expect(dto).not.toHaveProperty("legacyText");
+      const context = await getReservationAssignmentContext({ actor: staffActor, reservationId: reservation.id, now });
+      expect(context.reservation).not.toHaveProperty("allergies");
+      expect(context.assignment).not.toHaveProperty("preferences");
+    });
+
+    it.each(["inactive", "password", "tenant"])("rechecks %s actor before an otherwise identical stale no-op", async (guard) => {
+      const reservation = await createReservation();
+      const payload = putPayload(1, { tableIds: [] });
+      await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: payload, now });
+      const data = guard === "inactive" ? { isActive: false } : guard === "password" ? { mustChangePassword: true } : { restaurantId: otherRestaurantId };
+      await prisma.user.update({ where: { id: concurrentActorId }, data });
+      try {
+        const before = await databaseFingerprint();
+        await expect(putReservationAssignment({ actor: concurrentActor, reservationId: reservation.id, rawPayload: payload, now })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        expect(await databaseFingerprint()).toBe(before);
+      } finally {
+        await prisma.user.update({ where: { id: concurrentActorId }, data: { isActive: true, mustChangePassword: false, restaurantId } });
+      }
+    });
+
+    it("serializes competing room-only and table desired states without last-write-wins", async () => {
+      const reservation = await createReservation();
+      const results = await Promise.allSettled([[], [tableOneId]].map((tableIds) => putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(1, { tableIds }), now })));
+      expect(fulfilledCount(results)).toBe(1);
+      expect(results.find((result) => result.status === "rejected")).toMatchObject({ reason: { code: "VERSION_CONFLICT" } });
+      await expect(prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).resolves.toMatchObject({ version: 2 });
+      await expect(prisma.reservationAuditEvent.count({ where: { reservationId: reservation.id } })).resolves.toBe(1);
+    });
+
+    it.each(["create", "reactivate", "change-room", "delete", "staff-reschedule", "management-reschedule"])("rolls back room-only %s including Foundation, arrival and token on audit failure", async (operation) => {
+      const reservation = await createReservation({ origin: "PUBLIC" });
+      const token = await createPublicManagementToken(reservation.id);
+      await prisma.reservation.update({ where: { id: reservation.id }, data: { childrenCount: 2, gameRoomPreference: true, preferences: "P".repeat(1000), allergies: "H".repeat(1000) } });
+      await putReservationArrival({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: 1, arrived: true }, now });
+      let version = 2;
+      if (operation !== "create") { await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(version++, { tableIds: [] }), now }); }
+      if (operation === "reactivate") { await deleteReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: version++ }, now }); }
+      const before = await databaseFingerprint();
+      const tokenBefore = await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: reservation.id } });
+      await prisma.$executeRawUnsafe(`CREATE FUNCTION t04_all_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.restaurant_id = '${restaurantId}'::uuid AND NEW.action::text IN ('ASSIGNED','REASSIGNED','UNASSIGNED') THEN RAISE EXCEPTION 'synthetic T04 rollback'; END IF; RETURN NEW; END; $$`);
+      await prisma.$executeRawUnsafe("CREATE TRIGGER t04_all_audit_failure BEFORE INSERT ON reservation_audit_events FOR EACH ROW EXECUTE FUNCTION t04_all_audit_failure()");
+      try {
+        const mutation = operation === "delete"
+          ? deleteReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: { version }, now })
+          : operation === "staff-reschedule"
+            ? updateStaffReservation({ actor: { ...staffActor, role: "STAFF" }, reservationId: reservation.id, rawPayload: staffUpdatePayload(version, { localDate: "2099-06-17", childrenCount: 2, gameRoomPreference: true }), now })
+            : operation === "management-reschedule"
+              ? updateManagedPublicReservation({ restaurantId, rawToken: token.rawToken, rawPayload: publicUpdatePayload({ localDate: "2099-06-17", childrenCount: 2, gameRoomPreference: true }), now })
+              : putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(version, { roomId: operation === "change-room" ? roomTwoId : roomOneId, tableIds: [] }), now });
+        await expect(mutation).rejects.toThrow("synthetic T04 rollback");
+      } finally {
+        await prisma.$executeRawUnsafe("DROP TRIGGER t04_all_audit_failure ON reservation_audit_events");
+        await prisma.$executeRawUnsafe("DROP FUNCTION t04_all_audit_failure()");
+      }
+      expect(await databaseFingerprint()).toBe(before);
+      expect(await prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: reservation.id } })).toEqual(tokenBefore);
+    });
+
+    it.each(["STAFF", "MANAGEMENT"])("preserves arrived room-only on %s non-schedule composition, games and notes update", async (channel) => {
+      const reservation = await createReservation({ origin: channel === "MANAGEMENT" ? "PUBLIC" : "STAFF" });
+      const token = channel === "MANAGEMENT" ? await createPublicManagementToken(reservation.id) : null;
+      await putReservationArrival({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: 1, arrived: true }, now });
+      await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(2, { tableIds: [] }), now });
+      const before = await prisma.reservationAssignment.findUniqueOrThrow({ where: { restaurantId_reservationId: { restaurantId, reservationId: reservation.id } } });
+      const changed = { childrenCount: 2, gameRoomPreference: true, notes: "Nota Foundation sintetica aggiornata" };
+      if (token) await updateManagedPublicReservation({ restaurantId, rawToken: token.rawToken, rawPayload: publicUpdatePayload(changed), now });
+      else await updateStaffReservation({ actor: { ...staffActor, role: "STAFF" }, reservationId: reservation.id, rawPayload: staffUpdatePayload(3, changed), now });
+      expect(await prisma.reservationAssignment.findUniqueOrThrow({ where: { id: before.id } })).toEqual(before);
+      await expect(prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).resolves.toMatchObject({ version: 4, arrivedAt: now, ...changed });
+      await expect(prisma.reservationAuditEvent.count({ where: { reservationId: reservation.id, action: "UNASSIGNED" } })).resolves.toBe(0);
+    });
+
+    it.each([{ localDate: "2099-06-17" }, { serviceType: "LUNCH", arrivalTime: "12:00" }, { arrivalTime: "19:15" }])("clears room-only through canonical management reschedule %j with correlated audit/token", async (changed) => {
+      const reservation = await createReservation({ origin: "PUBLIC" });
+      const token = await createPublicManagementToken(reservation.id);
+      await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(1, { tableIds: [] }), now });
+      const dto = await updateManagedPublicReservation({ restaurantId, rawToken: token.rawToken, rawPayload: publicUpdatePayload(changed), now });
+      expect(dto).toMatchObject(changed);
+      await expect(prisma.reservation.findUniqueOrThrow({ where: { id: reservation.id } })).resolves.toMatchObject({ version: 3 });
+      expect(dto).not.toHaveProperty("assignment");
+      expect((await getReservationAssignmentContext({ actor: staffActor, reservationId: reservation.id, now })).assignment).toBeNull();
+      const audits = await prisma.reservationAuditEvent.findMany({ where: { reservationId: reservation.id, action: { in: ["UPDATED", "UNASSIGNED"] } } });
+      expect(audits).toHaveLength(2);
+      expect(new Set(audits.map(({ correlationId }) => correlationId)).size).toBe(1);
+      expect(audits.find(({ action }) => action === "UNASSIGNED")?.newState).toEqual({ assignment: null, reason: "RESERVATION_SCHEDULE_CHANGED" });
+      await expect(prisma.reservationManagementToken.findUniqueOrThrow({ where: { reservationId: reservation.id } })).resolves.toMatchObject({ tokenHash: hashManagementToken(token.rawToken), viewExpiresAt: managementViewExpiry({ localDate: dto.localDate, arrivalTime: dto.arrivalTime, timezone: "Europe/Rome", durationHours: DEFAULT_MANAGEMENT_LINK_DURATION_HOURS }) });
+    });
+
+    it("verifies real GET PUT DELETE handler contracts, strict bodies, auth, isolation, no-store and safe failures", async () => {
+      const reservation = await createReservation();
+      const handlers = { GET: getAssignmentRoute, PUT: putAssignmentRoute, DELETE: deleteAssignmentRoute };
+      const call = async (method: keyof typeof handlers, options: { id?: string; cookie?: string; origin?: string; body?: unknown; invalidJson?: boolean; contentType?: string } = {}) => {
+        const id = options.id ?? reservation.id;
+        const headers = new Headers({ cookie: options.cookie ?? staffCookie, origin: options.origin ?? "http://localhost:4000", "content-type": options.contentType ?? "application/json" });
+        const response = await handlers[method](new Request(`http://localhost:4000/api/staff/reservations/${id}/assignment`, { method, headers, ...(method === "GET" ? {} : { body: options.invalidJson ? "{" : JSON.stringify(options.body ?? (method === "PUT" ? putPayload(1, { tableIds: [] }) : { version: 1 })) }) }), { params: Promise.resolve({ id }) });
+        expect(response.headers.get("cache-control")).toBe("no-store, max-age=0");
+        return { status: response.status, body: await response.json() };
+      };
+      const passwordSession = await createSessionForUser(mustChangeId);
+      const passwordCookie = `${getSessionCookieName(getAppEnvironment())}=${passwordSession.token}`;
+      for (const method of ["GET", "PUT", "DELETE"] as const) {
+        expect(await call(method, { cookie: "" })).toEqual({ status: 401, body: { error: "Unauthorized" } });
+        expect(await call(method, { cookie: passwordCookie })).toEqual({ status: 403, body: { error: "PASSWORD_CHANGE_REQUIRED" } });
+        expect(await call(method, { id: "invalid" })).toMatchObject({ status: 400, body: { error: "Identificativo non valido." } });
+        const missing = await call(method, { id: randomUUID() });
+        expect(missing).toMatchObject({ status: 404, body: { code: "NOT_FOUND" } });
+        expect(await call(method, { cookie: otherStaffCookie })).toEqual(missing);
+      }
+      for (const method of ["PUT", "DELETE"] as const) {
+        expect(await call(method, { origin: "https://other.invalid" })).toEqual({ status: 403, body: { error: "Forbidden" } });
+        for (const options of [{ invalidJson: true }, { contentType: "text/plain" }, { body: method === "PUT" ? { ...putPayload(1, { tableIds: [] }), extra: true } : { version: 1, extra: true } }]) expect(await call(method, options)).toMatchObject({ status: 400, body: { code: "VALIDATION" } });
+      }
+      expect(await call("PUT")).toMatchObject({ status: 200, body: { changed: true, reservationVersion: 2, assignment: { tables: [] } } });
+      const context = await call("GET");
+      expect(context).toMatchObject({ status: 200, body: { reservation: { version: 2 }, assignment: { tables: [] } } });
+      expect(context.body.reservation).not.toHaveProperty("restaurantId");
+      expect(context.body.assignment).not.toHaveProperty("reservationId");
+      expect(await call("PUT")).toMatchObject({ status: 200, body: { changed: false, reservationVersion: 2 } });
+      expect(await call("PUT", { body: putPayload(1, { tableIds: [], internalNotes: "Changed stale" }) })).toMatchObject({ status: 409, body: { code: "VERSION_CONFLICT" } });
+      expect(await call("DELETE")).toMatchObject({ status: 409, body: { code: "VERSION_CONFLICT" } });
+      expect(await call("PUT", { body: putPayload(2, { roomId: unavailableRoomId, tableIds: [] }) })).toMatchObject({ status: 409, body: { code: "ROOM_UNAVAILABLE" } });
+      for (const body of [putPayload(2, { roomId: roomTwoId }), putPayload(2, { roomId: otherRoomId, tableIds: [] }), putPayload(2, { tableIds: [otherTableId] }), putPayload(2, { roomId: randomUUID(), tableIds: [] })]) expect(await call("PUT", { body })).toMatchObject({ status: 400, body: { code: "VALIDATION" } });
+      const before = await databaseFingerprint();
+      await prisma.$executeRawUnsafe(`CREATE FUNCTION t04_http_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.restaurant_id = '${restaurantId}'::uuid THEN RAISE EXCEPTION 'synthetic T04 private failure'; END IF; RETURN NEW; END; $$`);
+      await prisma.$executeRawUnsafe("CREATE TRIGGER t04_http_audit_failure BEFORE INSERT ON reservation_audit_events FOR EACH ROW EXECUTE FUNCTION t04_http_audit_failure()");
+      try {
+        for (const method of ["PUT", "DELETE"] as const) expect(await call(method, { body: method === "PUT" ? putPayload(2, { tableIds: [], internalNotes: "Real change" }) : { version: 2 } })).toEqual({ status: 500, body: { error: "Non è stato possibile gestire l'assegnazione." } });
+      } finally {
+        await prisma.$executeRawUnsafe("DROP TRIGGER t04_http_audit_failure ON reservation_audit_events");
+        await prisma.$executeRawUnsafe("DROP FUNCTION t04_http_audit_failure()");
+      }
+      // Real database read failure, restored in finally on the isolated test database.
+      await prisma.$executeRawUnsafe("ALTER TABLE rooms RENAME TO t04_http_rooms_fault");
+      try { expect(await call("GET")).toEqual({ status: 500, body: { error: "Non è stato possibile gestire l'assegnazione." } }); } finally { await prisma.$executeRawUnsafe("ALTER TABLE t04_http_rooms_fault RENAME TO rooms"); }
+      expect(await databaseFingerprint()).toBe(before);
+      expect(await call("DELETE", { body: { version: 2 } })).toEqual({ status: 200, body: { changed: true, reservationVersion: 3, assignment: null } });
+      expect(await call("DELETE")).toEqual({ status: 200, body: { changed: false, reservationVersion: 3, assignment: null } });
+    });
+
+    it("includes room-only solely in room configuration impact without materializing capacity", async () => {
+      const reservation = await createReservation();
+      await putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(1, { tableIds: [] }), now });
+      const before = await databaseFingerprint();
+      const preview = await previewRoomConfigurationChange(adminActor, { kind: "ROOM_CATALOG", roomId: roomOneId, displayOrder: 1, isActive: false }, { now });
+      expect(preview.impact).toMatchObject({ assignmentReservationCount: 1, preferenceReservationCount: 0 });
+      expect(preview.impact.items[0]?.classifications).toEqual(["ROOM_DISABLED", "RESERVATION_WITH_AFFECTED_FINAL_ASSIGNMENT"]);
+      expect(await databaseFingerprint()).toBe(before);
+      await expect(prisma.serviceInstance.count({ where: { restaurantId } })).resolves.toBe(0);
     });
 
     it("does not emit lifecycle notifications or replace reminders for assignment-only version increments", async () => {

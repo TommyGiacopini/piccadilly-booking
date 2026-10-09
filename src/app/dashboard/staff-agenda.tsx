@@ -113,7 +113,7 @@ function AgendaSummary({
       >
         <span className="font-semibold text-text-primary">Coperti per sala:</span>
         {summary.finalRoomCovers.map((room) => (
-          <span className="tabular-nums" key={room.code}>
+          <span className="min-w-0 [overflow-wrap:anywhere] tabular-nums" key={room.code}>
             {room.label}: {room.covers}
           </span>
         ))}
@@ -254,7 +254,9 @@ function ReservationAgendaRow({
                 data-testid="assigned-table-names"
               >
                 {reservation.assignment
-                  ? reservation.assignment.tableNames.join(", ")
+                  ? reservation.assignment.tableNames.length > 0
+                    ? reservation.assignment.tableNames.join(", ")
+                    : <span className="inline-flex rounded-full border border-border bg-surface-muted px-2.5 py-1 text-xs text-text-secondary">DA ASSEGNARE</span>
                   : "—"}
               </dd>
             </div>

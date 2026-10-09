@@ -9,19 +9,22 @@ M9-D ha introdotto catalogo sale/tavoli e disponibilità per servizio senza coll
 
 ## Decisione
 
+**Estensione corrente T04 Revised (Foundation A schema15):** la cardinalità originale M10 di almeno un tavolo è estesa a zero–venti. I checkpoint storici M10 restano preservati. Il contratto corrente protegge schema e migration 1–15; migration16 non richiesta. Richiesta giochi e composizione Foundation non derivano dalla sala assegnata. Nessuna policy T05 o collision detection.
+
 ### Modello e stato logico
 
 - `ReservationAssignment` è separata da `Reservation` e contiene tenant, prenotazione, sala finale, note interne, autore iniziale, ultimo autore, timestamp e `clearedAt`.
 - Esiste una sola riga per prenotazione. `clearedAt IS NULL` indica l'assegnazione corrente; la rimozione valorizza il campo e non elimina la riga.
 - Una nuova assegnazione dopo la rimozione riattiva la stessa entità, sovrascrive sala, tavoli e note e preserva `assignedByUserId`.
-- `ReservationAssignmentTable` collega da uno a venti tavoli distinti all'assegnazione. Chiavi composte garantiscono tenant, sala finale e appartenenza del tavolo; i dati di dominio usano `ON DELETE RESTRICT`.
+- `ReservationAssignmentTable` collega da zero a venti tavoli distinti all'assegnazione corrente T04 Revised. Chiavi composte garantiscono tenant, sala finale e appartenenza del tavolo; i dati di dominio usano `ON DELETE RESTRICT`.
+- UNASSIGNED (assente/cleared), ROOM_ONLY (attiva con sala e zero link), ROOM_AND_TABLES (attiva con tavoli) sono derivati. Room-only conta assegnata nei filtri/riepiloghi; nessun enum DB.
 - `DA ASSEGNARE` non è persistita e deriva dall'assenza di assegnazione attiva. Non esiste relazione tra `Reservation` e `ServiceInstance` e non viene eseguito backfill.
 - I posti minimi/massimi sono restituiti come informazioni operative ma non partecipano alla validazione. Lo stesso tavolo può comparire in assegnazioni diverse.
 - Le note interne accettano al massimo 1.000 code point, non entrano nei DTO pubblici e non vengono copiate nell'audit.
 
 ### Comandi e lettura
 
-M10-A espone soltanto `GET`, `PUT` e `DELETE /api/staff/reservations/:id/assignment`. `PUT` accetta esclusivamente versione, sala, da uno a venti UUID tavolo distinti e note opzionali/null; `DELETE` accetta esclusivamente la versione. Gli UUID tavolo sono trattati come insieme ordinato deterministicamente.
+M10-A espone soltanto GET, PUT e DELETE /api/staff/reservations/:id/assignment. Il PUT corrente T04 Revised accetta esclusivamente versione positiva, sala UUID obbligatoria, zero–venti UUID tavolo distinti e note opzionali/null; DELETE mantiene la versione strict. Tavoli ordinati deterministicamente. All'apertura il pannello carica tavoli/note persistiti; solo cambio sala esplicito resetta visibilmente tavoli. Rimuovere tutti i tavoli è locale e salva room-only, distinto dal DELETE logico completo. Il repository evita createMany vuoti; schema e migration 1–15 restano invariati.
 
 La GET è read-only: rilegge l'attore e il tenant, restituisce versione prenotazione, preferenza originaria separata, assegnazione attiva o `null`, catalogo operativo con posti minimi/massimi e flag di riferimenti inattivi o indisponibili. Non materializza istanze e non crea audit.
 
@@ -44,12 +47,12 @@ Le mutazioni usano transazioni `SERIALIZABLE` con retry sui conflitti. L'ordine 
 2. lock della configurazione operativa del tenant;
 3. lock di capacità per tenant, data e servizio;
 4. rilettura di attore, prenotazione, assegnazione, sala e tavoli;
-5. verifica di `Reservation.version`;
+5. guard CONFIRMED e confronto desired state; no-op anche stale/grandfathered; solo per cambi reali verifica di Reservation.version e nuovi riferimenti;
 6. mutazione, incremento versione e `updatedAt`;
 7. audit;
 8. commit.
 
-Il confronto dei tavoli è indipendente dall'ordine. Un payload invariato e la rimozione di un'assegnazione già assente sono no-op: non cambiano versione o timestamp e non creano audit. Due mutazioni concorrenti con la stessa versione hanno un solo vincitore.
+Equality è indipendente dall'ordine tavoli e include sala/note. Auth, tenant e CONFIRMED precedono il no-op; desired identico e DELETE già assente sono no-op prima della versione, senza write/timestamp/audit anche stale. Due desired identici concorrenti producono una mutation/audit e un no-op; diversi un vincitore e VERSION_CONFLICT. SERIALIZABLE, retry soltanto transient, maxWait10000, timeout20000 e lock canonici restano invariati; nessun table lock nuovo. HTTP409 richiede reload esplicito senza mutation automatica. Audit minimale supporta tableIds=[] e tableCount=0, è atomico e failure annulla tutto; note testuali, PII e health data restano esclusi.
 
 `ReservationAuditEvent` aggiunge `ASSIGNED`, `REASSIGNED` e `UNASSIGNED`. Prima assegnazione e riattivazione usano `ASSIGNED`, modifica attiva usa `REASSIGNED`, rimozione usa `UNASSIGNED`. Gli snapshot contengono soltanto codice sala finale, UUID tavolo ordinati, conteggio tavoli e presenza delle note; l'assenza è `assignment: null`. Il clear automatico per reschedule aggiunge la sola motivazione canonica `RESERVATION_SCHEDULE_CHANGED`, con lo stesso correlation ID dell'audit `UPDATED` e ordine deterministico. Mutazione e audit condividono la transazione e la versione della prenotazione cresce una sola volta.
 

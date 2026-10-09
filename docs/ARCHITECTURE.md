@@ -303,7 +303,7 @@ Questa è una destinazione architetturale. Le cartelle saranno create solo nelle
 | `reservation_consents` | Tipo, versione informativa, modalità, data/ora e utente che ha raccolto il consenso |
 | `public_access_tokens` | Solo hash del token, scadenza e revoca |
 | `reservation_assignments` | Sala definitiva, note interne, autore e timestamp |
-| `assignment_tables` | Relazione tra assegnazione e uno o più tavoli |
+| `assignment_tables` | Relazione tra assegnazione e zero–venti tavoli |
 | `capacity_overrides` | Motivazione, autore, limite e totale risultante |
 
 Per una prenotazione telefonica il consenso registra almeno origine `PHONE`, versione dell'informativa, consenso verbale, data/ora e utente Staff o Admin che l'ha inserita.
@@ -483,6 +483,12 @@ Il repository di dettaglio seleziona un singolo record per sorgente, UUID e tena
 ### 12.5 Assegnazione
 
 L'assegnazione può avvenire in qualsiasi momento. Le 17:30 sono un riferimento operativo, non un vincolo tecnico. Sala definitiva, tavoli e note interne vengono salvati separatamente dalla preferenza originale e ogni modifica viene registrata.
+
+T04 Revised estende l'assegnazione corrente sulla Foundation A schema15: sala obbligatoria e 0–20 tavoli. UNASSIGNED (assente/cleared), ROOM_ONLY (attiva senza link) e ROOM_AND_TABLES (attiva con link) sono derivati, senza enum o nuovo modello. Schema e migration 1–15 restano protetti, migration16 non richiesta. Il DTO/query Dashboard esistente rappresenta room-only con assignment non null, tableNames=[] e tableCount=0: conta assegnata e contribuisce ai coperti della sala finale. Il summary dei soli CONFIRMED mantiene confirmed=assigned+unassigned; le cancellate restano escluse.
+
+PUT desired state comprende sala, insieme ordinato tavoli e note. Dopo strict parse, lock, rilettura attore/tenant e guard CONFIRMED, equality precede versione e nuovi riferimenti: un no-op anche stale/grandfathered non scrive, non aggiorna timestamp/versione e non genera audit. Due PUT identiche concorrenti producono una mutation e un no-op; differenti con versione iniziale uguale hanno un vincitore e VERSION_CONFLICT. SERIALIZABLE, retry transitori e ordine lock prenotazione → configurazione → capacità restano invariati. CreateMany è condizionale per set non vuoto; clear è logico e audit ASSIGNED/REASSIGNED/UNASSIGNED atomico, con snapshot minimale anche count0.
+
+Il pannello carica tavoli/note persistiti; il cambio sala esplicito azzera visibilmente i tavoli preservando le note. Rimozione locale tavoli e DELETE assignment restano distinti. Zero tavoli configurati non blocca room-only. HTTP409 richiede reload esplicito senza mutation automatica. Preferenza storica di sala, richiesta giochi e composizione Foundation restano indipendenti dalla sala finale. Arrival T03, raw legacy, Public/PHONE/edit/management, notifiche, capacità ed export mantengono i contratti canonici. Nessuna collision detection o policy T05.
 
 M10-A, approvata tecnicamente da Work, espone una lettura strettamente read-only e comandi espliciti di assegnazione/riassegnazione/rimozione per Staff e Admin. Le correzioni storiche verificano riferimenti attivi senza ricostruire disponibilità passate; per servizi correnti o futuri una nuova sala deve essere effettivamente disponibile. I posti dei tavoli non bloccano e lo stesso tavolo può essere riutilizzato da prenotazioni diverse.
 

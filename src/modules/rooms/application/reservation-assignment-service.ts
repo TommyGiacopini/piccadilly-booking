@@ -146,12 +146,6 @@ function activeAssignmentDto(
   rooms: AssignmentRoomDto[],
 ): ActiveReservationAssignmentDto | null {
   if (!assignment || assignment.clearedAt !== null) return null;
-  if (assignment.tables.length === 0) {
-    throw new ReservationAssignmentError(
-      "INVARIANT",
-      "L'assegnazione attiva non contiene tavoli.",
-    );
-  }
 
   const room = rooms.find((candidate) => candidate.id === assignment.roomId);
   if (!room) {
@@ -377,12 +371,6 @@ export async function clearReservationAssignmentForScheduleChange(
     reservationId: input.reservationId,
   });
   if (!assignment || assignment.clearedAt !== null) return false;
-  if (assignment.tables.length === 0) {
-    throw new ReservationAssignmentError(
-      "INVARIANT",
-      "L'assegnazione attiva non contiene tavoli.",
-    );
-  }
 
   await clearReservationAssignment(client, {
     assignmentId: assignment.id,
@@ -523,13 +511,6 @@ export async function putReservationAssignment(input: {
       now,
     });
     assertConfirmed(state.reservation);
-    assertVersion(state.reservation, command.version);
-    const { roomCode } = assertNewReferences({
-      command,
-      current: state.assignment,
-      catalog: state.catalog,
-      availability: state.availability,
-    });
     const activeCurrent =
       state.assignment?.clearedAt === null ? state.assignment : null;
     if (
@@ -553,6 +534,13 @@ export async function putReservationAssignment(input: {
       };
     }
 
+    assertVersion(state.reservation, command.version);
+    const { roomCode } = assertNewReferences({
+      command,
+      current: state.assignment,
+      catalog: state.catalog,
+      availability: state.availability,
+    });
     const updatedReservation = await incrementReservationAssignmentVersion(
       client,
       {
