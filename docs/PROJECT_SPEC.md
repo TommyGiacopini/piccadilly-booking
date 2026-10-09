@@ -645,6 +645,14 @@ La preferenza originale del cliente deve restare visibile.
 
 ### Fondazione M10-A
 
+**Estensione corrente T04 Revised:** sulla Foundation A schema15 la sala è obbligatoria e i tavoli sono zero–venti distinti della stessa sala. Questa estensione prevale sulla cardinalità storica M10-A descritta sotto, preservandone i checkpoint. Schema e migration 1–15 invariati, migration16 non richiesta. UNASSIGNED deriva da assignment assente/cleared; ROOM_ONLY da attiva con zero link; ROOM_AND_TABLES da attiva con 1–20 link. Nessun nuovo enum database.
+
+L'Agenda mostra UNASSIGNED con sala DA ASSEGNARE e tavolo —; ROOM_ONLY con sala reale e tavolo DA ASSEGNARE neutro. Room-only conta assigned e nei coperti della sala finale. Summary CONFIRMED: confirmed=assigned+unassigned, unassignedCovers somma solo non assegnate; CANCELLED escluse.
+
+GET/PUT/DELETE canoniche preservano sicurezza, no-store e Reservation.version. PUT include room, table set e note. Il pannello carica tavoli/note persistiti; cambio sala esplicito azzera visibilmente tavoli preservando note. Rimuovi tutti i tavoli cambia solo il form e il PUT salva room-only; Rimuovi assegnazione usa DELETE logico e conserva storia. Una sala senza tavoli configurati non blocca il salvataggio. La copy è Preferenza storica di sala, assente Non specificata, distinta dalla richiesta giochi.
+
+Un desired identico è no-op dopo auth/tenant/CONFIRMED ma prima di versione/nuovi riferimenti anche stale/grandfathered: zero write/timestamp/audit. Due PUT identiche concorrenti producono una write/no-op; differenti hanno un vincitore/conflitto. Audit ASSIGNED/REASSIGNED/UNASSIGNED atomico ammette zero tavoli e allow-list minimale codice sala, UUID/count e presenza note; failure annulla la transazione. Reschedule reale clear logico, cancellazione conserva history e impedisce PUT/DELETE anche identici. Composizione unknown/adulti/bambini, badge SALA GIOCHI RICHIESTA, arrival e raw legacy restano indipendenti. Same-table reuse ammesso; nessuna collision detection, seats capacity, auto-assignment o policy T05.
+
 M10-A, approvata tecnicamente da Work, introduce soltanto persistenza, dominio, servizio applicativo e API Staff/Admin, senza dashboard o altri componenti UI. Ogni prenotazione può avere al massimo una assegnazione logica corrente, separata dalla preferenza originaria. Una assegnazione attiva richiede una sala finale e da uno a venti tavoli distinti appartenenti a quella sala; `DA ASSEGNARE` continua a derivare dall'assenza di assegnazione attiva.
 
 La rimozione è esplicita e logica. Una successiva assegnazione riattiva la stessa entità persistente, preserva l'autore iniziale e registra l'ultimo autore. Non viene eseguito backfill delle prenotazioni e non viene introdotta alcuna relazione con `ServiceInstance`.

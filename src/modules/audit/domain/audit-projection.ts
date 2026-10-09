@@ -82,9 +82,9 @@ const actionLabels: Record<AuditListAction, string> = {
   CREATED: "Prenotazione creata",
   UPDATED: "Prenotazione aggiornata",
   CANCELLED: "Prenotazione cancellata",
-  ASSIGNED: "Sala e tavoli assegnati",
-  REASSIGNED: "Assegnazione sala e tavoli aggiornata",
-  UNASSIGNED: "Assegnazione sala e tavoli rimossa",
+  ASSIGNED: "Sala assegnata",
+  REASSIGNED: "Assegnazione sala/tavoli aggiornata",
+  UNASSIGNED: "Assegnazione rimossa",
   ARRIVAL_RECORDED: "Arrivo registrato",
   ARRIVAL_REVERTED: "Arrivo annullato",
   LOGIN_SUCCEEDED: "Accesso riuscito",
@@ -205,7 +205,7 @@ function enumArrayParser(values: readonly string[]): ValueParser {
 }
 
 function uuidArrayParser(value: unknown): SafeValue | null {
-  const parsed = z.array(z.uuid()).min(1).max(20).safeParse(value);
+  const parsed = z.array(z.uuid()).max(20).safeParse(value);
   if (!parsed.success || new Set(parsed.data).size !== parsed.data.length) {
     return null;
   }
@@ -272,7 +272,7 @@ const reservationRules = [
 const reservationAssignmentRules = [
   rule("assignment.finalRoomCode", "Sala finale", roomCode),
   rule("assignment.tableIds", "ID tavoli", uuidArrayParser),
-  rule("assignment.tableCount", "Numero tavoli", positiveCount),
+  rule("assignment.tableCount", "Numero tavoli", count),
   rule("assignment.internalNotesPresent", "Note interne presenti", bool),
   rule(
     "reason",

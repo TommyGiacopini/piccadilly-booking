@@ -7,6 +7,7 @@ import {
   deleteReservationAssignmentSchema,
   putReservationAssignmentSchema,
   reservationAssignmentAuditSnapshot,
+  reservationAssignmentStatesEqual,
 } from "@/modules/rooms/domain/reservation-assignment";
 
 function validPut(overrides: Record<string, unknown> = {}) {
@@ -64,14 +65,17 @@ describe("reservation assignment domain", () => {
     ).toBe(false);
   });
 
-  it("requires at least one distinct table and normalizes order", () => {
+  it("allows zero to twenty distinct tables and normalizes order", () => {
     const first = randomUUID();
     const second = randomUUID();
 
     expect(
       putReservationAssignmentSchema.safeParse(validPut({ tableIds: [] }))
         .success,
-    ).toBe(false);
+    ).toBe(true);
+    expect(putReservationAssignmentSchema.safeParse(validPut({ tableIds: Array.from({ length: 20 }, () => randomUUID()) })).success).toBe(true);
+    expect(putReservationAssignmentSchema.safeParse(validPut({ roomId: null, tableIds: [] })).success).toBe(false);
+    expect(putReservationAssignmentSchema.safeParse(validPut({ tableIds: ["invalid"] })).success).toBe(false);
     expect(
       putReservationAssignmentSchema.safeParse(
         validPut({ tableIds: [first, first] }),
@@ -133,5 +137,14 @@ describe("reservation assignment domain", () => {
     expect(reservationAssignmentAuditSnapshot(null)).toEqual({
       assignment: null,
     });
+  });
+
+  it("preserves room-only audit and equality including notes", () => {
+    const roomId = randomUUID();
+    const current = { roomId, tableIds: [], internalNotes: null };
+    expect(reservationAssignmentAuditSnapshot({ finalRoomCode: "sala-1", tableIds: [], internalNotes: null })).toEqual({ assignment: { finalRoomCode: "sala-1", tableIds: [], tableCount: 0, internalNotesPresent: false } });
+    expect(reservationAssignmentStatesEqual(current, current)).toBe(true);
+    expect(reservationAssignmentStatesEqual(current, { ...current, internalNotes: "Nota sintetica" })).toBe(false);
+    expect(reservationAssignmentStatesEqual(current, { ...current, tableIds: [randomUUID()] })).toBe(false);
   });
 });

@@ -395,6 +395,14 @@ reale conserva il testo storico nel solo envelope storage. Le nuove create non
 inventano legacyText. Hash idempotency, audit minimizzato, esposizione Public,
 notifiche, export, assignment e arrival non cambiano.
 
+### D-044 — T04 Revised: assegnazione di sola sala sulla Foundation A
+
+Il contratto corrente estende D-037/M10 alla sala obbligatoria con zero–venti tavoli distinti. Room-only è assegnata, contribuisce ai coperti della sala finale e mostra tavoli DA ASSEGNARE neutro. Assignment assente/cleared resta non assegnata. Il cambio sala esplicito resetta visibilmente i tavoli senza cancellare note; rimuovere tutti i tavoli è locale e il PUT conserva la sala, mentre DELETE rimuove logicamente l'assegnazione. La riattivazione riusa entità e autore iniziale.
+
+Auth, tenant e CONFIRMED precedono ogni no-op. Equality comprende sala, table set e note e precede versione/nuovi riferimenti: stale identical no-op non modifica versione, timestamp o audit. Due desired identici concorrenti convergono con una sola mutation/audit/version+1; differenti hanno un vincitore e VERSION_CONFLICT. Lock, SERIALIZABLE e retry canonici restano invariati. Audit minimizzato è atomico e ammette tableIds=[]/tableCount=0.
+
+Richiesta giochi Foundation, composizione nullable unknown e preferenza storica di sala sono distinte dall'assegnazione operativa. Raw legacy, arrival T03 e tutti i flussi Foundation restano preservati. Schema e migration 1–15 invariati: nessuna migration16, nuova route, DTO parallelo, collision detection, policy T05, notifica o Render. Riferimento: ADR 011, estensione corrente T04 Revised. Implementazione locale soggetta a gate funzionali e Work Final QG; nessuna autorizzazione alla pubblicazione Git.
+
 ## 3. Decisioni reversibili
 
 Le seguenti scelte possono cambiare senza alterare il dominio, purché il cambiamento venga testato e documentato:

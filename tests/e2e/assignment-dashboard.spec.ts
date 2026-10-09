@@ -224,7 +224,7 @@ function reservationCard(page: Page, reservationId: string): Locator {
 async function openAssignment(card: Locator) {
   await card
     .getByRole("button", {
-      name: /Assegna sala e tavoli|Gestisci assegnazione/u,
+      name: /^(?:Assegna sala|Gestisci assegnazione)$/u,
     })
     .click();
   const dialog = card.page().getByTestId("assignment-dialog");

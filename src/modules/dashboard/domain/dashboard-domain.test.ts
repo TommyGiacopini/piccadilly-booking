@@ -220,6 +220,21 @@ describe("M8 dashboard domain", () => {
     ).toHaveLength(0);
   });
 
+  it("counts room-only as assigned with zero tables, independently of arrival and cancellation", () => {
+    const arrivedAt = new Date("2026-08-10T17:15:00.000Z");
+    const rows = [source({ arrivedAt }, assignment({ tables: [] })), source({}, null), source({ status: "CANCELLED", partySize: 9 }, assignment({ tables: [] }))];
+    const filters = { service: "ALL", status: "CONFIRMED", origin: "ALL", assignment: "ASSIGNED", finalRoom: "sala-2" } as const;
+    expect(filterDashboardReservations(rows, filters)).toEqual([rows[0]]);
+    expect(filterDashboardReservations(rows, { ...filters, assignment: "UNASSIGNED", finalRoom: "ALL" })).toEqual([rows[1]]);
+    const row = toDashboardReservation(rows[0], new Map(rooms.map(({ code, name }) => [code, name])), null);
+    expect(row.assignment).toMatchObject({ roomName: "Sala 2", tableNames: [], tableCount: 0 });
+    expect(row.arrivedAt).toBe(arrivedAt.toISOString());
+    const summary = aggregateDashboard(rows, rooms);
+    expect(summary).toMatchObject({ confirmedReservations: 2, assignedReservations: 1, unassignedReservations: 1, unassignedCovers: 2, arrivedCovers: 2, expectedCovers: 2 });
+    expect(summary.confirmedReservations).toBe(summary.assignedReservations + summary.unassignedReservations);
+    expect(summary.finalRoomCovers).toContainEqual({ code: "sala-2", label: "Sala 2", covers: 2 });
+  });
+
   it("partitions confirmed covers by arrival and excludes cancelled rows", () => {
     const rows = [
       source({ arrivedAt: new Date("2026-08-10T17:15:00.000Z") }, assignment()),

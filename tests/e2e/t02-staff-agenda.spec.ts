@@ -247,7 +247,7 @@ test.describe.serial("T02 Staff Agenda", () => {
         `article[data-reservation-id="${oldest.id}"]`,
       );
       await expect(
-        oldestCard.getByRole("button", { name: "Assegna sala e tavoli" }),
+        oldestCard.getByRole("button", { name: "Assegna sala", exact: true }),
       ).toBeVisible();
       await expect(oldestCard.getByTestId("unassigned-badge")).toHaveText(
         "DA ASSEGNARE",

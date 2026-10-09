@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   AssignmentRoomDto,
@@ -50,6 +50,63 @@ export function ReservationAssignmentPanel(props: {
   const [conflict, setConflict] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [tablesReset, setTablesReset] = useState(false);
+  const submittingRef = useRef(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    const trigger = triggerRef.current;
+    dialog?.querySelector<HTMLButtonElement>("button")?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !submittingRef.current) {
+        event.preventDefault();
+        setOpen(false);
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const controls = [...dialog.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), select:not(:disabled), textarea:not(:disabled), input:not(:disabled)',
+      )];
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (!first) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      if (!controls.includes(document.activeElement as HTMLElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      trigger?.focus();
+    };
+  }, [open]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!open || !dialog) return;
+    if (dialogError && !loading && !submitting) {
+      errorRef.current?.focus();
+    } else if (!dialog.contains(document.activeElement)) {
+      dialog.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
+      if (!dialog.contains(document.activeElement)) dialog.focus();
+    }
+  }, [open, dialogError, loading, submitting]);
 
   function applyContext(next: ReservationAssignmentContextDto) {
     setContext(next);
@@ -57,6 +114,7 @@ export function ReservationAssignmentPanel(props: {
     setSelectedTableIds(next.assignment?.tables.map((table) => table.id) ?? []);
     setInternalNotes(next.assignment?.internalNotes ?? "");
     setConfirmingClear(false);
+    setTablesReset(false);
   }
 
   async function readContext(): Promise<ReservationAssignmentContextDto> {
@@ -136,7 +194,8 @@ export function ReservationAssignmentPanel(props: {
   }
 
   async function saveAssignment() {
-    if (!context) return;
+    if (!context || !canSave || submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setDialogError(null);
     setConflict(false);
@@ -175,12 +234,14 @@ export function ReservationAssignmentPanel(props: {
     } catch {
       setDialogError("Errore di rete. La scelta non è stata salvata.");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
 
   async function clearAssignment() {
-    if (!context?.assignment) return;
+    if (!context?.assignment || submittingRef.current || conflict) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setDialogError(null);
     setConflict(false);
@@ -212,6 +273,7 @@ export function ReservationAssignmentPanel(props: {
     } catch {
       setDialogError("Errore di rete. L'assegnazione non è stata rimossa.");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -225,13 +287,14 @@ export function ReservationAssignmentPanel(props: {
   );
   const noteCodePoints = codePointLength(internalNotes);
   const validTableCount =
-    selectedTableIds.length >= 1 && selectedTableIds.length <= 20;
+    selectedTableIds.length <= 20;
   const canSave =
     context?.reservation.status === "CONFIRMED" &&
     selectedRoom !== undefined &&
+    roomCanBeSelected(selectedRoom) &&
     validTableCount &&
     noteCodePoints <= 1_000 &&
-    !submitting;
+    !submitting && !loading && !conflict;
 
   function roomCanBeSelected(room: AssignmentRoomDto): boolean {
     if (room.id === currentRoomId) return true;
@@ -243,12 +306,10 @@ export function ReservationAssignmentPanel(props: {
   }
 
   function changeRoom(roomId: string) {
+    if (roomId === selectedRoomId) return;
     setSelectedRoomId(roomId);
-    setSelectedTableIds(
-      roomId === currentRoomId
-        ? (context?.assignment?.tables.map((table) => table.id) ?? [])
-        : [],
-    );
+    setSelectedTableIds([]);
+    setTablesReset(true);
   }
 
   function toggleTable(tableId: string) {
@@ -264,6 +325,7 @@ export function ReservationAssignmentPanel(props: {
   return (
     <div className="mt-4">
       <button
+        ref={triggerRef}
         className="min-h-11 rounded-lg border border-orange-300 bg-orange-50 px-4 py-2 text-sm font-black text-orange-950 transition hover:bg-orange-100 focus:outline-none focus:ring-4 focus:ring-orange-200"
         onClick={() => void openPanel()}
         type="button"
@@ -272,7 +334,7 @@ export function ReservationAssignmentPanel(props: {
           ? "Vedi assegnazione storica"
           : props.hasAssignment
             ? "Gestisci assegnazione"
-            : "Assegna sala e tavoli"}
+            : "Assegna sala"}
       </button>
 
       {statusMessage ? (
@@ -283,15 +345,19 @@ export function ReservationAssignmentPanel(props: {
 
       {open ? (
         <div
+          ref={dialogRef}
+          aria-busy={loading || submitting}
+          aria-describedby={dialogError ? `assignment-error-${props.reservationId}` : undefined}
           aria-labelledby={`assignment-title-${props.reservationId}`}
           aria-modal="true"
-          className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950/70 p-3 sm:p-6"
+          className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950/70 p-3 [overflow-wrap:anywhere] sm:p-6"
           data-testid="assignment-dialog"
           role="dialog"
+          tabIndex={-1}
         >
           <div className="mx-auto my-2 w-full max-w-3xl rounded-2xl bg-white p-5 shadow-2xl sm:my-8 sm:p-7">
             <div className="flex items-start justify-between gap-4">
-              <div>
+              <div className="min-w-0">
                 <p className="text-xs font-black tracking-widest text-orange-600 uppercase">
                   Collocazione operativa
                 </p>
@@ -322,7 +388,7 @@ export function ReservationAssignmentPanel(props: {
                 <section className="grid gap-3 rounded-xl border border-zinc-200 p-4 sm:grid-cols-2">
                   <div>
                     <p className="text-xs font-black text-zinc-500 uppercase">
-                      Preferenza cliente
+                      Preferenza storica di sala
                     </p>
                     <p className="mt-1 font-black text-zinc-950">
                       {context.reservation.originalRoomPreference.roomName ??
@@ -330,7 +396,7 @@ export function ReservationAssignmentPanel(props: {
                         (context.reservation.originalRoomPreference
                           .legacyPreferencePresent
                           ? "Preferenza storica"
-                          : "Non indicata")}
+                          : "Non specificata")}
                     </p>
                   </div>
                   <div>
@@ -373,7 +439,7 @@ export function ReservationAssignmentPanel(props: {
                           Sala definitiva: {context.assignment.room.name}
                         </p>
                         <p className="text-sm font-bold text-zinc-700">
-                          Tavoli: {context.assignment.tables.map((table) => table.name).join(", ")}
+                          Tavoli: {context.assignment.tables.map((table) => table.name).join(", ") || "DA ASSEGNARE"}
                         </p>
                         <p className="whitespace-pre-wrap text-sm text-zinc-700">
                           <strong>Note interne:</strong>{" "}
@@ -393,6 +459,7 @@ export function ReservationAssignmentPanel(props: {
                       <select
                         className="mt-2 block min-h-12 w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-base outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
                         data-testid="assignment-room-select"
+                        disabled={submitting || conflict}
                         onChange={(event) => changeRoom(event.target.value)}
                         value={selectedRoomId}
                       >
@@ -417,17 +484,30 @@ export function ReservationAssignmentPanel(props: {
                       </select>
                     </label>
 
-                    <fieldset className="rounded-xl border border-zinc-200 p-4">
+                    <fieldset className="min-w-0 rounded-xl border border-zinc-200 p-4" aria-describedby={`assignment-tables-help-${props.reservationId}`}>
                       <legend className="px-1 font-black text-zinc-950">
-                        Tavoli · scelta manuale ({selectedTableIds.length}/20)
+                        Tavoli · opzionale ({selectedTableIds.length}/20)
                       </legend>
+                      <p className="text-sm text-text-secondary" id={`assignment-tables-help-${props.reservationId}`}>
+                        Puoi salvare la sala ora e aggiungere i tavoli più tardi.
+                      </p>
+                      {tablesReset ? (
+                        <p className="mt-2 text-sm text-text-secondary" role="status">
+                          Sala cambiata: la selezione tavoli è stata azzerata. I tavoli precedenti non saranno mantenuti al salvataggio.
+                        </p>
+                      ) : null}
+                      {selectedTableIds.length > 0 ? (
+                        <button className="mt-3 min-h-11 rounded-lg border border-border bg-surface-muted px-3 py-2 text-sm text-text-secondary focus:outline-none focus:ring-4 focus:ring-orange-200" disabled={submitting || conflict} onClick={() => setSelectedTableIds([])} type="button">
+                          Rimuovi tutti i tavoli
+                        </button>
+                      ) : null}
                       {!selectedRoom ? (
                         <p className="mt-3 text-sm font-bold text-zinc-500">
                           Seleziona prima la sala definitiva.
                         </p>
                       ) : selectedRoom.tables.length === 0 ? (
-                        <p className="mt-3 text-sm font-bold text-red-700">
-                          La sala non contiene tavoli configurati.
+                        <p className="mt-3 text-sm text-text-secondary">
+                          Nessun tavolo configurato. Puoi salvare la sala senza tavoli.
                         </p>
                       ) : (
                         <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -449,11 +529,11 @@ export function ReservationAssignmentPanel(props: {
                                 <input
                                   checked={selected}
                                   className="mt-1 size-5 accent-orange-600"
-                                  disabled={!selectable || (!selected && selectedTableIds.length >= 20)}
+                                  disabled={submitting || conflict || !selectable || (!selected && selectedTableIds.length >= 20)}
                                   onChange={() => toggleTable(table.id)}
                                   type="checkbox"
                                 />
-                                <span>
+                                <span className="min-w-0">
                                   <span className="block font-black text-zinc-950">
                                     {table.name}
                                     {!table.isActive ? " · inattivo" : ""}
@@ -474,11 +554,15 @@ export function ReservationAssignmentPanel(props: {
                       <textarea
                         className="mt-2 block min-h-28 w-full rounded-xl border border-zinc-300 px-4 py-3 text-base outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-100"
                         data-testid="assignment-internal-notes"
+                        disabled={submitting || conflict}
+                        aria-describedby={`assignment-notes-help-${props.reservationId}`}
+                        aria-invalid={noteCodePoints > 1_000}
                         onChange={(event) => setInternalNotes(event.target.value)}
                         rows={4}
                         value={internalNotes}
                       />
                       <span
+                        id={`assignment-notes-help-${props.reservationId}`}
                         className={`mt-1 block text-xs font-bold ${noteCodePoints > 1_000 ? "text-red-700" : "text-zinc-500"}`}
                       >
                         {noteCodePoints}/1000 caratteri Unicode. Non sono note visibili al cliente.
@@ -487,13 +571,13 @@ export function ReservationAssignmentPanel(props: {
 
                     {!validTableCount && selectedRoom ? (
                       <p className="text-sm font-bold text-red-700" role="alert">
-                        Seleziona da 1 a 20 tavoli distinti.
+                        Seleziona al massimo 20 tavoli distinti.
                       </p>
                     ) : null}
 
                     <div className="flex flex-wrap gap-3 border-t border-zinc-200 pt-5">
                       <button
-                        className="min-h-12 rounded-xl bg-orange-500 px-5 py-3 font-black text-white hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-200 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="min-h-12 rounded-xl bg-orange-500 px-5 py-3 font-black text-zinc-950 hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-200 disabled:cursor-not-allowed disabled:opacity-50"
                         data-testid="assignment-save"
                         disabled={!canSave}
                         onClick={() => void saveAssignment()}
@@ -505,7 +589,7 @@ export function ReservationAssignmentPanel(props: {
                       {context.assignment && !confirmingClear ? (
                         <button
                           className="min-h-12 rounded-xl border border-red-300 px-5 py-3 font-black text-red-700 hover:bg-red-50 focus:outline-none focus:ring-4 focus:ring-red-100"
-                          disabled={submitting}
+                          disabled={submitting || conflict}
                           onClick={() => setConfirmingClear(true)}
                           type="button"
                         >
@@ -520,7 +604,7 @@ export function ReservationAssignmentPanel(props: {
                           Confermi la rimozione logica dell&apos;assegnazione?
                         </p>
                         <p className="mt-1 text-sm text-red-800">
-                          La preferenza cliente resterà invariata.
+                          La preferenza storica di sala resterà invariata.
                         </p>
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button
@@ -549,12 +633,13 @@ export function ReservationAssignmentPanel(props: {
             ) : null}
 
             {dialogError ? (
-              <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800" role="alert">
+              <div ref={errorRef} id={`assignment-error-${props.reservationId}`} tabIndex={-1} className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-800 outline-none focus:ring-4 focus:ring-red-100" role="alert">
                 <p>{dialogError}</p>
                 {conflict ? (
                   <button
                     className="mt-3 min-h-11 rounded-lg bg-zinc-950 px-4 py-2 font-black text-white focus:outline-none focus:ring-4 focus:ring-orange-200"
                     data-testid="assignment-reload-conflict"
+                    disabled={loading || submitting}
                     onClick={() => void reloadAfterConflict()}
                     type="button"
                   >

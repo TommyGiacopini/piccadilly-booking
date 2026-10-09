@@ -220,14 +220,16 @@ export async function createReservationAssignment(
       updatedAt: input.now,
     },
   });
-  await client.reservationAssignmentTable.createMany({
-    data: input.command.tableIds.map((diningTableId) => ({
-      restaurantId: input.restaurantId,
-      assignmentId: assignment.id,
-      roomId: input.command.roomId,
-      diningTableId,
-    })),
-  });
+  if (input.command.tableIds.length > 0) {
+    await client.reservationAssignmentTable.createMany({
+      data: input.command.tableIds.map((diningTableId) => ({
+        restaurantId: input.restaurantId,
+        assignmentId: assignment.id,
+        roomId: input.command.roomId,
+        diningTableId,
+      })),
+    });
+  }
   return assignment;
 }
 
@@ -268,7 +270,7 @@ export async function updateReservationAssignment(
     throw new Error("Reservation assignment update invariant failed.");
   }
 
-  if (input.replaceTables) {
+  if (input.replaceTables && input.command.tableIds.length > 0) {
     await client.reservationAssignmentTable.createMany({
       data: input.command.tableIds.map((diningTableId) => ({
         restaurantId: input.restaurantId,

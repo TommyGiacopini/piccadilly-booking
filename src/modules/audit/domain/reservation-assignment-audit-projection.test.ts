@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import { projectAuditDetail } from "@/modules/audit/domain/audit-projection";
 
 describe("M10-A reservation assignment audit projection", () => {
-  it.each(["ASSIGNED", "REASSIGNED", "UNASSIGNED"] as const)(
-    "allow-lists and safely projects %s",
-    (action) => {
+  it.each((["ASSIGNED", "REASSIGNED", "UNASSIGNED"] as const).flatMap((action) => [false, true].map((roomOnly) => ({ action, roomOnly }))))(
+    "allow-lists and safely projects $action (room-only=$roomOnly)",
+    ({ action, roomOnly }) => {
       const first = randomUUID();
       const second = randomUUID();
       const detail = projectAuditDetail({
@@ -43,8 +43,8 @@ describe("M10-A reservation assignment audit projection", () => {
               ? null
               : {
                   finalRoomCode: "sala-1",
-                  tableIds: [second, first],
-                  tableCount: 2,
+                  tableIds: roomOnly ? [] : [second, first],
+                  tableCount: roomOnly ? 0 : 2,
                   internalNotesPresent: true,
                   internalNotes: "Testo fittizio vietato",
                   customerPhone: "+39 000 000 9999",
@@ -72,6 +72,8 @@ describe("M10-A reservation assignment audit projection", () => {
       expect(serialized).not.toContain("fixture-session-token");
       expect(serialized).not.toContain("Testo editoriale ostile vietato");
       if (action !== "UNASSIGNED") {
+        expect(detail?.newState).toContainEqual({ key: "assignment.tableIds", label: "ID tavoli", value: roomOnly ? "" : [first, second].sort().join(", ") });
+        expect(detail?.newState).toContainEqual({ key: "assignment.tableCount", label: "Numero tavoli", value: roomOnly ? 0 : 2 });
         expect(detail?.newState.map((field) => field.key)).toEqual([
           "assignment.finalRoomCode",
           "assignment.tableIds",
@@ -87,6 +89,7 @@ describe("M10-A reservation assignment audit projection", () => {
           },
         ]);
       }
+      expect(detail?.summary).toBe({ ASSIGNED: "Sala assegnata", REASSIGNED: "Assegnazione sala/tavoli aggiornata", UNASSIGNED: "Assegnazione rimossa" }[action]);
     },
   );
 });

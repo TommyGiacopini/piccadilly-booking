@@ -356,7 +356,7 @@ test.describe.serial("T01 design foundations, auth e shell", () => {
     );
     await expect(longContentCard).toContainText(longReservation.fullName);
     await expect(
-      longContentCard.getByRole("button", { name: "Assegna sala e tavoli" }),
+      longContentCard.getByRole("button", { name: "Assegna sala", exact: true }),
     ).toBeVisible();
     await expect(
       longContentCard.getByRole("link", { name: "Modifica" }),
