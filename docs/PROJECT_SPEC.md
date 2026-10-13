@@ -1,5 +1,19 @@
 # Piccadilly Booking — Specifiche funzionali
 
+## Contratto corrente T05 — presentazione operativa sale (2026-10-09)
+
+Foundation A è CLOSED (PR #26) e T04 Revised è CLOSED (PR #27). I paragrafi precedenti/successivi che descrivono il loro avvio sono checkpoint storici. T05 è autorizzata esclusivamente come implementazione locale, in attesa di Work Final QG e di eventuali autorizzazioni Git separate.
+
+Sala 1, Sala 2 e **Sala 3 — Giochi** sono label operative Staff/Admin dei code immutati `sala-1`, `sala-2`, `sala-3`. Galleria/Terrazzo mostrano **Area legacy**, indicatore neutro che non significa retired, disabilitata o solo storica. Nessuna rinomina DB, modifica seed/default, audit storico o DTO/API raw. Preferenza storica cliente senza alias; Public ed export restano invariati.
+
+La disponibilità M9 resta `servizio aperto && sala globalmente attiva && configurata disponibile per data/servizio`: `DEFAULT_AVAILABLE` per Sala 1–3, `EXPLICIT_ONLY` per Galleria/Terrazzo nello stato virtuale. Local disable vale anche per le sale principali; enable legacy è isolato per data/servizio. La categoria di presentazione non decide eligibility. Ordine `displayOrder ASC`, poi `code ASC`, senza gruppi fissi; code sconosciuto usa name raw completo.
+
+Admin distingue Stato globale, Configurata per questo servizio e Disponibilità effettiva. Il servizio storico locale è read-only, mentre lo stato globale riflette la configurazione attuale. GET/preview/no-op non materializzano; preview/fingerprint/apply e audit restano canonici.
+
+La richiesta giochi non garantisce Sala 3 e non provoca assegnazione, capacità dedicata o esclusività adulti/bambini. `childrenCount=null` rimane sconosciuto. Badge SALA GIOCHI RICHIESTA separato dalla sala finale; priorità best-effort umana per ordine prenotazione. Label-only non cambia roomId, tavoli, note, versione, timestamp, audit o composizione. Conservati T04 (room obbligatoria, 0–20 tavoli, no-op stale dopo guard, conflict, clear logico, grandfathering, audit atomico), T03 e Foundation.
+
+Schema/migration 1–15 protetti; nessuna migration16, auto-assignment, collision detection, nuova API, redesign Public/export, T06, Render o Asporti. Riferimento D-045.
+
 ## Contratto Owner Change v2 — Foundation A (2026-10-07)
 
 Questa sezione prevale sui riferimenti storici alla scelta cliente di una sala fisica e al solo booleano bambini presenti nelle sezioni successive.

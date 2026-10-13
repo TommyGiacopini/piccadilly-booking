@@ -403,6 +403,16 @@ Auth, tenant e CONFIRMED precedono ogni no-op. Equality comprende sala, table se
 
 Richiesta giochi Foundation, composizione nullable unknown e preferenza storica di sala sono distinte dall'assegnazione operativa. Raw legacy, arrival T03 e tutti i flussi Foundation restano preservati. Schema e migration 1–15 invariati: nessuna migration16, nuova route, DTO parallelo, collision detection, policy T05, notifica o Render. Riferimento: ADR 011, estensione corrente T04 Revised. Implementazione locale soggetta a gate funzionali e Work Final QG; nessuna autorizzazione alla pubblicazione Git.
 
+### D-045 — T05: label operative e compatibilità delle aree legacy
+
+Approvate dal Controller T05-P01–P05 il 9 ottobre 2026: Sala 1/Sala 2/Sala 3 — Giochi sono label operative Staff/Admin dei code immutati; Galleria/Terrazzo mostrano Area legacy neutra, non retired o history-only. Un solo helper puro deriva label/categoria grafica dai code, con fallback name raw completo. Nessuna categoria entra in eligibility, persistenza, DTO/API, seed/default, audit storico o preferenza storica cliente.
+
+M9 rimane autorevole: servizio aperto, sala attiva globalmente e configurazione per data/servizio; DEFAULT_AVAILABLE/EXPLICIT_ONLY immutati. Legacy disponibili sono assegnabili; grandfathering preserva riferimenti correnti, nuovi riferimenti validati. Ordine displayOrder/code preservato, senza raggruppamento fisso. Admin distingue globale/configurata/effettiva e chiarisce local storico read-only vs globale attuale. GET/preview/no-op non materializzano.
+
+Richiesta giochi non garantita e composizione unknown restano indipendenti dall'assegnazione. Label-only non cambia roomId, tavoli, note, versione, timestamp, audit o composizione. Foundation A, T03 e T04 sono CLOSED e preservati. Schema15 sufficiente, migration16 esclusa. Public, export, collision detection, T06+, Render e Asporti fuori scope.
+
+Autorizzazione limitata a 14 path e implementazione locale con database temporanei isolati; nessuna staging/commit/push/PR/merge. Work Final QG e autorizzazione Git sono gate separati. Riferimento ADR 007, addendum T05.
+
 ## 3. Decisioni reversibili
 
 Le seguenti scelte possono cambiare senza alterare il dominio, purché il cambiamento venga testato e documentato:

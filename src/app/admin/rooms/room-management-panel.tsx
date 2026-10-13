@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { roomOperationalPresentation } from "@/modules/rooms/domain/room-operational-presentation";
 
 type ServiceType = "LUNCH" | "DINNER";
 type Proposal =
@@ -48,8 +49,8 @@ interface ConfigurationDto {
   rooms: RoomDto[];
 }
 
-const field = "mt-1 w-full min-w-0 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950";
-const button = "rounded-xl bg-zinc-950 px-4 py-2.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50";
+const field = "mt-1 min-h-11 w-full min-w-0 rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-950";
+const button = "min-h-11 rounded-xl bg-zinc-950 px-4 py-2.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50";
 
 async function postJson(url: string, body: unknown) {
   const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
@@ -125,20 +126,26 @@ export function RoomManagementPanel({ configuration }: { configuration: Configur
         <span className="rounded-full bg-zinc-200 px-3 py-1">{configuration.service.lifecycle}</span>
         <span className={`rounded-full px-3 py-1 ${configuration.service.service.isOpen ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>{configuration.service.service.isOpen ? "Servizio aperto" : "Servizio chiuso"}</span>
       </div>
-      {historical ? <p className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm font-bold text-amber-900">Servizio storico: consultazione sola lettura.</p> : null}
+      {historical ? <p className="rounded-2xl border border-zinc-300 bg-zinc-100 p-4 text-sm font-bold text-zinc-700">La disponibilità del servizio storico è in sola lettura. Lo stato globale delle sale è quello attuale.</p> : null}
       {message ? <p className="rounded-2xl border border-zinc-300 bg-white p-4 text-sm font-bold" role="status">{message}</p> : null}
 
       {configuration.rooms.map((room) => {
         const effective = effectiveByRoom.get(room.id);
+        const presentation = roomOperationalPresentation(room);
         return (
           <section className="min-w-0 rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-6" key={room.id}>
             <div className="flex min-w-0 flex-col justify-between gap-4 lg:flex-row lg:items-start">
-              <div className="min-w-0"><h2 className="truncate text-xl font-black">{room.name}</h2><p className="break-all text-xs text-zinc-500">{room.code} · {room.serviceAvailabilityPolicy === "DEFAULT_AVAILABLE" ? "Disponibile per default" : "Solo attivazione esplicita"}</p></div>
-              <button className={effective?.configuredAvailable ? "rounded-xl border border-red-300 px-4 py-2 text-sm font-black text-red-800 disabled:opacity-50" : "rounded-xl bg-emerald-700 px-4 py-2 text-sm font-black text-white disabled:opacity-50"} disabled={busy || historical} onClick={() => void propose({ kind: "SERVICE_ROOM_AVAILABILITY", localDate: configuration.service.localDate, serviceType: configuration.service.serviceType, roomId: room.id, isAvailable: !effective?.configuredAvailable })} type="button">{effective?.configuredAvailable ? "Rendi non disponibile" : "Rendi disponibile"}</button>
+              <div className="min-w-0"><h2 className="[overflow-wrap:anywhere] text-xl font-black">{presentation.label}</h2>{presentation.category === "LEGACY" ? <p className="mt-1 inline-flex rounded-full border border-zinc-300 bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-700">Area legacy</p> : null}<p className="[overflow-wrap:anywhere] text-xs text-zinc-600">{room.code} · {room.serviceAvailabilityPolicy === "DEFAULT_AVAILABLE" ? "Disponibile per default" : "Solo attivazione esplicita"}</p></div>
+              <button className={effective?.configuredAvailable ? "min-h-11 rounded-xl border border-red-300 px-4 py-2 text-sm font-black text-red-800 disabled:opacity-50" : "min-h-11 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-black text-white disabled:opacity-50"} disabled={busy || historical} onClick={() => void propose({ kind: "SERVICE_ROOM_AVAILABILITY", localDate: configuration.service.localDate, serviceType: configuration.service.serviceType, roomId: room.id, isAvailable: !effective?.configuredAvailable })} type="button">{effective?.configuredAvailable ? "Rendi non disponibile" : "Rendi disponibile"}</button>
             </div>
+            <dl className="mt-3 grid min-w-0 gap-2 text-sm text-zinc-700 sm:grid-cols-3">
+              <div><dt className="font-bold">Stato globale</dt><dd>{room.isActive ? "Attiva" : "Inattiva"}</dd></div>
+              <div><dt className="font-bold">Configurata per questo servizio</dt><dd>{effective?.configuredAvailable ? "Sì" : "No"}</dd></div>
+              <div><dt className="font-bold">Disponibilità effettiva</dt><dd>{effective?.isAvailable ? "Disponibile" : "Non disponibile"}</dd></div>
+            </dl>
             <form className="mt-5 grid gap-3 border-t border-zinc-200 pt-5 sm:grid-cols-[140px_1fr_auto] sm:items-end" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void propose({ kind: "ROOM_CATALOG", roomId: room.id, displayOrder: Number(data.get("displayOrder")), isActive: data.get("isActive") === "on" }); }}>
               <label className="text-xs font-bold">Ordine<input className={field} defaultValue={room.displayOrder} min="0" name="displayOrder" required type="number" /></label>
-              <label className="flex items-center gap-2 pb-2 text-sm font-bold"><input defaultChecked={room.isActive} name="isActive" type="checkbox" />Sala attiva globalmente</label>
+              <label className="flex min-h-11 items-center gap-2 pb-2 text-sm font-bold"><input defaultChecked={room.isActive} name="isActive" type="checkbox" />Sala attiva globalmente</label>
               <button className={button} disabled={busy} type="submit">Salva sala</button>
             </form>
 
@@ -150,7 +157,7 @@ export function RoomManagementPanel({ configuration }: { configuration: Configur
                   <label className="text-xs font-bold">Min<input className={field} defaultValue={table.minimumSeats} min="1" name="minimumSeats" required type="number" /></label>
                   <label className="text-xs font-bold">Max<input className={field} defaultValue={table.maximumSeats} min="1" name="maximumSeats" required type="number" /></label>
                   <label className="text-xs font-bold">Ordine<input className={field} defaultValue={table.displayOrder} min="0" name="displayOrder" required type="number" /></label>
-                  <div className="flex items-center justify-between gap-2"><label className="flex items-center gap-2 text-xs font-bold"><input defaultChecked={table.isActive} name="isActive" type="checkbox" />Attivo</label><button className={button} disabled={busy} type="submit">Salva</button></div>
+                  <div className="flex items-center justify-between gap-2"><label className="flex min-h-11 min-w-11 items-center gap-2 text-xs font-bold"><input defaultChecked={table.isActive} name="isActive" type="checkbox" />Attivo</label><button className={button} disabled={busy} type="submit">Salva</button></div>
                 </form>
               ))}
               <form className="grid min-w-0 gap-3 rounded-2xl border border-dashed border-zinc-300 p-4 md:grid-cols-6 md:items-end" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); void mutateTable({ action: "CREATE_TABLE", roomId: room.id, name: data.get("name"), minimumSeats: Number(data.get("minimumSeats")), maximumSeats: Number(data.get("maximumSeats")), displayOrder: Number(data.get("displayOrder")) }); }}>

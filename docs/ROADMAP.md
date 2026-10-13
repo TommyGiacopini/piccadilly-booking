@@ -856,6 +856,10 @@ Il ristorante può gestire e riprodurre il sistema senza account personali dello
 
 ## 4. Replan Design/UX — Owner Change v2
 
+**Stato corrente approvato — 9 ottobre 2026:** Foundation A CLOSED (PR #26, schema15 persistente verificato); T04 Revised CLOSED (PR #27 merged). T05-P01–P05 e implementazione locale autorizzate: label Staff/Admin Sala 3 — Giochi, Area legacy neutra, compatibilità M9, helper puro e 14 path. Work Final QG non ancora concluso; nessuna autorizzazione Git. T06+ non iniziate; Render/M13 FASE C sospesi; Asporti escluso.
+
+**Checkpoint storico Owner Change v2 (preservato):**
+
 T01/T02/T03 sono concluse. Foundation A implementa composizione totale/bambini e richiesta Sala con i Giochi con migration #15; rimuove la scelta cliente della sala fisica, preserva legacy unknown e replay idempotency. Il DB persistente resta schema14 durante implementazione e QG.
 
 T04 revised riprenderà solo dopo chiusura Foundation A e nuova autorizzazione. Il precedente T04 parziale resta non certificato nel worktree originale. T05 room policy e tutte le tranche successive non sono anticipate. M13 FASE C/Render restano sospesi, senza risorse o spesa.

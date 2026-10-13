@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
+import { getZonedDateTimeParts } from "../../src/modules/availability/domain/local-calendar";
 
 import {
   e2eAdminUsername,
@@ -182,7 +183,30 @@ async function login(
 }
 
 async function createResponsiveLongContentReservation(page: Page) {
-  const localDate = await page.getByLabel("Seleziona data").inputValue();
+  const today = getZonedDateTimeParts(new Date(), "Europe/Rome").date;
+  let localDate: string | undefined;
+  // Select a bookable future calendar date; never retry the mutation or bypass availability.
+  for (let offset = 1; offset <= 14; offset++) {
+    const candidate = new Date(`${today}T00:00:00.000Z`);
+    candidate.setUTCDate(candidate.getUTCDate() + offset);
+    const date = candidate.toISOString().slice(0, 10);
+    const preview = await page.request.get(
+      `/api/staff/availability?date=${date}&service=DINNER&partySize=2`,
+    );
+    expect(preview.ok(), await preview.text()).toBe(true);
+    const availability = await preview.json();
+    expect(availability).toMatchObject({ date, timezone: "Europe/Rome", channel: "STAFF" });
+    if (availability.isOpen && availability.slots.some(
+      (slot: { time: string; available: boolean }) => slot.time === "19:00" && slot.available,
+    )) {
+      localDate = date;
+      break;
+    }
+  }
+  expect(localDate, "No bookable future dinner at 19:00 in the next fourteen calendar days.").toBeDefined();
+  await page.goto(`/dashboard?date=${localDate}&service=DINNER`);
+  await expect(page.getByLabel("Seleziona data")).toHaveValue(localDate!);
+  console.info(`T01_FUTURE_FIXTURE ${JSON.stringify({ timezone: "Europe/Rome", today, localDate, serviceType: "DINNER", arrivalTime: "19:00", availabilityVerified: true })}`);
   const response = await page.request.post("/api/staff/reservations", {
     headers: {
       origin: new URL(page.url()).origin,

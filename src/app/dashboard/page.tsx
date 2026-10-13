@@ -6,6 +6,7 @@ import { StaffAgenda } from "@/app/dashboard/staff-agenda";
 import type { AvailabilityResult } from "@/modules/availability/domain/types";
 import { getDashboardDay } from "@/modules/dashboard/application/dashboard-query";
 import type { DashboardFilters } from "@/modules/dashboard/domain/dashboard-domain";
+import { roomOperationalPresentation } from "@/modules/rooms/domain/room-operational-presentation";
 import { requireAuthenticatedUser } from "@/server/auth/authorization";
 
 export const dynamic = "force-dynamic";
@@ -216,9 +217,10 @@ export default async function DashboardPage({
             Sala definitiva
             <select className="mt-1 block w-full rounded-xl border border-zinc-300 px-3 py-2.5 focus:border-orange-500 focus:outline-none focus:ring-4 focus:ring-orange-100" data-testid="final-room-filter" defaultValue={dashboard.filters.finalRoom} name="finalRoom">
               <option value="ALL">Tutte</option>
-              {dashboard.rooms.map((room) => (
-                <option key={room.code} value={room.code}>{room.name}</option>
-              ))}
+              {dashboard.rooms.map((room) => {
+                const presentation = roomOperationalPresentation(room);
+                return <option key={room.code} value={room.code}>{presentation.label}{presentation.category === "LEGACY" ? " · Area legacy" : ""}</option>;
+              })}
             </select>
           </label>
           <button className="self-end rounded-xl bg-orange-500 px-5 py-2.5 font-black text-white hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-200" type="submit">

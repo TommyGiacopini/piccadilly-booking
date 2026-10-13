@@ -18,6 +18,7 @@ import {
 } from "@/modules/dashboard/domain/staff-agenda";
 import { reservationArrivalUiState } from "@/modules/reservations/domain/reservation-arrival";
 import { partyCompositionLabel } from "@/modules/reservations/domain/party-composition";
+import { roomOperationalPresentation } from "@/modules/rooms/domain/room-operational-presentation";
 
 type ArrivalOverride = { version: number; arrivedAt: string | null };
 
@@ -114,7 +115,8 @@ function AgendaSummary({
         <span className="font-semibold text-text-primary">Coperti per sala:</span>
         {summary.finalRoomCovers.map((room) => (
           <span className="min-w-0 [overflow-wrap:anywhere] tabular-nums" key={room.code}>
-            {room.label}: {room.covers}
+            {roomOperationalPresentation({ code: room.code, name: room.label }).label}: {room.covers}
+            {roomOperationalPresentation({ code: room.code, name: room.label }).category === "LEGACY" ? " · Area legacy" : ""}
           </span>
         ))}
       </div>
@@ -232,7 +234,10 @@ function ReservationAgendaRow({
                     className="[overflow-wrap:anywhere]"
                     data-testid="final-room-name"
                   >
-                    {reservation.assignment.roomName}
+                    {roomOperationalPresentation({ code: reservation.assignment.roomCode, name: reservation.assignment.roomName }).label}
+                    {roomOperationalPresentation({ code: reservation.assignment.roomCode, name: reservation.assignment.roomName }).category === "LEGACY" ? (
+                      <span className="ml-2 inline-flex rounded-full border border-border bg-surface-muted px-2.5 py-1 text-xs font-medium text-text-secondary">Area legacy</span>
+                    ) : null}
                   </span>
                 ) : reservation.status === "CONFIRMED" ? (
                   <span
