@@ -53,6 +53,14 @@ Una preferenza di sala già salvata resta visibile e conservata se la sala diven
 - le mutazioni ad impatto usano un protocollo a due passi con controllo concorrenziale; M9-C lo applica al proprio perimetro e i checkpoint successivi devono riutilizzarlo;
 - l'audit conserva conteggi e classificazioni, non elenchi con PII.
 
+## Addendum T05 — presentazione operativa (9 ottobre 2026)
+
+D-045 introduce soltanto label Staff/Admin Sala 3 — Giochi (`sala-3`) e indicatore neutro Area legacy per Galleria/Terrazzo. Identità/name persistiti, code, policy, seed/default, DTO/API e audit storico non cambiano. La preferenza storica non riceve l'alias. Categoria grafica derivata da un helper puro, mai criterio di disponibilità o mutation.
+
+DEFAULT_AVAILABLE/EXPLICIT_ONLY, configurazione per data/servizio, servizio aperto e stato globale restano M9; legacy realmente disponibili ammettono nuove assegnazioni. Stato globale, configurata ed effettiva sono distinti nella UI. Storico locale read-only e globale attuale; GET/preview/no-op senza materializzazione. Ordine Admin displayOrder/code preservato.
+
+Grandfathering, fingerprint/apply, audit atomico, T04 no-op/concorrenza e Foundation/T03 restano canonici. Nessun rename, retired implicito, cleanup, migration16 o nuova policy capacity/collision/auto-assignment. Schema15 e checkpoint M9/M10 preservati; nessuna modifica Public/export o avvio T06/Render/Asporti. Implementazione locale soggetta a Work Final QG e separata autorizzazione Git.
+
 ## Alternative rifiutate
 
 - Cancellazione fisica: rifiutata per perdita di storia e riferimenti.

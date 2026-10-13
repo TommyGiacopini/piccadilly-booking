@@ -1,5 +1,13 @@
 # Piccadilly Booking — Architettura
 
+## T05 — adattatore puro di presentazione operativa
+
+`room-operational-presentation.ts` riceve esclusivamente code/name e deriva label e categoria grafica MAIN/LEGACY/UNKNOWN. Non dipende da framework, Prisma, DB, clock, tenant o disponibilità; non modifica input, ordine, query, DTO o record. Sala 3 — Giochi è alias Staff/Admin di `sala-3`; Area legacy identifica Galleria/Terrazzo senza nuova policy. Unknown conserva name raw. Il rendering filtro, sala finale, summary e catalogo usa lo stesso helper; la preferenza storica non lo usa. Public, notifiche ed export continuano a trasportare i valori canonici raw.
+
+La sola fonte di disponibilità resta M9: serviceOpen, stato globale e configuredAvailable locale/policy persistita. UI Admin mostra distintamente questi stati e isAvailable server-authoritative, senza una seconda source of truth. Ordine Admin invariato. Label-only non attiva mutation, reset tavoli/note, timestamp, version o audit. Backend/API/lock/SERIALIZABLE/fingerprint/rollback, T04 room-only, T03 arrival e Foundation rimangono invariati.
+
+Baseline corrente: Foundation A/T04 Revised CLOSED, persistent schema15 read-only per T05. Il riferimento schema14 nella sezione Foundation è storico del suo QG. T05 locale richiede gate unit/PG/HTTP/E2E e Work Final QG; non autorizza pubblicazione, migration16, T06, Render o Asporti. Riferimento D-045.
+
 ## Foundation A — composizione e preferenza giochi
 
 Owner Change v2 aggiunge a `Reservation` `childrenCount: number|null` e `gameRoomPreference: boolean|null`. Migration #15 additiva, senza backfill/default/indice: `null/null` sconosciuto, `0/null` adulti, `1..partySize` con booleano esplicito per bambini. Constraint SQL gestiscono i NULL esplicitamente. Le migration 1–14 restano immutate.

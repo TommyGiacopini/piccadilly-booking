@@ -7,6 +7,7 @@ import type {
   AssignmentRoomDto,
   ReservationAssignmentContextDto,
 } from "@/modules/rooms/domain/reservation-assignment";
+import { roomOperationalPresentation } from "@/modules/rooms/domain/room-operational-presentation";
 
 interface AssignmentErrorResponse {
   error?: string;
@@ -436,7 +437,8 @@ export function ReservationAssignmentPanel(props: {
                     {context.assignment ? (
                       <div className="space-y-3">
                         <p className="font-black text-zinc-950">
-                          Sala definitiva: {context.assignment.room.name}
+                          Sala definitiva: {roomOperationalPresentation(context.assignment.room).label}
+                          {roomOperationalPresentation(context.assignment.room).category === "LEGACY" ? " · Area legacy" : ""}
                         </p>
                         <p className="text-sm font-bold text-zinc-700">
                           Tavoli: {context.assignment.tables.map((table) => table.name).join(", ") || "DA ASSEGNARE"}
@@ -475,7 +477,8 @@ export function ReservationAssignmentPanel(props: {
                               key={room.id}
                               value={room.id}
                             >
-                              {room.name}
+                              {roomOperationalPresentation(room).label}
+                              {roomOperationalPresentation(room).category === "LEGACY" ? " · Area legacy" : ""}
                               {room.id === currentRoomId ? " · attuale" : ""}
                               {state ? ` · ${state}` : ""}
                             </option>

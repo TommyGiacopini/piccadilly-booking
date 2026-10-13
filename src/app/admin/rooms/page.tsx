@@ -26,7 +26,7 @@ export default async function RoomsPage({ searchParams }: PageProps) {
 
   return (
     <ConfigurationShell
-      description="Catalogo fisso delle cinque sale, disponibilità per singolo servizio e tavoli operativi. Le preferenze già salvate restano consultabili anche dopo una disattivazione."
+      description="Sale operative: Sala 1, Sala 2 e Sala 3 — Giochi. Galleria e Terrazzo sono aree legacy, utilizzabili quando disponibili secondo la configurazione del servizio. La richiesta giochi non garantisce una sala e non modifica l'assegnazione. Preferenze e assegnazioni già salvate restano consultabili dopo una disattivazione."
       title="Sale, servizi e tavoli"
     >
       <RoomManagementPanel configuration={configuration} />
