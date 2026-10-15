@@ -78,9 +78,6 @@ function detailText(reservation: ExportReservationDto): string {
     `Preferenza sala cliente: ${reservation.preferredRoom}`,
     needs.length > 0 ? `Esigenze operative: ${needs.join(", ")}` : null,
     reservation.notes ? `Note prenotazione: ${reservation.notes}` : null,
-    reservation.assignment?.internalNotes
-      ? `Note interne assignment: ${reservation.assignment.internalNotes}`
-      : null,
   ]
     .filter((value): value is string => value !== null)
     .join(" · ");

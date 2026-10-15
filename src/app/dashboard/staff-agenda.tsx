@@ -7,6 +7,7 @@ import { buttonClassName } from "@/app/_components/ui/button";
 import { ReservationAssignmentPanel } from "@/app/dashboard/reservation-assignment-panel";
 import { ReservationArrivalControl } from "@/app/dashboard/reservation-arrival-control";
 import { ReservationActions } from "@/app/dashboard/reservation-actions";
+import { ReservationPrivateNotesPanel } from "@/app/dashboard/reservation-private-notes-panel";
 import type {
   DashboardReservation,
   DashboardSummary,
@@ -403,6 +404,7 @@ function ReservationAgendaRow({
             </p>
           ) : null}
 
+          <ReservationPrivateNotesPanel reservationId={reservation.id} />
           <ReservationAssignmentPanel
             cancelled={reservation.status === "CANCELLED"}
             hasAssignment={reservation.assignment !== null}

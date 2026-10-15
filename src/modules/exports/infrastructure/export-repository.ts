@@ -95,7 +95,6 @@ export async function readExportSnapshotWithClient(
           assignment: {
             select: {
               clearedAt: true,
-              internalNotes: true,
               room: { select: { code: true, name: true } },
               tables: {
                 where: { restaurantId: actor.restaurantId },
@@ -145,7 +144,6 @@ export async function readExportSnapshotWithClient(
             ? {
                 roomCode: activeAssignment.room.code,
                 roomName: activeAssignment.room.name,
-                internalNotes: activeAssignment.internalNotes,
                 tables: activeAssignment.tables
                   .map(({ diningTable }) => diningTable)
                   .sort(compareExportTables),

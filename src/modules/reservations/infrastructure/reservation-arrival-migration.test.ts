@@ -48,7 +48,7 @@ const historicalHashes: Record<string, string> = {
 
 describe("T03 additive arrival migration", () => {
   it("is the single fourteenth migration and preserves migrations 1 through 13 byte-for-byte", () => {
-    expect(migrationNames).toHaveLength(15);
+    expect(migrationNames).toHaveLength(16);
     expect(migrationNames[13]).toBe(migrationName);
     for (const [name, expectedHash] of Object.entries(historicalHashes)) {
       const contents = readFileSync(

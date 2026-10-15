@@ -297,6 +297,25 @@ afterAll(cleanup);
 describe("M11 PostgreSQL export snapshot", () => {
   const actor = { id: staffId, restaurantId };
   const period = resolveExcelExportPeriod({ mode: "DAY", date: localDate });
+  it("T06 never selects or projects autonomous/active/cleared/cross-tenant NI and keeps business data unchanged", async () => {
+    const markers = ["T06_REPO_AUTONOMOUS_NI", "T06_REPO_ACTIVE_NI", "T06_REPO_CLEARED_NI", "T06_REPO_OTHER_TENANT_NI"];
+    await prisma.reservation.updateMany({ where: { id: { in: [assignedReservationId, clearedReservationId] } }, data: { privateNotes: markers[0] } });
+    await prisma.reservation.update({ where: { id: otherReservationId }, data: { privateNotes: markers[3] } });
+    await prisma.reservationAssignment.updateMany({ where: { reservationId: assignedReservationId }, data: { internalNotes: markers[1] } });
+    await prisma.reservationAssignment.updateMany({ where: { reservationId: clearedReservationId }, data: { internalNotes: markers[2] } });
+    const before = await businessFingerprint();
+    const queries: string[] = [];
+    const client = new PrismaClient({ adapter: new PrismaPg({ connectionString: resolveDatabaseUrl(process.env.DATABASE_URL) }),
+      log: [{ emit: "event", level: "query" }] });
+    client.$on("query", (event) => queries.push(event.query));
+    try {
+      const snapshot = await readExportSnapshotWithClient(client, { actor, period });
+      for (const marker of markers) expect(JSON.stringify(snapshot)).not.toContain(marker);
+      expect(JSON.stringify(snapshot)).toContain("Nota esportabile");
+      expect(queries.some((query) => query.includes("private_notes") || query.includes("internal_notes"))).toBe(false);
+      expect(await businessFingerprint()).toBe(before);
+    } finally { await client.$disconnect(); }
+  });
 
   it("authorizes active Staff/Admin and rejects disabled, must-change and tenant-mismatched actors", async () => {
     await expect(readExportSnapshot({ actor, period })).resolves.toMatchObject({
@@ -327,7 +346,6 @@ describe("M11 PostgreSQL export snapshot", () => {
     const assigned = all.find((item) => item.id === assignedReservationId)!;
     expect(assigned.assignment).toMatchObject({
       roomCode: "sala-1",
-      internalNotes: "Nota interna Staff M11",
       tables: [{ id: tableId, name: "Tavolo grandfathered" }],
     });
     const cleared = all.find((item) => item.id === clearedReservationId)!;

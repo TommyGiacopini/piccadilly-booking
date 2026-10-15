@@ -52,6 +52,20 @@ function reservation(
 }
 
 describe("M11 export request validation", () => {
+  it("positively projects runtime objects without autonomous, active/cleared legacy or nested NI properties", () => {
+    const marker = "T06_EXPORT_DOMAIN_PRIVATE_MARKER";
+    const assignment = {
+      roomCode: "sala-1", roomName: "Sala 1", internalNotes: marker,
+      tables: [{ id: randomUUID(), name: "T1", displayOrder: 1, privateNotes: marker }],
+    };
+    const runtime = { ...reservation({ notes: "T06_EXPORT_NC_MARKER", assignment }), privateNotes: marker,
+      legacyAssignment: { internalNotes: marker, state: "CLEARED" } };
+    const result = buildExportDays(["2026-08-24"], [runtime]);
+    expect(JSON.stringify(result)).not.toContain(marker);
+    expect(JSON.stringify(result)).toContain("T06_EXPORT_NC_MARKER");
+    expect(result[0]?.sections[1]?.reservations[0]?.assignment).not.toHaveProperty("internalNotes");
+    expect(runtime).toHaveProperty("privateNotes", marker);
+  });
   it("accepts strict PDF, DAY, MONTH and RANGE contracts", () => {
     expect(pdfExportRequestSchema.parse({ date: "2026-08-24" })).toEqual({
       date: "2026-08-24",
@@ -131,7 +145,6 @@ describe("M11 canonical export projection", () => {
             roomCode: "sala-1",
             roomName: "Sala 1",
             tables: [],
-            internalNotes: null,
           },
         }),
       ],
@@ -182,7 +195,6 @@ describe("M11 canonical export projection", () => {
         roomCode: "terrazzo",
         roomName: "Terrazzo",
         tables: [{ id: randomUUID(), name: "T 1", displayOrder: 1 }],
-        internalNotes: "Riferimento storico attivo",
       },
     });
     const day = buildExportDays(["2026-08-24"], [unassigned, grandfathered])[0]!;

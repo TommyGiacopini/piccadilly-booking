@@ -1,5 +1,21 @@
 # Piccadilly Booking — Specifiche funzionali
 
+## Contratto corrente T06-A — note interne autonome e privacy export (14 ottobre 2026)
+
+T05 è CLOSED (PR #28). Il Controller autorizza soltanto T06-A locale sulla baseline `96963f780f041394d2aaf3169a06c22f22908cd6`, senza pubblicazione Git, deploy o mutation del database persistente. Le limitazioni T05 su T06/migration16 e l'inclusione storica delle note interne negli export riportate sotto sono checkpoint superati dal presente contratto. T06-B/C/D non sono avviate.
+
+NC è la nota condivisa `Reservation.notes`: Public create, link personale, PHONE e modifica Staff/Admin per conto del cliente mantengono payload, idempotenza e comportamento canonici. La condivisione non attribuisce al cliente la paternità materiale del testo; nessun nuovo campo di provenance.
+
+NI è una singola nota corrente `Reservation.privateNotes`, nullable, testo semplice di massimo 1000 code point Unicode. Stringa vuota e null sono equivalenti; spazi e sequenza Unicode valida sono preservati, senza rich text, troncamenti UTF-16, storico testuale o dipendenza dalla sala. Staff/Admin possono scriverla senza assegnazione e su CONFIRMED storiche; CANCELLED è consultabile in sola lettura. Reschedule, cambio sala/servizio/orario e cancellazione non copiano né cancellano NI.
+
+GET/PUT `/api/staff/reservations/{id}/private-notes` sono riservati a Staff/Admin con guard canonici. PUT strict contiene soltanto `version` e `privateNotes`. L'identico normalizzato, anche stale, è no-op dopo auth/tenant/CONFIRMED: zero write, versione, timestamp e audit. Una modifica reale richiede la versione corrente, incrementa una sola volta e registra atomicamente `PRIVATE_NOTES_UPDATED`; errore audit causa rollback. Nessun effetto su assegnazione, capacità, arrivo, token, outbox o configurazione.
+
+Le note `ReservationAssignment.internalNotes` rimangono legacy, distinguibili e consultabili separatamente anche quando cleared. Nessuna promozione, copia o cleanup; lifecycle T04 invariato. L'Agenda offre un editor NI minimo, con pending, blocco doppio invio, focus/tastiera e reload esplicito dopo409.
+
+**Nessun testo NI autonomo o legacy active/cleared compare in PDF o Excel.** La proiezione export non seleziona NI; il PDF elimina soltanto il segmento NI e conserva NC/esigenze. Excel conserva24 colonne: V contiene NC, W resta vuota, X conserva creazione. Sorting, periodi, filename, sanitizzazione formule, autorizzazioni e audit export rimangono canonici.
+
+Migration16 aggiunge la sola colonna nullable e la action audit, estendendo il vincolo stati audit senza alterare le action precedenti. Zero backfill, journal, metadata NC o migration17; migration1–15 e FK preservate. Test esclusivamente PostgreSQL temporaneo isolato; fresh1–16, upgrade15→16 e fixture14→15 esatta sono gate separati.
+
 ## Contratto corrente T05 — presentazione operativa sale (2026-10-09)
 
 Foundation A è CLOSED (PR #26) e T04 Revised è CLOSED (PR #27). I paragrafi precedenti/successivi che descrivono il loro avvio sono checkpoint storici. T05 è autorizzata esclusivamente come implementazione locale, in attesa di Work Final QG e di eventuali autorizzazioni Git separate.

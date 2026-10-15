@@ -87,6 +87,7 @@ const actionLabels: Record<AuditListAction, string> = {
   UNASSIGNED: "Assegnazione rimossa",
   ARRIVAL_RECORDED: "Arrivo registrato",
   ARRIVAL_REVERTED: "Arrivo annullato",
+  PRIVATE_NOTES_UPDATED: "Nota interna aggiornata",
   LOGIN_SUCCEEDED: "Accesso riuscito",
   LOGIN_FAILED: "Accesso non riuscito",
   LOGIN_RATE_LIMITED: "Accesso limitato",
@@ -573,7 +574,9 @@ export function projectAuditDetail(record: AuditDetailDatabaseRecord): AuditDeta
     };
   }
   const stateRules = header.source === "RESERVATION"
-    ? header.action === "ASSIGNED" ||
+    ? header.action === "PRIVATE_NOTES_UPDATED"
+      ? [rule("privateNotes.present", "Nota interna presente", bool), rule("version", "Versione", positiveCount)]
+      : header.action === "ASSIGNED" ||
       header.action === "REASSIGNED" ||
       header.action === "UNASSIGNED"
       ? reservationAssignmentRules

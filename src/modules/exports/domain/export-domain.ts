@@ -31,7 +31,6 @@ export interface ExportAssignmentDto {
   roomCode: string;
   roomName: string;
   tables: ExportTableDto[];
-  internalNotes: string | null;
 }
 
 export interface ExportReservationDto {
@@ -225,11 +224,34 @@ export function buildExportDays(
     const bucket = byDate.get(reservation.localDate);
     if (!bucket) throw new Error("Export reservation is outside the requested period.");
     bucket.push({
-      ...reservation,
+      id: reservation.id,
+      localDate: reservation.localDate,
+      serviceType: reservation.serviceType,
+      arrivalTime: reservation.arrivalTime,
+      customerFirstName: reservation.customerFirstName,
+      customerLastName: reservation.customerLastName,
+      partySize: reservation.partySize,
+      customerPhone: reservation.customerPhone,
+      origin: reservation.origin,
+      preferredRoom: reservation.preferredRoom,
+      highChair: reservation.highChair,
+      stroller: reservation.stroller,
+      accessibility: reservation.accessibility,
+      children: reservation.children,
+      celiac: reservation.celiac,
+      allergies: reservation.allergies,
+      intolerances: reservation.intolerances,
+      celebration: reservation.celebration,
+      animals: reservation.animals,
+      notes: reservation.notes,
+      createdAt: reservation.createdAt,
       assignment: reservation.assignment
         ? {
-            ...reservation.assignment,
-            tables: [...reservation.assignment.tables].sort(compareExportTables),
+            roomCode: reservation.assignment.roomCode,
+            roomName: reservation.assignment.roomName,
+            tables: reservation.assignment.tables.map((table) => ({
+              id: table.id, name: table.name, displayOrder: table.displayOrder,
+            })).sort(compareExportTables),
           }
         : null,
     });

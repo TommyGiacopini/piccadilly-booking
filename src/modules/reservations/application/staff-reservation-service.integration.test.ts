@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { getDashboardDay } from "@/modules/dashboard/application/dashboard-query";
+import { putReservationPrivateNotes } from "@/modules/reservations/application/reservation-private-notes-service";
 import {
   DAY_OF_WEEK_VALUES,
   DEFAULT_BOOKING_CUTOFFS,
@@ -232,6 +233,32 @@ function publicPayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe.sequential("M8 Staff reservation workflow with real PostgreSQL", () => {
+  it("T06 preserves shared NC, PHONE idempotency and autonomous NI through Staff edit/reschedule/cancel", async () => {
+    const marker = "T06_STAFF_AUTONOMOUS_PRIVATE_MARKER";
+    const key = randomUUID(), nc = "T06_PHONE_SHARED_CUSTOMER_NOTE";
+    const created = await createPhone(staffActor, { notes: nc }, key);
+    const id = created.reservation.id;
+    const beforeIdempotency = await prisma.reservationIdempotencyKey.findFirstOrThrow({ where: { reservationId: id } });
+    const beforeOutbox = await prisma.notificationOutbox.count({ where: { reservationId: id } });
+    await putReservationPrivateNotes({ actor: staffActor, reservationId: id, rawPayload: { version: 1, privateNotes: marker }, now });
+    expect(await prisma.notificationOutbox.count({ where: { reservationId: id } })).toBe(beforeOutbox);
+    expect((await createPhone(staffActor, { notes: nc }, key)).replayed).toBe(true);
+    expect(await prisma.reservationIdempotencyKey.findFirstOrThrow({ where: { reservationId: id } })).toEqual(beforeIdempotency);
+    const shared = await getStaffReservation({ actor: staffActor, reservationId: id });
+    expect(shared.notes).toBe(nc); expect(shared).not.toHaveProperty("privateNotes");
+    const updated = await updateStaffReservation({ actor: adminActor, reservationId: id,
+      rawPayload: updatePayload(shared, { notes: "T06_STAFF_SHARED_CUSTOMER_NOTE" }), now });
+    expect(updated.reservation.notes).toBe("T06_STAFF_SHARED_CUSTOMER_NOTE");
+    const moved = await updateStaffReservation({ actor: staffActor, reservationId: id,
+      rawPayload: updatePayload(updated.reservation, { localDate: movedDate, arrivalTime: "19:30" }), now });
+    await cancelStaffReservation({ actor: staffActor, reservationId: id, rawPayload: { version: moved.reservation.version }, now });
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      privateNotes: marker, notes: "T06_STAFF_SHARED_CUSTOMER_NOTE", status: "CANCELLED", localDate: localDateToDatabase(movedDate),
+    });
+    expect(await prisma.reservationAssignment.count({ where: { reservationId: id } })).toBe(0);
+    expect(JSON.stringify(await prisma.notificationOutbox.findMany({ where: { reservationId: id } }))).not.toContain(marker);
+    expect(JSON.stringify(await prisma.reservationAuditEvent.findMany({ where: { reservationId: id } }))).not.toContain(marker);
+  });
   it.each([1000, 200])("R4 fresh Staff DTO preserves raw legacy allergy %i through no-op, note-only and composition", async (length) => {
     const created = await createPhone(staffActor, { childrenCount: null, gameRoomPreference: null, allergies: null });
     const id = created.reservation.id;

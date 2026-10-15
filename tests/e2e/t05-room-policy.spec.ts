@@ -90,7 +90,7 @@ async function screenshot(page: Page, name: string) { if (process.env.T05_EVIDEN
 
 test.beforeAll(async () => {
   const identity = await database.query("SELECT current_database() AS name"); expect(identity.rows[0].name).toBe(target.pathname.slice(1));
-  expect((await database.query("SELECT count(*)::int AS count FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL")).rows[0].count).toBe(15);
+  expect((await database.query("SELECT count(*)::int AS count FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL")).rows[0].count).toBe(16);
   await database.query("INSERT INTO rooms(id,restaurant_id,name,code,display_order,is_active,updated_at) VALUES($1,$2,$3,$4,99,true,NOW())", [longRoomId, e2eRestaurantId, longRoomName, `t05-long-${e2eRunId}`]);
   await database.query("INSERT INTO dining_tables(id,room_id,name,minimum_seats,maximum_seats,is_active,updated_at) VALUES($1,$2,$3,1,2,true,NOW())", [longTableId, longRoomId, longTableName]);
   await database.query("INSERT INTO service_room_availability(id,restaurant_id,service_instance_id,room_id,is_available,updated_at) SELECT gen_random_uuid(),restaurant_id,id,$2,true,NOW() FROM service_instances WHERE restaurant_id=$1 ON CONFLICT(service_instance_id,room_id) DO NOTHING", [e2eRestaurantId, longRoomId]);

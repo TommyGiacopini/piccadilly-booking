@@ -1,5 +1,17 @@
 # Piccadilly Booking — Architettura
 
+## T06-A — NI autonoma e proiezioni positive
+
+Reservations possiede `privateNotes` sulla Reservation, attraverso dominio/servizio/repository dedicati e GET/PUT Staff. Il DTO NI è positivo e separato da StoredReservation e dai DTO Public/management/notifiche: include versione/status, NC condivisa, NI e legacy assignment active/cleared distinti. L'Agenda carica il contesto on demand; non cambia il read model Dashboard o i flussi Public/PHONE.
+
+GET rilegge attore e tenant nello snapshot REPEATABLE READ senza write/lock/materializzazione. PUT riusa SERIALIZABLE, retry canonici e lock advisory della prenotazione; rilegge attore/tenant e prenotazione prima di CONFIRMED/no-op/versione. Non necessita lock configurazione/capacità, perché non usa né modifica tali risorse; nessuna inversione dell'ordine canonico. Update parametrizzato SQL protegge testo NI nei diagnostici controllati; NI/version/updatedAt e audit condividono il commit. Errori HTTP/log applicativi sono messaggi statici.
+
+Migration16 è additiva: `private_notes VARCHAR(1000) NULL`, action ReservationAuditAction e estensione conservativa del check audit. Le NI legacy restano sull'assegnazione; nessun trasferimento e nessuna dipendenza dai futuri workspace T06-B/C/D.
+
+ExportRepository elimina la selezione NI; buildExportDays proietta campi espliciti anche per oggetti runtime con proprietà extra. Renderer PDF/Excel ignorano NI; W è sempre null con 24 colonne. Il planner notifiche proietta esplicitamente i campi già previsti nel suo snapshot, evitando la propagazione runtime di note al writer senza cambiare payload/idempotenza/scheduling. La modifica planner è un'estensione Controller successiva a un failure privacy dimostrato e conservato.
+
+I riferimenti storici a schema15, NI fuori da Reservation e NI negli export sono superati limitatamente a T06-A. Il perimetro locale autorizzato è43 path:37 originari,2 runner,3 test storici di migration e1 planner privacy; package/lock, runner/config non inclusi e migration1–15 restano protetti. Un solo worktree dedicato; PostgreSQL temporaneo indipendente con tmpfs. Work Final QG e pubblicazione richiedono gate separati.
+
 ## T05 — adattatore puro di presentazione operativa
 
 `room-operational-presentation.ts` riceve esclusivamente code/name e deriva label e categoria grafica MAIN/LEGACY/UNKNOWN. Non dipende da framework, Prisma, DB, clock, tenant o disponibilità; non modifica input, ordine, query, DTO o record. Sala 3 — Giochi è alias Staff/Admin di `sala-3`; Area legacy identifica Galleria/Terrazzo senza nuova policy. Unknown conserva name raw. Il rendering filtro, sala finale, summary e catalogo usa lo stesso helper; la preferenza storica non lo usa. Public, notifiche ed export continuano a trasportare i valori canonici raw.

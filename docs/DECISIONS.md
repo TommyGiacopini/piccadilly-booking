@@ -11,6 +11,16 @@ Ogni nuova decisione architetturale significativa deve essere aggiunta qui e, qu
 
 ## 2. Decisioni approvate e vincolanti
 
+### D-046 — T06-A: NI autonome, NC compatibili ed esclusione NI dagli export
+
+Il mandato Controller del 14 ottobre 2026 congela T06-A e autorizza soltanto implementazione locale. `Reservation.notes` rimane NC condivisa con il cliente, modificabile tramite i flussi Public/management/PHONE/Staff canonici, senza provenance o attribuzione automatica della paternità. NI usa una sola colonna nullable `privateNotes`, massimo 1000 code point, vuoto→null, testo semplice senza storico, indipendente dalla sala e preservato da reschedule/cancellazione.
+
+Staff/Admin possono editare CONFIRMED anche storiche e senza assegnazione; CANCELLED è read-only. PUT strict version/privateNotes, auth/tenant/status prima del no-op, stale identical no-op senza side effect, cambi reali con singola versione e audit PRIVATE_NOTES_UPDATED atomico e minimizzato. Snapshot soltanto presenza/versione, nessun testo/estratto/hash/PII. Legacy internalNotes non copiate o promosse e consultabili separatamente active/cleared; T04 resta canonico.
+
+La policy Owner supera l'inclusione NI storica D-038: nessuna NI in PDF/Excel o proiezione export. Le 24 colonne Excel rimangono invariate con W vuota; NC e altri dati operativi sono preservati, senza redesign. Migration16 additiva senza backfill, preservando migration1–15 e FK. Estensioni Controller esplicite: runner/test per latest16 esatto, tre conteggi test storici e planner con proiezione positiva dopo failure runtime NI; perimetro di 43 path.
+
+T05 è CLOSED con PR #28. T06-B/C/D non avviate; zero staging, commit, push, PR, merge, deploy, DB persistente, Render o Asporti. Implementazione e gate restano locali; serve Work Final QG indipendente prima di eventuale mandato Git.
+
 ### D-001 — Architettura
 
 Il sistema è un monolite modulare Next.js full-stack, con App Router, runtime Node.js, TypeScript strict, PostgreSQL, Prisma e Zod. Il repository è unico.

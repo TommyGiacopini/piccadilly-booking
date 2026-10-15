@@ -49,6 +49,24 @@ function harness(context: NotificationPlanningContext, succeededReminder = false
 }
 
 describe("transaction-scoped notification enqueue planner", () => {
+  it("keeps runtime private-note properties out of the planner/outbox writer boundary", async () => {
+    const marker = "T06_PLANNER_PRIVATE_NOTE_RUNTIME_MARKER";
+    const received: unknown[] = [];
+    const fixture = harness({ restaurantName: "Piccadilly", timezone: "Europe/Rome", strategy: "WHATSAPP_ONLY" });
+    const writer: NotificationTransactionWriter = {
+      ...fixture.dependencies.writer,
+      insertLeg: async (input) => { received.push(input); },
+    };
+    const runtimeReservation = { ...reservation, privateNotes: marker, internalNotes: marker };
+    await planReservationCreated({
+      dependencies: { ...fixture.dependencies, writer },
+      reservation: runtimeReservation,
+      actorUserId: null, originCorrelationId: "40000000-0000-4000-8000-000000000001",
+      now, sendWhatsAppConfirmation: true,
+    });
+    expect(received.length).toBeGreaterThan(0);
+    expect(JSON.stringify(received)).not.toContain(marker);
+  });
   it.each([
     ["WHATSAPP_ONLY", false, []],
     ["WHATSAPP_WITH_EMAIL_FALLBACK", false, []],

@@ -5,6 +5,14 @@
 
 ## Contesto
 
+### Estensione T06-A — NI autonome e note legacy
+
+La nuova nota `Reservation.privateNotes` appartiene alla prenotazione ed è indipendente dalla collocazione operativa. Non crea assegnazioni fittizie, non entra nei comandi assignment e non modifica il lifecycle T04: reschedule/cambio sala/cancellazione preservano NI autonome.
+
+`ReservationAssignment.internalNotes` rimane legacy, senza backfill, copia, promozione o cleanup. GET NI Staff autorizzata espone separatamente legacy active/cleared; anche una prenotazione senza assignment corrente o CANCELLED può consultarla. Il vecchio percorso assignment mantiene il proprio contratto canonico; il nuovo editor NI non modifica tavoli, sala o legacy.
+
+La policy export T06-A esclude entrambe le NI da selezione/proiezione PDF/Excel; NC e riferimenti operativi permessi restano. L'alternativa storica contro campi di collocazione su Reservation rimane valida: la nota autonoma non è una sala o un tavolo. Migration16 aggiunge soltanto NI e audit, senza nuove FK, schema assignment o migration17. T06-B/C/D e nuovo workspace sala non sono avviati.
+
 M9-D ha introdotto catalogo sale/tavoli e disponibilità per servizio senza collegare prenotazioni a `ServiceInstance`. M10 deve salvare una collocazione finale separata dalla preferenza del cliente, consentire correzioni storiche e mantenere audit e isolamento tenant senza introdurre automazione, occupazione temporale o modifiche retroattive ai flussi già approvati.
 
 ## Decisione

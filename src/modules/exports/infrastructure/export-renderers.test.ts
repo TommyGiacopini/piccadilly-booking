@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { inflateRawSync } from "node:zlib";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import ExcelJS from "exceljs";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
@@ -60,13 +62,15 @@ function snapshot(
   };
 }
 
-async function pdfPages(buffer: Buffer): Promise<{ pages: string[]; metadata: unknown }> {
+async function pdfPages(buffer: Buffer): Promise<{ pages: string[]; metadata: unknown; annotations: unknown[] }> {
   const loading = getDocument({ data: new Uint8Array(buffer) });
   const document = await loading.promise;
   const pages: string[] = [];
+  const annotations: unknown[] = [];
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
     const content = await page.getTextContent();
+    annotations.push(await page.getAnnotations());
     pages.push(
       content.items
         .map((item) => ("str" in item ? item.str : ""))
@@ -75,7 +79,7 @@ async function pdfPages(buffer: Buffer): Promise<{ pages: string[]; metadata: un
   }
   const metadata = await document.getMetadata();
   await document.destroy();
-  return { pages, metadata };
+  return { pages, metadata, annotations };
 }
 
 function zipEntries(buffer: Buffer): Map<string, Buffer> {
@@ -132,6 +136,47 @@ function excelJsInput(buffer: Buffer): ArrayBuffer {
 }
 
 describe("M11 PDFKit renderer", () => {
+  it("excludes all runtime NI properties from real PDF/XLSX text, annotations, hidden cells, metadata and XML", async () => {
+    const markers = ["T06_AUTONOMOUS_EXPORT_NI", "T06_ACTIVE_EXPORT_NI", "T06_CLEARED_EXPORT_NI", "T06_OTHER_TENANT_EXPORT_NI"];
+    const nc = "T06_CUSTOMER_NOTE_PRESERVED";
+    const input = snapshot([reservation({ notes: nc })]);
+    const runtime = input.days[0]!.sections[0]!.reservations[0]!;
+    Object.assign(runtime, { privateNotes: markers[0], legacyAssignment: { internalNotes: markers[2] } });
+    const assignment = {
+      roomCode: "sala-1", roomName: "Sala 1",
+      tables: [{ id: randomUUID(), name: "T1", displayOrder: 1, privateNotes: markers[3] }],
+      internalNotes: markers[1],
+    };
+    runtime.assignment = assignment;
+    Object.assign(input, { privateNotes: markers[3] });
+    const pdf = await renderPdfExport(input), xlsx = await renderExcelExport(input);
+    const extracted = await pdfPages(pdf);
+    const pdfText = extracted.pages.join("\n");
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(excelJsInput(xlsx));
+    const cells: unknown[] = [];
+    for (const sheet of workbook.worksheets) {
+      expect(sheet.columnCount).toBe(24);
+      sheet.eachRow({ includeEmpty: true }, (row) => row.eachCell({ includeEmpty: true }, (cell) => cells.push(cell.value)));
+      for (let row = 2; row <= sheet.rowCount; row += 1) expect(sheet.getCell(`W${row}`).value).toBeNull();
+    }
+    const entries = zipEntries(xlsx);
+    const xml = [...entries].filter(([name]) => name.endsWith(".xml") || name.endsWith(".rels"))
+      .map(([name, value]) => `FILE=${name}\n${value.toString("utf8")}`).join("\n");
+    for (const marker of markers) {
+      expect(pdfText).not.toContain(marker);
+      expect(JSON.stringify(extracted.metadata)).not.toContain(marker);
+      expect(JSON.stringify(extracted.annotations)).not.toContain(marker);
+      expect(JSON.stringify(cells)).not.toContain(marker);
+      expect(xml).not.toContain(marker);
+    }
+    expect(pdfText).toContain(nc); expect(JSON.stringify(cells)).toContain(nc); expect(xml).toContain(nc);
+    const folder = resolve("test-results/t06-export-privacy"); mkdirSync(folder, { recursive: true });
+    writeFileSync(resolve(folder, "runtime-private-notes.pdf"), pdf);
+    writeFileSync(resolve(folder, "runtime-private-notes.xlsx"), xlsx);
+    writeFileSync(resolve(folder, "pdf-extraction.json"), JSON.stringify(extracted, null, 2));
+    writeFileSync(resolve(folder, "xlsx-extraction.xml.txt"), xml);
+    writeFileSync(resolve(folder, "privacy-results.json"), JSON.stringify({ markers, nc, result: "PASS", columnCount: 24, columnW: "EMPTY", cellValues: cells }, null, 2));
+  });
   it("opens a real Unicode PDF with all sections, both services, details and tables", async () => {
     const assigned = reservation({
       id: "00000000-0000-4000-8000-000000000001",
@@ -147,7 +192,6 @@ describe("M11 PDFKit renderer", () => {
           { id: randomUUID(), name: "Tavolo 2", displayOrder: 2 },
           { id: randomUUID(), name: "Tavolo 1", displayOrder: 1 },
         ],
-        internalNotes: "Vicino all’ingresso",
       },
     });
     const unassigned = reservation({
@@ -172,7 +216,7 @@ describe("M11 PDFKit renderer", () => {
     expect(text).toContain("Cena");
     expect(text).toContain("Tavolo 1, Tavolo 2");
     expect(text).toContain("Preferenza sala cliente");
-    expect(text).toContain("Vicino all’ingresso");
+    expect(text).not.toContain("Vicino all’ingresso");
     expect(text).toContain("à è é ì ò ù È");
     const info = (parsed.metadata as { info: Record<string, unknown> }).info;
     expect(info.Title).toBe("Prenotazioni operative");
@@ -222,7 +266,6 @@ describe("M11 ExcelJS renderer", () => {
         roomCode: "sala-1",
         roomName: "-Sala",
         tables: [{ id: randomUUID(), name: "=TAVOLO", displayOrder: 1 }],
-        internalNotes: "+CMD",
       },
     });
     const buffer = await renderExcelExport(snapshot([dangerous]));
@@ -248,7 +291,7 @@ describe("M11 ExcelJS renderer", () => {
     expect(sheet.getCell("G2").value).toBe(`'${dangerous.customerPhone}`);
     expect(sheet.getCell("R2").value).toBe(`'${dangerous.allergies}`);
     expect(sheet.getCell("V2").value).toBe(`'${dangerous.notes}`);
-    expect(sheet.getCell("W2").value).toBe(`'${dangerous.assignment?.internalNotes}`);
+    expect(sheet.getCell("W2").value).toBeNull();
     sheet.eachRow((row) =>
       row.eachCell((cell) => {
         expect(cell.type).not.toBe(ExcelJS.ValueType.Formula);

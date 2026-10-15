@@ -11,7 +11,7 @@ import {
 const eventId = "10000000-0000-4000-8000-000000000001";
 
 describe("audit query contract", () => {
-  it.each(["ARRIVAL_RECORDED", "ARRIVAL_REVERTED"])(
+  it.each(["ARRIVAL_RECORDED", "ARRIVAL_REVERTED", "PRIVATE_NOTES_UPDATED"])(
     "accepts the T03 reservation action %s",
     (action) => {
       const parsed = parseAuditListQuery(
