@@ -5,6 +5,14 @@
 
 ## Contesto
 
+### Estensione T06-A — 14 ottobre 2026
+
+`PRIVATE_NOTES_UPDATED` è una nuova action del registro specializzato ReservationAuditEvent (enum ReservationAuditAction), aggiunta con migration16; il registro generico AuditEvent conserva le proprie stringhe/action precedenti. NI/version/updatedAt e audit sono atomici nella transazione SERIALIZABLE con lock prenotazione, senza outbox o business side effect aggiuntivi.
+
+Gli stati contengono esclusivamente `privateNotes.present` booleano e `version`; attore/ruolo, tenant, reservation, correlation ID e timestamp restano metadata canonici. Nessun testo, estratto, hash NI o dato sanitario. Identico normalizzato anche stale dopo guard non aggiorna timestamp/versione e non genera audit. La proiezione Admin allow-listed e il filtro nuova action preservano tutte le proiezioni precedenti.
+
+La lettura export esclude ogni NI autonoma/legacy ma mantiene la transazione/audit EXPORT canonici. Nessun journal o storico testuale è introdotto.
+
 M7 e M8 hanno introdotto `ReservationAuditEvent`, legato al ciclo della prenotazione. M9 richiede audit per autenticazione, identità e configurazione, ma un'unificazione distruttiva renderebbe più fragile il dominio prenotazioni. Gli snapshot precedenti duplicavano inoltre PII e testi liberi non necessari.
 
 ## Decisione

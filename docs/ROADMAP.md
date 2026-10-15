@@ -1,5 +1,13 @@
 # Piccadilly Booking — Roadmap
 
+## Stato corrente T06-A — 14 ottobre 2026
+
+T05 CLOSED / PR #28 merged. T06-A DESIGN FROZEN e implementazione locale autorizzata: NI autonome, compatibilità NC e gate bloccante export privacy. Schema16 solo nei PostgreSQL temporanei; database persistente non mutato. Scope43 path dopo tre estensioni Controller esplicite (runner2, test migration3, planner1). I checkpoint T05/precedenti sotto sono storici.
+
+La tranche aggiunge editor Staff minimo, GET/PUT NI, versione/no-op/audit atomico, consultazione legacy separata e rimozione NI dalla proiezione PDF/Excel mantenendo NC e layout24 colonne. Full Vitest/Playwright canonici, Prisma, lint, strict typecheck, build, checksum1–15 e evidence ZIP portabile sono gate locali; Work Final QG resta obbligatorio e separato.
+
+Nessuna pubblicazione Git, staging, deploy o operazione persistente è autorizzata. Worktree storici preservati. T06-B/C/D restano non avviate; Render/M13 FASE C e Asporti restano esclusi.
+
 **Stato:** approvata per lo sviluppo iniziale
 **Data:** 31 luglio 2026
 

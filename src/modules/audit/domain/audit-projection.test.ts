@@ -35,6 +35,22 @@ function reservationRow(overrides: Partial<AuditListDatabaseRow> = {}): AuditLis
 }
 
 describe("audit list projection", () => {
+  it("projects private-note presence/version only, including hostile runtime metadata", () => {
+    const marker = "T06_AUDIT_PRIVATE_TEXT_MARKER";
+    const result = projectAuditDetail({
+      ...reservationRow({ action: "PRIVATE_NOTES_UPDATED" }),
+      previousState: { privateNotes: { present: false, text: marker }, version: 1 },
+      newState: { privateNotes: { present: true, text: marker, hash: marker }, version: 2, notes: marker },
+      metadata: { privateNotes: marker, health: marker },
+    });
+    expect(result?.summary).toBe("Nota interna aggiornata");
+    expect(result?.newState).toEqual([
+      { key: "privateNotes.present", label: "Nota interna presente", value: true },
+      { key: "version", label: "Versione", value: 2 },
+    ]);
+    expect(result?.metadata).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain(marker);
+  });
   it("projects known zero/false and explicit unknown composition, while historical snapshots remain readable", () => {
     const project = (state: object) => projectAuditDetail({ ...reservationRow(), previousState: null, newState: state, metadata: null })?.newState;
     expect(project({ childrenCount: 0, gameRoomPreference: null })).toEqual(expect.arrayContaining([

@@ -1,5 +1,15 @@
 # Piccadilly Booking — Sicurezza
 
+## Contratto T06-A — isolamento delle note private
+
+La NI autonoma `Reservation.privateNotes` e NI legacy dell'assegnazione sono accessibili soltanto tramite contesto Staff/Admin autenticato, attivo e senza cambio password obbligatorio. Tenant/attore derivano dal server; query tenant-scoped, PUT same-origin/application-json/strict, risposte no-store. CONFIRMED prima del no-op; CANCELLED read-only. Niente testo NI in URL o storage browser; solo memoria del contesto Staff.
+
+La nota è testo semplice con1000 code point Unicode validi, vuoto→null; sono rifiutati NUL e surrogate isolate, senza troncamento. Scrittura SQL parametrizzata, versione e audit atomici. Audit PRIVATE_NOTES_UPDATED contiene solo presenza/versione e metadata canonici attore/tenant/correlation/time; vietati testo, estratti, hash della nota e PII aggiuntiva. Errori HTTP e log applicativi sono statici.
+
+**Tutte le NI autonome e legacy active/cleared sono escluse da PDF/Excel**, superando la precedente policy export sotto. ExportRepository non seleziona testi NI; proiezione positiva runtime e renderer preservano NC e lasciano W vuota. Planner positivo impedisce proprietà NI extra nel writer outbox, senza cambiare payload o scheduling. Gate con marker artificiali verificano DTO Public/management, outbox/planner, audit, diagnostica controllata, PDF estratto/annotazioni/metadata e celle/XML/shared strings Excel.
+
+T06-A usa solo PostgreSQL temporaneo isolato su tmpfs, runner canonici e dati fittizi. Nessun seed/migrate/reset/cleanup sul database persistente; nessun account/provider reale. Migration1–15, package/lock e path protetti fuori dalle estensioni Controller sono preservati. Un failure privacy che richieda altro path impone stop e revisione Controller; nessuna autorizzazione preventiva a modificare il logger Prisma.
+
 **Stato:** strategia approvata per lo sviluppo iniziale
 **Data:** 31 luglio 2026
 **Ambito:** requisiti e controlli; infrastruttura definitiva non ancora implementata

@@ -159,7 +159,7 @@ export async function renderExcelExport(snapshot: ExportSnapshotDto): Promise<Bu
         text(reservation.celebration),
         text(yesNo(reservation.animals)),
         text(reservation.notes),
-        text(assignment?.internalNotes),
+        null,
         localWallClockCell(reservation.createdAt, snapshot.timezone),
       ]);
       row.alignment = { vertical: "top", wrapText: true };

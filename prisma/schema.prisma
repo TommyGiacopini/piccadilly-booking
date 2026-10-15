@@ -72,6 +72,7 @@ enum ReservationAuditAction {
   UNASSIGNED
   ARRIVAL_RECORDED
   ARRIVAL_REVERTED
+  PRIVATE_NOTES_UPDATED
 }
 
 enum PublicContentLocale {
@@ -425,6 +426,7 @@ model Reservation {
   customerPhone          String                      @map("customer_phone") @db.VarChar(40)
   customerEmail          String?                     @map("customer_email") @db.VarChar(254)
   notes                  String?                     @db.VarChar(1000)
+  privateNotes           String?                     @map("private_notes") @db.VarChar(1000)
   preferences            String?                     @db.Text
   allergies              String?                     @db.Text
   privacyPolicyVersion   String                      @map("privacy_policy_version") @db.VarChar(64)

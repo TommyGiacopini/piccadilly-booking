@@ -1,4 +1,8 @@
 import "dotenv/config";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { inflateRawSync } from "node:zlib";
+import { Pool } from "pg";
 
 import { expect, test, type APIRequestContext, type Download, type Page } from "@playwright/test";
 import ExcelJS from "exceljs";
@@ -8,6 +12,7 @@ import {
   e2eAdminUsername,
   e2eReservationFirstName,
   e2eRunId,
+  e2eRestaurantId,
   e2eStaffUsername,
 } from "./e2e-run";
 
@@ -112,6 +117,96 @@ async function pdfText(buffer: Buffer): Promise<string> {
 }
 
 test.describe.serial("M11 export PDF ed Excel", () => {
+  for (const role of ["STAFF", "ADMIN"] as const) {
+    test(`T06 ${role}: PDF/DAY/MONTH/RANGE escludono NI autonome e legacy conservando NC e dati business`, async ({ page }) => {
+      const target = new URL(process.env.DATABASE_URL ?? "");
+      expect(target.pathname).toMatch(/^\/piccadilly_e2e_[0-9a-f]{32}$/u);
+      const database = new Pool({ connectionString: target.href });
+      await login(page, role);
+      const markers = ["T06_HTTP_AUTONOMOUS_NI", "T06_HTTP_ACTIVE_LEGACY_NI", "T06_HTTP_CLEARED_LEGACY_NI"];
+      const reservations: CreatedReservation[] = [];
+      const folder = resolve("test-results/t06-http-export-evidence"); mkdirSync(folder, { recursive: true });
+      const fingerprint = async () => JSON.stringify((await database.query(
+        "SELECT to_jsonb(r) AS reservation,(SELECT json_agg(to_jsonb(a) ORDER BY a.id) FROM reservation_assignments a WHERE a.reservation_id=r.id) AS assignment FROM reservations r WHERE r.id=ANY($1::uuid[]) AND r.restaurant_id=$2 ORDER BY r.id",
+        [reservations.map((item) => item.id), e2eRestaurantId],
+      )).rows);
+      function xmlContents(buffer: Buffer): string {
+        let end = -1;
+        for (let index = buffer.length - 22; index >= Math.max(0, buffer.length - 65557); index -= 1) if (buffer.readUInt32LE(index) === 0x06054b50) { end = index; break; }
+        if (end < 0) throw new Error("Invalid fixture ZIP.");
+        let cursor = buffer.readUInt32LE(end + 16); const output: string[] = [];
+        for (let count = buffer.readUInt16LE(end + 10); count > 0; count -= 1) {
+          const method = buffer.readUInt16LE(cursor + 10), size = buffer.readUInt32LE(cursor + 20);
+          const length = buffer.readUInt16LE(cursor + 28), extra = buffer.readUInt16LE(cursor + 30), comment = buffer.readUInt16LE(cursor + 32);
+          const offset = buffer.readUInt32LE(cursor + 42), name = buffer.subarray(cursor + 46, cursor + 46 + length).toString("utf8");
+          const start = offset + 30 + buffer.readUInt16LE(offset + 26) + buffer.readUInt16LE(offset + 28);
+          const bytes = buffer.subarray(start, start + size);
+          if (name.endsWith(".xml") || name.endsWith(".rels")) output.push(name + "\n" + (method === 0 ? bytes : inflateRawSync(bytes)).toString("utf8"));
+          cursor += 46 + length + extra + comment;
+        }
+        return output.join("\n");
+      }
+      try {
+        for (let index = 0; index < 3; index += 1) {
+          const reservation = await createReservation(page.request, `T06 ${role} ${index} ${e2eRunId}`);
+          reservations.push(reservation);
+          const note = await page.request.put(`/api/staff/reservations/${reservation.id}/private-notes`, {
+            headers: { origin }, data: { version: 1, privateNotes: markers[0] },
+          }); expect(note.status()).toBe(200); reservation.version = 2;
+          if (index > 0) {
+            const ctx = await (await page.request.get(`/api/staff/reservations/${reservation.id}/assignment`)).json();
+            const room = ctx.rooms.find((item: { code: string }) => item.code === "sala-1");
+            const assigned = await page.request.put(`/api/staff/reservations/${reservation.id}/assignment`, {
+              headers: { origin }, data: { version: 2, roomId: room.id, tableIds: [], internalNotes: markers[index] },
+            }); expect(assigned.status()).toBe(200); reservation.version = 3;
+            if (index === 2) {
+              const clear = await page.request.delete(`/api/staff/reservations/${reservation.id}/assignment`, { headers: { origin }, data: { version: 3 } });
+              expect(clear.status()).toBe(200); reservation.version = 4;
+            }
+          }
+        }
+        const before = await fingerprint();
+        const requests = [
+          { format: "pdf", mode: "PDF", data: { date: exportDate } },
+          { format: "excel", mode: "DAY", data: { mode: "DAY", date: exportDate } },
+          { format: "excel", mode: "MONTH", data: { mode: "MONTH", month: "2099-12" } },
+          { format: "excel", mode: "RANGE", data: { mode: "RANGE", from: exportDate, to: exportDate } },
+        ];
+        for (const request of requests) {
+          const response = await page.request.post("/api/staff/exports/" + request.format, { headers: { origin }, data: request.data });
+          expect(response.status()).toBe(200); expect(response.headers()["cache-control"]).toContain("private, no-store");
+          const buffer = await response.body();
+          let extracted: string;
+          if (request.format === "pdf") {
+            extracted = await pdfText(buffer);
+            const task = getDocument({ data: new Uint8Array(buffer) }); const pdf = await task.promise;
+            const metadata = await pdf.getMetadata(); const annotations: unknown[] = [];
+            for (let number = 1; number <= pdf.numPages; number += 1) annotations.push(await (await pdf.getPage(number)).getAnnotations());
+            for (const marker of markers) { expect(JSON.stringify(metadata)).not.toContain(marker); expect(JSON.stringify(annotations)).not.toContain(marker); }
+            await pdf.destroy();
+          } else {
+            const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(excelJsInput(buffer));
+            const cells: unknown[] = [];
+            for (const sheet of workbook.worksheets) {
+              expect(sheet.columnCount).toBe(24);
+              sheet.eachRow({ includeEmpty: true }, (row) => row.eachCell({ includeEmpty: true }, (cell) => cells.push(cell.value)));
+              for (let row = 2; row <= sheet.rowCount; row += 1) expect(sheet.getCell(`W${row}`).value).toBeNull();
+            }
+            extracted = JSON.stringify(cells) + "\n" + xmlContents(buffer);
+          }
+          for (const marker of markers) expect(extracted).not.toContain(marker);
+          expect(extracted).toContain("Fixture export M11");
+          writeFileSync(resolve(folder, `${role}-${request.mode}.${request.format === "pdf" ? "pdf" : "xlsx"}`), buffer);
+          writeFileSync(resolve(folder, `${role}-${request.mode}-extraction.txt`), extracted);
+        }
+        expect(await fingerprint()).toBe(before);
+        writeFileSync(resolve(folder, role + "-privacy-results.json"), JSON.stringify({ role, modes: ["PDF", "DAY", "MONTH", "RANGE"], markers, niAbsent: true, ncPreserved: true, businessUnchanged: true }, null, 2));
+      } finally {
+        for (const reservation of reservations) await cancelReservation(page.request, reservation);
+        await database.end();
+      }
+    });
+  }
   test("serializza i submit concorrenti e sblocca il pannello dopo success e failure", async ({
     page,
   }) => {

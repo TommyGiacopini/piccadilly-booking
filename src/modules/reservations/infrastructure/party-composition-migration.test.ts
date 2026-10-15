@@ -14,7 +14,7 @@ const foundationMigration = "20261007120000_add_reservation_party_composition_an
 
 describe("Foundation A additive party composition migration", () => {
   it("is migration 15, with no default, index, backfill or destructive SQL", () => {
-    expect(names).toHaveLength(15);
+    expect(names).toHaveLength(16);
     expect(names[14]).toBe(foundationMigration);
     const sql = readFileSync(join(migrations, foundationMigration, "migration.sql"), "utf8");
     expect(sql).toContain('ADD COLUMN "children_count" INTEGER');
@@ -129,11 +129,11 @@ describe("Foundation A additive party composition migration", () => {
     }
   }, 30_000);
 
-  it("fresh migration chain 1–15 has lossless envelopes and bounded scalar notes", async () => {
+  it("fresh migration chain 1–16 retains lossless envelopes and bounded scalar notes", async () => {
     const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
     await client.connect();
     try {
-      expect((await client.query('SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')).rows[0].count).toBe(15);
+      expect((await client.query('SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')).rows[0].count).toBe(16);
       expect((await client.query("SELECT column_name,data_type,character_maximum_length FROM information_schema.columns WHERE table_name='reservations' AND column_name IN ('preferences','allergies','notes') ORDER BY column_name")).rows).toEqual([
         { column_name: "allergies", data_type: "text", character_maximum_length: null },
         { column_name: "notes", data_type: "character varying", character_maximum_length: 1000 },

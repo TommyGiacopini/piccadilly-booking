@@ -49,7 +49,7 @@ function fakeDependencies(input = {}) {
         }
         return result;
       },
-      migrationCount: async () => 15,
+      migrationCount: async () => input.migrationCount ?? 16,
       runChild: async (step, childEnvironment, vitestArguments) => {
         calls.push(step);
         childEnvironments.push({ step, childEnvironment, vitestArguments });
@@ -61,6 +61,18 @@ function fakeDependencies(input = {}) {
 }
 
 describe("isolated Vitest runner safety", () => {
+  it.each([15, 17])("rejects migration count %s instead of exact latest16 and still cleans up", async (migrationCount) => {
+    const fake = fakeDependencies({ migrationCount });
+    const events = [];
+    const exitCode = await runIsolatedVitest({
+      environment: environment(), targetDatabaseName: safeTarget,
+      dependencies: fake.dependencies, logger: (event) => events.push(event),
+    });
+    expect(exitCode).toBe(1);
+    expect(fake.calls).not.toContain("vitest");
+    expect(fake.calls).toContain("drop");
+    expect(events).toContainEqual(expect.objectContaining({ code: "MIGRATION_COUNT_MISMATCH" }));
+  });
   it("accepts only semantic loopback PostgreSQL hosts", () => {
     expect([
       "localhost",

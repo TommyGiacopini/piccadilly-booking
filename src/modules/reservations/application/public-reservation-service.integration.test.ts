@@ -260,6 +260,29 @@ async function expectNoPublicCreationArtifacts(): Promise<void> {
 }
 
 describe.sequential("M7 public booking with real PostgreSQL", () => {
+  it("T06 preserves NC Public create/management and NI across public note edit, reschedule and cancel without DTO/outbox disclosure", async () => {
+    const marker = "T06_PUBLIC_AUTONOMOUS_PRIVATE_MARKER";
+    const created = await serviceCreate({ notes: "T06_PUBLIC_SHARED_NC" });
+    const rawToken = tokenFromPath(created.managementPath);
+    expect(created.reservation.notes).toBe("T06_PUBLIC_SHARED_NC");
+    const stored = await prisma.reservation.findFirstOrThrow({ where: { restaurantId } });
+    await prisma.reservation.update({ where: { id: stored.id }, data: { privateNotes: marker } });
+    const initial = await readPublicReservation({ restaurantId, rawToken, now: earlyNow });
+    expect(initial).not.toHaveProperty("privateNotes");
+    expect(JSON.stringify(initial)).not.toContain(marker);
+    const edited = await updateManagedPublicReservation({ restaurantId, rawToken,
+      rawPayload: updatePayload({ localDate: standardDate, arrivalTime: "19:00", notes: "T06_MANAGEMENT_SHARED_NC" }), now: earlyNow });
+    expect(edited.notes).toBe("T06_MANAGEMENT_SHARED_NC");
+    await updateManagedPublicReservation({ restaurantId, rawToken,
+      rawPayload: updatePayload({ notes: "T06_MANAGEMENT_SHARED_NC" }), now: earlyNow });
+    await cancelManagedPublicReservation({ restaurantId, rawToken, now: earlyNow });
+    expect(await prisma.reservation.findUniqueOrThrow({ where: { id: stored.id } })).toMatchObject({
+      privateNotes: marker, notes: "T06_MANAGEMENT_SHARED_NC", status: "CANCELLED",
+    });
+    expect(JSON.stringify(await readPublicReservation({ restaurantId, rawToken, now: earlyNow }))).not.toContain(marker);
+    expect(JSON.stringify(await prisma.notificationOutbox.findMany({ where: { reservationId: stored.id } }))).not.toContain(marker);
+    expect(JSON.stringify(await prisma.reservationAuditEvent.findMany({ where: { reservationId: stored.id } }))).not.toContain(marker);
+  });
   it.each([
     { allergies: '"'.repeat(300), intolerances: "\\".repeat(300) },
     { allergies: "A\n".repeat(149) + "AA", intolerances: "I\t".repeat(149) + "II" },

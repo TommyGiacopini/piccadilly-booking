@@ -38,7 +38,18 @@ function snapshot(
   context: NotificationPlanningContext,
 ): NotificationReservationSnapshot {
   return {
-    ...reservation,
+    id: reservation.id,
+    restaurantId: reservation.restaurantId,
+    version: reservation.version,
+    origin: reservation.origin,
+    customerFirstName: reservation.customerFirstName,
+    customerPhone: reservation.customerPhone,
+    customerEmail: reservation.customerEmail,
+    consentLanguage: reservation.consentLanguage,
+    localDate: reservation.localDate,
+    serviceType: reservation.serviceType,
+    arrivalTime: reservation.arrivalTime,
+    partySize: reservation.partySize,
     restaurantName: context.restaurantName,
     timezone: context.timezone,
   };
