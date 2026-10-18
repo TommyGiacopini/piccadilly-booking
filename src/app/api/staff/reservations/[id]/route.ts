@@ -16,6 +16,7 @@ import {
 } from "@/server/auth/authorization";
 import { resolveAuthConfig } from "@/server/auth/auth-config";
 import { isSameOriginRequest } from "@/server/auth/request-security";
+import { readDraftRequestSession, draftSessionBindingError } from "@/server/auth/draft-session-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -108,7 +109,12 @@ async function mutate(
   context: ReservationRouteContext,
   action: "UPDATE" | "CANCEL",
 ): Promise<Response> {
-  const user = await getRequestUser(request);
+  let session;
+  if (action === "UPDATE") {
+    try { session = await readDraftRequestSession(request); }
+    catch { return noStoreJson({ error: "Internal error" }, 500); }
+  }
+  const user = action === "UPDATE" ? session?.user : await getRequestUser(request);
 
   if (!user) return noStoreJson({ error: "Unauthorized" }, 401);
   const passwordGuard = passwordChangeRequiredResponse(user);
@@ -116,6 +122,11 @@ async function mutate(
 
   if (!isSameOriginRequest(request, resolveAuthConfig().trustProxy)) {
     return noStoreJson({ error: "Forbidden" }, 403);
+  }
+
+  if (action === "UPDATE") {
+    const bindingError = draftSessionBindingError(request, session!.sessionBinding);
+    if (bindingError) return noStoreJson({ code: bindingError.code }, bindingError.status);
   }
 
   const { id } = await context.params;

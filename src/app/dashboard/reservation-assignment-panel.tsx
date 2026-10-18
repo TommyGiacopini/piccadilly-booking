@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { useStaffDraftHost, useStaffOverlay } from "@/app/_components/staff/staff-draft-host";
 
 import type {
   AssignmentRoomDto,
@@ -37,9 +38,12 @@ export function ReservationAssignmentPanel(props: {
   reservationId: string;
   cancelled: boolean;
   hasAssignment: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const [open, setLocalOpen] = useState(false);
+  const draftHost = useStaffDraftHost();
+  function setOpen(next: boolean) { setLocalOpen(next); props.onOpenChange?.(next); if (!next) requestAnimationFrame(() => triggerRef.current?.focus()); }
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [context, setContext] =
@@ -57,46 +61,7 @@ export function ReservationAssignmentPanel(props: {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const dialog = dialogRef.current;
-    const trigger = triggerRef.current;
-    dialog?.querySelector<HTMLButtonElement>("button")?.focus();
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !submittingRef.current) {
-        event.preventDefault();
-        setOpen(false);
-      }
-      if (event.key !== "Tab" || !dialog) return;
-      const controls = [...dialog.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), select:not(:disabled), textarea:not(:disabled), input:not(:disabled)',
-      )];
-      const first = controls[0];
-      const last = controls[controls.length - 1];
-      if (!first) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-      if (!controls.includes(document.activeElement as HTMLElement)) {
-        event.preventDefault();
-        (event.shiftKey ? last : first)?.focus();
-        return;
-      }
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      trigger?.focus();
-    };
-  }, [open]);
+  const ownsFocus = useStaffOverlay(open, "assignment-" + props.reservationId, dialogRef, () => { if (!submittingRef.current) setOpen(false); });
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -328,7 +293,7 @@ export function ReservationAssignmentPanel(props: {
       <button
         ref={triggerRef}
         className="min-h-11 rounded-lg border border-orange-300 bg-orange-50 px-4 py-2 text-sm font-black text-orange-950 transition hover:bg-orange-100 focus:outline-none focus:ring-4 focus:ring-orange-200"
-        onClick={() => void openPanel()}
+        onClick={() => draftHost.requestExit(() => { void openPanel(); })}
         type="button"
       >
         {props.cancelled
@@ -350,10 +315,11 @@ export function ReservationAssignmentPanel(props: {
           aria-busy={loading || submitting}
           aria-describedby={dialogError ? `assignment-error-${props.reservationId}` : undefined}
           aria-labelledby={`assignment-title-${props.reservationId}`}
-          aria-modal="true"
+          aria-modal={ownsFocus || undefined}
           className="fixed inset-0 z-50 overflow-y-auto bg-zinc-950/70 p-3 [overflow-wrap:anywhere] sm:p-6"
           data-testid="assignment-dialog"
-          role="dialog"
+          role={ownsFocus ? "dialog" : undefined}
+          inert={!ownsFocus}
           tabIndex={-1}
         >
           <div className="mx-auto my-2 w-full max-w-3xl rounded-2xl bg-white p-5 shadow-2xl sm:my-8 sm:p-7">
@@ -602,7 +568,7 @@ export function ReservationAssignmentPanel(props: {
                     </div>
 
                     {confirmingClear ? (
-                      <div className="rounded-xl border border-red-200 bg-red-50 p-4" role="alertdialog">
+                      <div className="rounded-xl border border-red-200 bg-red-50 p-4" role="group" aria-label="Conferma rimozione assegnazione">
                         <p className="font-black text-red-950">
                           Confermi la rimozione logica dell&apos;assegnazione?
                         </p>

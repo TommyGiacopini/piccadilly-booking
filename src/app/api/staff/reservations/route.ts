@@ -6,11 +6,11 @@ import {
 } from "@/modules/reservations/application/reservation-errors";
 import { createPhoneReservation } from "@/modules/reservations/application/staff-reservation-service";
 import {
-  getRequestUser,
   passwordChangeRequiredResponse,
 } from "@/server/auth/authorization";
 import { resolveAuthConfig } from "@/server/auth/auth-config";
 import { isSameOriginRequest } from "@/server/auth/request-security";
+import { readDraftRequestSession, draftSessionBindingError } from "@/server/auth/draft-session-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +24,10 @@ function noStoreJson(body: unknown, status: number): NextResponse {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const user = await getRequestUser(request);
+  let session;
+  try { session = await readDraftRequestSession(request); }
+  catch { return noStoreJson({ error: "Internal error" }, 500); }
+  const user = session?.user;
 
   if (!user) {
     return noStoreJson({ error: "Unauthorized" }, 401);
@@ -37,6 +40,9 @@ export async function POST(request: Request): Promise<Response> {
   if (!isSameOriginRequest(request, authConfig.trustProxy)) {
     return noStoreJson({ error: "Forbidden" }, 403);
   }
+
+  const bindingError = draftSessionBindingError(request, session!.sessionBinding);
+  if (bindingError) return noStoreJson({ code: bindingError.code }, bindingError.status);
 
   const contentType =
     request.headers

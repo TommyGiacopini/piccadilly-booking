@@ -1,7 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { StaffSensitiveRegion, useStaffDraftHost, useStaffHostView } from "@/app/_components/staff/staff-draft-host";
+import { useAgendaContext } from "./agenda-context";
+import { ReservationDetailPanel } from "./reservation-detail-panel";
+import { reservationCompositionPresentation, reservationNoteIndicators } from "@/modules/dashboard/domain/reservation-row-presentation";
 
 import { buttonClassName } from "@/app/_components/ui/button";
 import { ReservationAssignmentPanel } from "@/app/dashboard/reservation-assignment-panel";
@@ -13,12 +17,11 @@ import type {
   DashboardSummary,
 } from "@/modules/dashboard/domain/dashboard-domain";
 import {
-  DEFAULT_STAFF_AGENDA_ORDER,
   selectStaffAgendaReservations,
   type StaffAgendaOrder,
 } from "@/modules/dashboard/domain/staff-agenda";
 import { reservationArrivalUiState } from "@/modules/reservations/domain/reservation-arrival";
-import { partyCompositionLabel } from "@/modules/reservations/domain/party-composition";
+
 import { roomOperationalPresentation } from "@/modules/rooms/domain/room-operational-presentation";
 
 type ArrivalOverride = { version: number; arrivedAt: string | null };
@@ -129,10 +132,12 @@ function ReservationAgendaRow({
   reservation,
   historical,
   onArrivalCommitted,
+  onOpen,
   timezone,
 }: {
   reservation: DashboardReservation;
   historical: boolean;
+  onOpen: () => void;
   onArrivalCommitted: (result: {
     reservationId: string;
     version: number;
@@ -170,7 +175,7 @@ function ReservationAgendaRow({
       <div className="grid min-w-0 gap-3 border-b border-border px-4 py-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(7rem,.45fr)_minmax(8rem,.55fr)_auto] lg:items-center">
         <div className="min-w-0">
           <h3 className="[overflow-wrap:anywhere] text-lg font-semibold text-text-primary">
-            {reservation.customerFirstName} {reservation.customerLastName}
+            <button type="button" className="min-h-11 text-left underline decoration-brand-copper" data-open-reservation onClick={onOpen}>{reservation.customerFirstName} {reservation.customerLastName}</button>
           </h3>
           <p className="mt-0.5 text-xs text-text-muted">
             {originLabel(reservation.origin)} · inserita {insertedAt}
@@ -179,10 +184,10 @@ function ReservationAgendaRow({
 
         <div className="min-w-0">
           <p className="tabular-nums text-lg font-semibold text-text-primary">
-            {reservation.partySize}
+            {reservation.partySize} coperti
           </p>
-          <p className="text-xs text-text-muted">
-            {partyCompositionLabel(reservation)}
+          <p className="text-xs text-text-muted" data-testid="agenda-composition">
+            {reservation.childrenCount !== null && reservation.childrenCount > 0 || reservation.childrenCount === null && reservation.children ? <strong className="inline-block rounded-control border border-warning/50 bg-warning/10 px-2 py-1 font-semibold text-text-primary">{reservationCompositionPresentation(reservation).label}</strong> : reservationCompositionPresentation(reservation).label}
           </p>
         </div>
 
@@ -326,12 +331,7 @@ function ReservationAgendaRow({
                   <strong>Ricorrenza:</strong> {reservation.celebration}
                 </p>
               ) : null}
-              {reservation.notes ? (
-                <p className="[overflow-wrap:anywhere]">
-                  <strong>Note:</strong> {reservation.notes}
-                </p>
-              ) : null}
-            </div>
+              {reservation.notes ? <p><strong>NC condivisa:</strong> note condivisa presente · consultabile nel dettaglio.</p> : null}           </div>
           ) : null}
         </div>
 
@@ -404,6 +404,7 @@ function ReservationAgendaRow({
             </p>
           ) : null}
 
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">{reservationNoteIndicators(reservation).map(note => <span className={note.present ? "rounded-control border-2 border-warning/50 bg-warning/10 p-1 text-text-primary" : "rounded-control border border-border p-1 text-text-muted"} data-note-presence={note.present ? "present" : "absent"} key={note.key}>{note.present ? <strong className="font-semibold">{note.label}</strong> : note.label}</span>)}</div>
           <ReservationPrivateNotesPanel reservationId={reservation.id} />
           <ReservationAssignmentPanel
             cancelled={reservation.status === "CANCELLED"}
@@ -441,7 +442,10 @@ export function StaffAgenda({
   reservations,
   summary,
   timezone,
+  actorId,
+  tenantId,
 }: {
+  actorId: string; tenantId: string;
   emptyStateIsFiltered: boolean;
   historical: boolean;
   newReservationHref: string;
@@ -452,11 +456,21 @@ export function StaffAgenda({
   const [arrivalOverrides, setArrivalOverrides] = useState<
     Record<string, ArrivalOverride>
   >({});
-  const [query, setQuery] = useState("");
-  const [order, setOrder] = useState<StaffAgendaOrder>(
-    DEFAULT_STAFF_AGENDA_ORDER,
-  );
-
+  const controller = useStaffDraftHost(), view = useStaffHostView(), agenda = useAgendaContext();
+  const [detailId, setDetailId] = useState<string | null>(null);
+  useEffect(() => { void controller.verifySession(); }, [controller]);
+  const query = agenda.state.query, order = agenda.state.order;
+  const setQuery = (query: string) => controller.setAgenda({ query });
+  const setOrder = (order: StaffAgendaOrder) => controller.setAgenda({ order });
+  const authorized = controller.sessionVisible() && view.drafts.identity?.actorId === actorId && view.drafts.identity?.tenantId === tenantId;
+  useEffect(() => {
+    const originPath = window.location.pathname + window.location.search;
+    if (authorized && agenda.state.originPath !== originPath) controller.setAgenda({ originPath });
+  }, [authorized, controller, agenda.state.originPath]);
+  function openDetail(reservation: DashboardReservation) {
+    const origin = window.location.pathname + window.location.search;
+    controller.requestExit(() => { agenda.remember(origin, reservation.id); if (window.innerWidth >= 1024) setDetailId(reservation.id); else agenda.navigate("/dashboard/reservations/" + reservation.id, []); });
+  }
   const reconciledArrivalOverrides = reconcileArrivalOverrides(
     arrivalOverrides,
     reservations,
@@ -496,7 +510,8 @@ export function StaffAgenda({
   const normalizedQuery = query.trim();
 
   return (
-    <div className="min-w-0">
+    <StaffSensitiveRegion allowed={authorized}><div className="min-w-0">
+      {agenda.state.feedback ? <div role="status" className="border border-success p-3">{agenda.state.feedback}{agenda.state.destinationHref ? <Link className="ml-3 underline" href={agenda.state.destinationHref} onNavigate={event => { event.preventDefault(); agenda.navigate(agenda.state.destinationHref!); }}>Apri Agenda della nuova destinazione</Link> : null}</div> : null}
       <section
         aria-labelledby="agenda-controls-title"
         className="border border-border bg-surface p-4 sm:p-5"
@@ -509,6 +524,7 @@ export function StaffAgenda({
             <h2
               className="mt-1 text-heading-sm font-semibold text-text-primary"
               id="agenda-controls-title"
+              tabIndex={-1}
             >
               Cerca e ordina
             </h2>
@@ -517,6 +533,7 @@ export function StaffAgenda({
             aria-label="+ Telefonica — Nuova prenotazione telefonica"
             className={`${buttonClassName("primary")} w-full sm:w-auto`}
             href={newReservationHref}
+            onNavigate={event => { event.preventDefault(); agenda.remember(window.location.pathname + window.location.search); agenda.navigate(newReservationHref); }}
           >
             Nuova prenotazione telefonica
           </Link>
@@ -627,6 +644,7 @@ export function StaffAgenda({
               <li className="min-w-0" key={reservation.id}>
                 <ReservationAgendaRow
                   historical={historical}
+                  onOpen={() => openDetail(reservation)}
                   onArrivalCommitted={(result) =>
                     setArrivalOverrides((current) => ({
                       ...current,
@@ -644,6 +662,13 @@ export function StaffAgenda({
           </ol>
         )}
       </section>
-    </div>
+      {detailId ? <ReservationDetailPanel key={detailId} reservationId={detailId} timezone={timezone} onClose={() => {
+        const id = detailId; setDetailId(null);
+        requestAnimationFrame(() => {
+          const target = document.querySelector<HTMLElement>(`[data-reservation-id="${id}"] [data-open-reservation]`);
+          (target ?? document.getElementById("agenda-controls-title"))?.focus();
+        });
+      }} /> : null}
+    </div></StaffSensitiveRegion>
   );
 }

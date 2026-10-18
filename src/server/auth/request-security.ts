@@ -21,6 +21,9 @@ const ALLOWED_POST_LOGIN_PATHS = new Set([
 const RESERVATION_EDIT_POST_LOGIN_PATH =
   /^\/dashboard\/reservations\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/edit$/iu;
 
+const RESERVATION_DETAIL_POST_LOGIN_PATH =
+  /^\/dashboard\/reservations\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
 function closestForwardedValue(value: string | null): string | null {
   const values = value
     ?.split(",")
@@ -159,7 +162,8 @@ export function resolveSafePostLoginPath(value: unknown): string {
   if (
     typeof value !== "string" ||
     (!ALLOWED_POST_LOGIN_PATHS.has(value) &&
-      !RESERVATION_EDIT_POST_LOGIN_PATH.test(value))
+      !RESERVATION_EDIT_POST_LOGIN_PATH.test(value) &&
+      !RESERVATION_DETAIL_POST_LOGIN_PATH.test(value))
   ) {
     return "/dashboard";
   }

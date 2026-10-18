@@ -20,7 +20,10 @@ describe("opaque session tokens", () => {
     expect(hash).toHaveLength(64);
     expect(hash).not.toContain(created.secret);
     expect(sessionSecretMatches(created.secret, hash)).toBe(true);
-    expect(sessionSecretMatches(`${created.secret.slice(0, -1)}A`, hash)).toBe(
+    const original = created.secret.at(-1);
+    const alteredSecret = `${created.secret.slice(0, -1)}${original === "A" ? "B" : "A"}`;
+    expect(alteredSecret).not.toBe(created.secret);
+    expect(sessionSecretMatches(alteredSecret, hash)).toBe(
       false,
     );
   });

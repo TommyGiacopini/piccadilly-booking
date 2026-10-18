@@ -478,3 +478,23 @@ Una decisione vincolante cambia soltanto tramite:
 3. aggiornamento di questo registro;
 4. aggiornamento dell'ADR pertinente;
 5. eventuale aggiornamento autorizzato di `PROJECT_SPEC.md`.
+
+## 2026-10-16 — T06-B final design freeze, CB01–CB07 e SQ01–SQ06
+
+Il mandato iniziale ratificava46 path esatti (29 modificati,17 aggiunti). Il Controller ha poi approvato l'estensione a48 path (31 modificati,17 aggiunti,0 eliminati), aggiungendo esclusivamente `tests/e2e/t04-room-only-assignment.spec.ts` e `tests/e2e/t05-room-policy.spec.ts` per tre assertion di presentazione. Coperti, numero effettivo di bambini, distinzione sconosciuto/zero e tutte le prove DB, Arrival, Assignment, versioning, audit e concorrenza restano vincolanti; il mapping OLD→NEW è nelle evidence. Una successiva decisione approva49 path (32 modificati,17 aggiunti,0 eliminati), aggiungendo soltanto `src/server/auth/session-token.test.ts` per garantire che il secret del test negativo sia sempre diverso dall'originale. Restano tutte le assertion di sicurezza e nessun codice auth, token, policy, runner, timeout o retry è modificato. Sono autorizzati soltanto implementazione locale isolata, clean install canonica, PostgreSQL temporaneo, regressioni complete ed evidence portabile. I376 file baseline fuori scope, manifest, schema16, migration1–16, runner e writer canonici sono protetti. Non sono autorizzati staging, commit, push, PR, merge, deploy, operazioni persistenti o T06-C/D.
+
+È adottato un root client host volatile per superare il limite di lifetime del solo DashboardLayout. Link.onNavigate e beforeunload sono strumenti parziali: Back/Forward non sono falsamente bloccati, la history non viene compensata e le API interne Next non vengono modificate. L’autorizzazione live e il recupero esplicito separano conservazione da visualizzazione.
+
+Durante PENDING payload completo, versione e identità del tentativo sono acquisiti prima del busy lock sincrono e della disabilitazione dei campi. Gli ACK non possono modificare un record ricreato o una sessione diversa.409 non è assunto sempre VERSION_CONFLICT; nessuna interpretazione di messaggi testuali come codici strutturati. Il confronto con dati canonici resta separato dalla bozza.
+
+L’unica estensione auth ammessa è POST /api/auth/draft-context. Il callback login aggiuntivo ammette soltanto il dettaglio con UUID valido, senza wildcard, query o sottopercorsi. Le policy origin/proxy/CSRF/sessione/rate-limit e i callback esistenti restano protetti.
+
+Il Work Final Quality Gate rimane indipendente: test e build locali non costituiscono approvazione autonoma della qualità, della sicurezza globale o del deployment. Le riserve T06-SEC R1–R4 restano documentate e non sono cancellate da T06-B.
+
+## 2026-10-18 — F01-TOCTOU-01 e decisione D01
+
+Il Controller autorizza soltanto remediation locale in11 path nominati, su scope cumulativo52 esatti (35 modificati,17 aggiunti,0 eliminati),425 record e373 file baseline protetti. Le sole tre aggiunte allo scope49 sono i Route Handler PHONE POST, Staff PATCH UPDATE e NI PUT. F02–F04 restano chiusi; auth core, business writer, manifest, schema/migration1–16, runner e configurazioni restano invariati. Nessuna nuova API o migration.
+
+È ratificato il confronto server della sessione proprietaria del draft con la sessione autenticata nella stessa richiesta HTTP. Actor e HMAC derivano da un'unica autenticazione canonica; nessuna seconda lettura indipendente. Il binding è un vincolo aggiuntivo di uguaglianza, non una credenziale. La proof client resta utile ma non chiude da sola l'interleaving cookie A/B. I test devono distinguere CLIENT_NO_DISPATCH, SERVER_REJECTED_BEFORE_WRITER, AUTHORIZED_MUTATION e LEGACY_COMPATIBLE_MUTATION.
+
+D01 consente compatibilità legacy senza header, condizionata all'obbligo verificato dei tre submit T06-B di inviare sempre il binding originale, senza fallback. Il server non dispone di discriminatore autorevole per tutti i client headerless: non si dichiara protezione universale della loro provenienza. Il futuro Work Security QG deve valutare espressamente questo limite. Sono preservati idempotenza PHONE, no-op NI anche stale,409, auth/revoca/password-change/Origin e tutte le policy canoniche. Request già autenticata A può completare dopo login B; nessuna promessa di cancellazione automatica o revoca transazionale concorrente. Pubblicazione, merge, deploy, DB persistente e T06-C/D rimangono vietati.

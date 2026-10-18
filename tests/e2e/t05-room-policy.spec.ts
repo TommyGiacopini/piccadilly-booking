@@ -112,7 +112,7 @@ test.describe.serial("T05 room policy", () => {
       const arrived = await page.request.put(`/api/staff/reservations/${ref.id}/arrival`, { headers, data: { version: 1, arrived: true } }); expect(arrived.status()).toBe(200);
       const before = preserved(await stored(ref.id)); let puts = 0; page.on("request", (request) => { if (request.method() === "PUT" && request.url().endsWith(`/${ref.id}/assignment`)) puts++; });
       await page.goto(`/dashboard?date=${date}&service=DINNER`); const row = card(page, ref.id);
-      await expect(row).toContainText("4 coperti · 1 bambino"); await expect(row).toContainText("SALA GIOCHI RICHIESTA"); await expect(row.getByTestId("arrival-state")).toHaveText("ARRIVATO");
+      await expect(row).toContainText("4 coperti"); await expect(row).toContainText("Bimbi (1)"); await expect(row).toContainText("SALA GIOCHI RICHIESTA"); await expect(row.getByTestId("arrival-state")).toHaveText("ARRIVATO");
       const catalog = await read(page.request, ref.id); expect(catalog.rooms.find((room) => room.code === "sala-3")?.name).toBe("Sala 3");
       for (const [index, code] of ["sala-1", "sala-3"].entries()) {
         const dialog = await open(page, ref.id); expect(puts).toBe(index);

@@ -77,7 +77,7 @@ async function cancelCreatedReservation(
   fullName: string,
   overrideReason?: string,
 ) {
-  await page.getByRole("link", { name: "Torna alla dashboard" }).click();
+  await page.getByRole("link", { name: "Torna Agenda" }).click();
   await expect(page).toHaveURL(/\/dashboard\?date=/, { timeout: 20_000 });
   const card = page.locator("article").filter({ hasText: fullName }).last();
   await expect(card).toBeVisible({ timeout: 20_000 });
@@ -157,7 +157,7 @@ test.describe("M8 dashboard Staff/Admin", () => {
     await openPhoneForm(page, date);
     await fillPhoneReservation(page, { firstName, lastName, partySize: 2 });
     expect(reservationPostCount).toBe(1);
-    await page.getByRole("link", { name: "Torna alla dashboard" }).click();
+    await page.getByRole("link", { name: "Torna Agenda" }).click();
 
     const matchingCards = page
       .locator("article")
@@ -183,7 +183,7 @@ test.describe("M8 dashboard Staff/Admin", () => {
     await page.getByLabel("Note").fill("Aggiornamento E2E fittizio");
     await page.getByRole("button", { name: "Salva modifiche" }).click();
     await expect(page.getByText("Prenotazione aggiornata.", { exact: false })).toBeVisible();
-    await page.getByRole("link", { name: "Torna alla dashboard" }).click();
+    await expect(page).toHaveURL(/\/dashboard\?date=/u);
 
     const updatedCard = page.locator("article").filter({ hasText: `${firstName} ${lastName}` }).last();
     await expect(updatedCard).toContainText("+39 000 000 0999");

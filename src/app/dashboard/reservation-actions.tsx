@@ -3,13 +3,17 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useAgendaContext } from "./agenda-context";
 
 export function ReservationActions(props: {
   reservationId: string;
   version: number;
   cancelled: boolean;
+  onCommitted?: () => void;
+  inline?: boolean;
 }) {
   const router = useRouter();
+  const agenda = useAgendaContext();
   const [confirming, setConfirming] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +39,7 @@ export function ReservationActions(props: {
       }
 
       setConfirming(false);
+      props.onCommitted?.();
       router.refresh();
     } catch {
       setError("Errore di rete. Riprova senza chiudere la pagina.");
@@ -51,13 +56,14 @@ export function ReservationActions(props: {
         <Link
           className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-bold text-white transition hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-200"
           href={`/dashboard/reservations/${props.reservationId}/edit`}
+          onNavigate={event => { event.preventDefault(); if (window.location.pathname === "/dashboard") agenda.remember(window.location.pathname + window.location.search, props.reservationId); agenda.navigate(`/dashboard/reservations/${props.reservationId}/edit`); }}
         >
           Modifica
         </Link>
         {!confirming ? (
           <button
             className="rounded-lg border border-red-300 px-4 py-2 text-sm font-bold text-red-700 transition hover:bg-red-50 focus:outline-none focus:ring-4 focus:ring-red-100"
-            onClick={() => setConfirming(true)}
+            onClick={() => agenda.controller.requestExit(() => setConfirming(true))}
             type="button"
           >
             Cancella
@@ -68,7 +74,7 @@ export function ReservationActions(props: {
       {confirming ? (
         <div
           className="mt-3 rounded-xl border border-red-200 bg-red-50 p-4"
-          role="alertdialog"
+          role={props.inline ? "group" : "alertdialog"}
           aria-labelledby={`cancel-title-${props.reservationId}`}
         >
           <p

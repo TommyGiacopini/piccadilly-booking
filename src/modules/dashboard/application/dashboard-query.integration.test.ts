@@ -708,17 +708,22 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
       ).toMatchObject({ internalNotesPresent: true });
       expect(noteProjectionQueries).toHaveLength(1);
       expect(noteProjectionQueries[0]).toContain(
-        'assignment.internal_notes IS NOT NULL AS "internalNotesPresent"',
+        '(assignment.internal_notes IS NOT NULL) AS "legacyNotesPresent"',
       );
       expect(noteProjectionQueries[0]).toContain(
-        "assignment.restaurant_id = $1::uuid",
+        "reservation.restaurant_id = assignment.restaurant_id",
       );
       expect(noteProjectionQueries[0]).toContain(
-        "reservation.restaurant_id = $2::uuid",
+        "reservation.restaurant_id = $1::uuid",
       );
       expect(noteProjectionQueries[0]).not.toContain(
         'assignment.internal_notes AS "internalNotes"',
       );
+      expect(noteProjectionQueries[0]).toContain("reservation.private_notes IS NOT NULL");
+      expect(noteProjectionQueries[0]).toContain('AS "privateNotesPresent"');
+      expect(noteProjectionQueries[0]).toContain("reservation.local_date = $2::date");
+      expect(JSON.stringify(firstRead)).not.toContain(internalNotesSentinel);
+      expect(queries.filter(query => /SELECT[\s\S]*"public"."reservations"/iu.test(query)).every(query => !query.includes('"private_notes"'))).toBe(true);
 
       await prisma.reservation.create({
         data: reservationData({
@@ -742,6 +747,33 @@ describe.sequential("M10-C dashboard read model with real PostgreSQL", () => {
         where: { id: extraReservationId, restaurantId },
       });
       await queryClient.$disconnect();
+    }
+  });
+
+  it("keeps autonomous, active and cleared legacy presence distinct without leaking text or crossing tenant/date", async () => {
+    const firstId = randomUUID(), clearedId = randomUUID(), outsideId = randomUUID(), otherId = randomUUID();
+    const marker = "T06B-NI-PRIVATE-ARTIFICIAL-MARKER";
+    await prisma.reservation.createMany({ data: [
+      { ...reservationData({ id: firstId, targetRestaurantId: restaurantId, partySize: 2, preferenceRoomCode: "sala-1" }), privateNotes: marker },
+      reservationData({ id: clearedId, targetRestaurantId: restaurantId, partySize: 2, preferenceRoomCode: "sala-1" }),
+      { ...reservationData({ id: outsideId, targetRestaurantId: restaurantId, partySize: 2, preferenceRoomCode: "sala-1", targetLocalDate: "2099-10-21" }), privateNotes: marker },
+      { ...reservationData({ id: otherId, targetRestaurantId: otherRestaurantId, partySize: 2, preferenceRoomCode: "sala-1" }), privateNotes: marker },
+    ] });
+    await createAssignment({ reservationId: firstId, notes: marker });
+    await createAssignment({ reservationId: clearedId, notes: marker });
+    await prisma.reservationAssignment.updateMany({ where: { reservationId: clearedId, restaurantId }, data: { clearedAt: now, updatedByUserId: userId } });
+    const rows = await readDashboardReservationsWithClient(prisma, { restaurantId, localDate });
+    expect(rows.find(row => row.reservation.id === firstId)).toMatchObject({ privateNotesPresent: true, legacyNotesPresent: true, legacyNotesState: "ACTIVE" });
+    expect(rows.find(row => row.reservation.id === clearedId)).toMatchObject({ privateNotesPresent: false, legacyNotesPresent: true, legacyNotesState: "CLEARED", assignment: null });
+    expect(rows.some(row => row.reservation.id === outsideId || row.reservation.id === otherId)).toBe(false);
+    expect(JSON.stringify(rows)).not.toContain(marker);
+    for (const [value, expected] of [[" ", true], ["", false], [null, false]] as const) {
+      await prisma.reservation.update({ where: { id: firstId }, data: { privateNotes: value } });
+      const reread = await readDashboardReservationsWithClient(prisma, { restaurantId, localDate });
+      const own = reread.find(row => row.reservation.id === firstId)!;
+      expect(own.privateNotesPresent).toBe(expected);
+      expect(own.reservation).not.toHaveProperty("privateNotes");
+      expect(own.assignment).not.toHaveProperty("internalNotes");
     }
   });
 

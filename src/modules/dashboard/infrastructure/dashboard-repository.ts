@@ -47,7 +47,9 @@ export async function readDashboardContext(
 
 interface AssignmentNotePresenceRow {
   reservationId: string;
-  internalNotesPresent: boolean;
+  privateNotesPresent: boolean;
+  legacyNotesPresent: boolean;
+  legacyNotesState: "ACTIVE" | "CLEARED" | null;
 }
 
 export async function readDashboardReservationsWithClient(
@@ -72,7 +74,39 @@ export async function readDashboardReservationsWithClient(
           { createdAt: "asc" },
           { id: "asc" },
         ],
-        include: {
+        select: {
+          id: true,
+          restaurantId: true,
+          localDate: true,
+          serviceType: true,
+          arrivalTime: true,
+          partySize: true,
+          childrenCount: true,
+          gameRoomPreference: true,
+          status: true,
+          origin: true,
+          customerFirstName: true,
+          customerLastName: true,
+          customerPhone: true,
+          customerEmail: true,
+          notes: true,
+          preferences: true,
+          allergies: true,
+          privacyPolicyVersion: true,
+          privacyConsentAt: true,
+          privacyConsentMethod: true,
+          termsPolicyVersion: true,
+          termsConsentAt: true,
+          termsConsentMethod: true,
+          consentLanguage: true,
+          createdByUserId: true,
+          capacityOverride: true,
+          capacityOverrideReason: true,
+          createdAt: true,
+          updatedAt: true,
+          cancelledAt: true,
+          arrivedAt: true,
+          version: true,
           assignment: {
             select: {
               clearedAt: true,
@@ -105,21 +139,22 @@ export async function readDashboardReservationsWithClient(
         AssignmentNotePresenceRow[]
       >(Prisma.sql`
         SELECT
-          assignment.reservation_id AS "reservationId",
-          assignment.internal_notes IS NOT NULL AS "internalNotesPresent"
-        FROM reservation_assignments AS assignment
-        INNER JOIN reservations AS reservation
+          reservation.id AS "reservationId",
+          (reservation.private_notes IS NOT NULL AND reservation.private_notes <> '') AS "privateNotesPresent",
+          (assignment.internal_notes IS NOT NULL) AS "legacyNotesPresent",
+          CASE WHEN assignment.id IS NULL THEN NULL
+            WHEN assignment.cleared_at IS NULL THEN 'ACTIVE' ELSE 'CLEARED' END AS "legacyNotesState"
+        FROM reservations AS reservation
+        LEFT JOIN reservation_assignments AS assignment
           ON reservation.restaurant_id = assignment.restaurant_id
           AND reservation.id = assignment.reservation_id
-        WHERE assignment.restaurant_id = ${input.restaurantId}::uuid
-          AND reservation.restaurant_id = ${input.restaurantId}::uuid
+        WHERE reservation.restaurant_id = ${input.restaurantId}::uuid
           AND reservation.local_date = ${localDate}::date
-          AND assignment.cleared_at IS NULL
       `);
       const notePresenceByReservationId = new Map(
         notePresenceRows.map((row) => [
           row.reservationId,
-          row.internalNotesPresent,
+          row,
         ]),
       );
       const reservationIds = reservations.map((reservation) => reservation.id);
@@ -184,6 +219,9 @@ export async function readDashboardReservationsWithClient(
 
       return reservations.map((row) => ({
         reservation: mapReservation(row),
+        privateNotesPresent: notePresenceByReservationId.get(row.id)?.privateNotesPresent === true,
+        legacyNotesPresent: notePresenceByReservationId.get(row.id)?.legacyNotesPresent === true,
+        legacyNotesState: notePresenceByReservationId.get(row.id)?.legacyNotesState ?? null,
         assignment:
           row.assignment?.clearedAt === null
             ? {
@@ -192,7 +230,7 @@ export async function readDashboardReservationsWithClient(
                   ({ diningTable }) => diningTable,
                 ),
                 internalNotesPresent:
-                  notePresenceByReservationId.get(row.id) === true,
+                  notePresenceByReservationId.get(row.id)?.legacyNotesPresent === true,
               }
             : null,
         notificationHealth: deriveLatestNotificationHealth(

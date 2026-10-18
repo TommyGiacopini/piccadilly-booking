@@ -100,7 +100,7 @@ test("NI senza assegnazione: responsive, Unicode1000, tastiera e focus restituit
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await dialog.getByRole("button", { name: "Chiudi note interne" }).focus(); await page.keyboard.press("Shift+Tab");
-    await expect(dialog.getByRole("button", { name: "Ricarica nota e sostituisci bozza" })).toBeFocused();
+    await expect(dialog.getByRole("button", { name: "Rileggi nota senza sostituire bozza" })).toBeFocused();
     await page.keyboard.press("Tab"); await expect(dialog.getByRole("button", { name: "Chiudi note interne" })).toBeFocused();
     await text.fill("😀".repeat(1000)); await expect(dialog).toContainText("1000 / 1000");
     const response = page.waitForResponse((r) => r.url().endsWith("/private-notes") && r.request().method() === "PUT");
@@ -150,7 +150,11 @@ test("409 reale conserva bozza, richiede reload esplicito e non forza la version
     await expect(dialog.getByRole("button", { name: "Salva nota interna" })).toBeDisabled();
     expect((await stored(item.id)).private_notes).toBe("T06_OTHER_OPERATOR_WINNER");
     await shot(page, "notes-real-409");
-    await dialog.getByRole("button", { name: "Ricarica nota e sostituisci bozza" }).click();
+    await dialog.getByRole("button", { name: "Rileggi nota senza sostituire bozza" }).click();
+    await expect(draft).toHaveValue("T06_LOCAL_DRAFT");
+    await expect(dialog).toContainText("Nota canonica riletta: T06_OTHER_OPERATOR_WINNER");
+    await dialog.getByRole("button", { name: "Adotta la nota canonica dopo conferma" }).click();
+    await dialog.getByRole("button", { name: "Conferma scarto e adotta nota canonica" }).click();
     await expect(draft).toHaveValue("T06_OTHER_OPERATOR_WINNER");
     expect((await context(page.request, item.id)).reservation.version).toBe(2);
     record("real-409", { actualStatus: 409, draftRetained: true, errorFocus: true, noAutomaticRetry: true, explicitReload: true });

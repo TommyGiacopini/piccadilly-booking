@@ -2,6 +2,7 @@ import { ReservationCreateForm } from "@/app/dashboard/reservations/new/reservat
 import { getStaffReservationFormContext } from "@/modules/dashboard/application/dashboard-query";
 import { requireAuthenticatedUser } from "@/server/auth/authorization";
 import { resolveReservationConfig } from "@/shared/config/reservation-config";
+import { phoneInitialService } from "@/modules/dashboard/domain/reservation-row-presentation";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -35,12 +36,14 @@ export default async function NewReservationPage({
           </h1>
           <p className="mt-3 max-w-3xl leading-7 text-zinc-300">
             L’origine è fissata dal server a PHONE. Il salvataggio aggiorna
-            subito la capacità condivisa e non invia notifiche.
+            subito la capacità condivisa. Le notifiche sono pianificate secondo
+            il consenso e le opzioni confermate, con provider simulati.
           </p>
         </header>
 
         <ReservationCreateForm
           defaultDate={context.localDate}
+          defaultService={phoneInitialService(typeof query.service === "string" ? query.service : undefined)}
           privacyPolicyVersion={config.privacyPolicyVersion}
         />
       </div>

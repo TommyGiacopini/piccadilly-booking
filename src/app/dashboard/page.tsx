@@ -230,9 +230,11 @@ export default async function DashboardPage({
 
         <div className="mt-5 min-w-0">
           <StaffAgenda
+            actorId={user.id}
+            tenantId={user.restaurantId}
             emptyStateIsFiltered={hasSecondaryFilters}
             historical={dashboard.isHistorical}
-            newReservationHref={`/dashboard/reservations/new?date=${dashboard.localDate}`}
+            newReservationHref={`/dashboard/reservations/new?date=${dashboard.localDate}&service=${dashboard.filters.service}`}
             reservations={dashboard.reservations}
             summary={dashboard.summary}
             timezone={dashboard.timezone}

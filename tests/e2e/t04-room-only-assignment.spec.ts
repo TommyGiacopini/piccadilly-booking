@@ -266,10 +266,14 @@ test.describe.serial("T04 Revised room-only assignment", () => {
       const before = await stored(ref.id);
       await page.goto(`/dashboard?date=${date}&service=DINNER`);
       const row = card(page, ref.id);
-      await expect(row).toContainText("4 coperti · 2 bambini");
+      await expect(row).toContainText("4 coperti");
+      await expect(row).toContainText("Bimbi (2)");
       await expect(row.getByText("SALA GIOCHI RICHIESTA", { exact: true })).toBeVisible();
       await expect(row.getByTestId("arrival-state")).toHaveText("ARRIVATO");
-      await expect(card(page, unknown.id)).toContainText("4 coperti · composizione non specificata");
+      await expect(card(page, unknown.id)).toContainText("4 coperti");
+      await expect(card(page, unknown.id)).toContainText("Composizione non specificata");
+      await expect(card(page, unknown.id).getByText("TA", { exact: true })).toHaveCount(0);
+      await expect(card(page, unknown.id).getByText(/^Bimbi \(\d+\)$/u)).toHaveCount(0);
       const dialog = await open(page, ref.id);
       await dialog.getByTestId("assignment-room-select").selectOption(emptyRoomId);
       await dialog.getByTestId("assignment-internal-notes").fill("Storia T04 sintetica");

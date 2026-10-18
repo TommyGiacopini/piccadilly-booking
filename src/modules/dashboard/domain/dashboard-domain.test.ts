@@ -74,7 +74,7 @@ function source(
   reservationOverrides: Partial<StoredReservation> = {},
   assignment: DashboardAssignmentSource | null = null,
 ): DashboardReservationSource {
-  return { reservation: reservation(reservationOverrides), assignment };
+  return { reservation: reservation(reservationOverrides), assignment, privateNotesPresent: false, legacyNotesPresent: assignment?.internalNotesPresent ?? false, legacyNotesState: assignment ? "ACTIVE" : null };
 }
 
 function assignment(

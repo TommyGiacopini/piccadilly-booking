@@ -942,3 +942,17 @@ La numerazione ufficiale è quella di `docs/ROADMAP.md`:
 14\. provider reali;
 
 15\. produzione, backup e consegna.
+
+## T06-B — Agenda, dettaglio e bozze Staff (contratto congelato 16 ottobre 2026)
+
+T06-A e T06-SEC sono chiuse sulla baseline main aa6e5aca21741b448cbcf85e7f39096f3c75f928. T06-B è autorizzata soltanto per sviluppo locale e Quality Gate indipendente. Pubblicazione Git, deploy e operazioni sul database persistente richiedono mandati separati. T06-C/D restano escluse.
+
+L’Agenda mantiene coperti totali, orario, stato, Arrival, assegnazione, esigenze dichiarate, ricerca, quattro ordinamenti, filtri e conteggi. La composizione esplicita zero è TA; un conteggio positivo è Bimbi (N), inclusi nei coperti. Unknown e legacy bambini senza conteggio non diventano zero. NC condivise, NI autonome e legacy ACTIVE/CLEARED hanno indicatori distinti; nessun testo NI entra nel read model della lista.
+
+Il dettaglio /dashboard/reservations/{UUID} ha un guard SSR proprio Staff/Admin e tenant. Dall’Agenda si apre un drawer da1024 CSSpx; sotto1024 si apre la pagina. La pagina resta disponibile anche da desktop. La superficie è fissata all’apertura, con un core comune: il resize non naviga né rimonta l’editor. Le sezioni lette separatamente non sono presentate come snapshot atomico; metadata mancanti non sono inventati.
+
+PHONE preserva payload, consenso, notifiche, Idempotency-Key, replay e retry. Nessuna NI nel POST iniziale. La conferma conserva i valori correnti e usa l’ID reale per Apri dettaglio e il collegamento Torna Agenda. Staff Edit conserva tutti i campi, NC comprese, e torna all’Agenda originaria dopo successo o no-op riconosciuto. Il reschedule offre un link esplicito alla nuova destinazione senza salto automatico; l’auto-unassignment resta server-side. Errori e409 conservano la bozza e non producono navigazione di successo.
+
+NI usa il suo endpoint Staff autorizzato e un editor unico. NC passa da Staff Edit. Le note legacy restano separate. CANCELLED è read-only per NC, NI e assignment; Arrival T03 conserva i guard già approvati.
+
+Le bozze PHONE/Edit/NI sono esclusivamente RAM client, segregate per tenant, attore, binding di sessione, tipo e risorsa. Link e chiusure controllate offrono Resta, Esci conservando, Scarta selettivamente. Back/Forward nativi completano la transizione: il recupero è esplicito e richiede nuova autorizzazione. Nessuna promessa di recupero dopo reload, chiusura o navigazione documentale completa. Non esistono autosave o persistenza delle bozze.
