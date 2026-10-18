@@ -64,7 +64,7 @@ export default async function EditReservationPage({
         </header>
 
         <ReservationEditForm
-          reservation={reservation}
+          reservationId={reservation.id}
         />
       </div>
     </main>

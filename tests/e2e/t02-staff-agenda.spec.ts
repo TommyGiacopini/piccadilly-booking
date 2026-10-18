@@ -309,7 +309,12 @@ test.describe.serial("T02 Staff Agenda", () => {
       ]) {
         await page.setViewportSize(viewport);
         await expect(card).toContainText(longLastName);
-        await expect(card).toContainText(longNote);
+        await expect(card).toContainText("NC condivisa presente");
+        await card.locator("[data-open-reservation]").click();
+        await expect(page.getByText(longNote, { exact: true }).first()).toBeVisible();
+        const detail = page.getByRole("dialog", { name: "Dettaglio prenotazione", exact: true });
+        if (await detail.isVisible()) await detail.getByRole("button", { name: "Chiudi dettaglio" }).click();
+        else await page.getByRole("link", { name: "Torna Agenda", exact: true }).click();
         await expect(card.getByTestId("unassigned-badge")).toHaveText(
           "DA ASSEGNARE",
         );

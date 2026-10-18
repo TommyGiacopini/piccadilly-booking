@@ -7,6 +7,7 @@ import {
 import { resolveAuthConfig } from "@/server/auth/auth-config";
 import { getRequestUser, passwordChangeRequiredResponse } from "@/server/auth/authorization";
 import { isSameOriginRequest } from "@/server/auth/request-security";
+import { readDraftRequestSession, draftSessionBindingError } from "@/server/auth/draft-session-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,12 +17,21 @@ function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 async function handle(request: Request, context: Context, mutation: boolean): Promise<Response> {
-  const user = await getRequestUser(request);
+  let session;
+  if (mutation) {
+    try { session = await readDraftRequestSession(request); }
+    catch { return json({ error: "Internal error" }, 500); }
+  }
+  const user = mutation ? session?.user : await getRequestUser(request);
   if (!user) return json({ error: "Unauthorized" }, 401);
   const passwordGuard = passwordChangeRequiredResponse(user);
   if (passwordGuard) return passwordGuard;
   if (user.role !== "STAFF" && user.role !== "ADMIN") return json({ error: "Forbidden" }, 403);
   if (mutation && !isSameOriginRequest(request, resolveAuthConfig().trustProxy)) return json({ error: "Forbidden" }, 403);
+  if (mutation) {
+    const bindingError = draftSessionBindingError(request, session!.sessionBinding);
+    if (bindingError) return json({ code: bindingError.code }, bindingError.status);
+  }
   const id = z.uuid().safeParse((await context.params).id);
   if (!id.success) return json({ error: "Identificativo non valido." }, 400);
   const input = { actor: { id: user.id, restaurantId: user.restaurantId }, reservationId: id.data };

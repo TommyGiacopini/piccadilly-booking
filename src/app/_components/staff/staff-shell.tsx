@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useStaffDraftHost, useStaffOverlay } from "@/app/_components/staff/staff-draft-host";
 
 import { BrandLogo } from "@/app/_components/ui/brand-logo";
 
@@ -132,6 +133,7 @@ function Navigation({
   pathname: string;
   role: StaffRole;
 }) {
+  const controller = useStaffDraftHost(), router = useRouter();
   return (
     <nav aria-label="Navigazione area Staff" className="space-y-1">
       {buildStaffNavigation(role).map((item) => {
@@ -148,7 +150,7 @@ function Navigation({
             data-nav-label={item.label}
             href={item.href}
             key={item.href}
-            onClick={onNavigate}
+            onNavigate={(event) => { event.preventDefault(); onNavigate?.(); controller.requestExit(() => { controller.prepareNavigation(); router.push(item.href); }); }}
             title={item.label}
           >
             <Icon name={item.icon} />
@@ -173,6 +175,7 @@ function AccountActions({
   role: StaffRole;
   username: string;
 }) {
+  const controller = useStaffDraftHost(), router = useRouter();
   return (
     <div className="border-t border-white/15 pt-3">
       <div className={mobile ? "mb-3 px-4" : "mb-3 hidden px-4 lg:block"}>
@@ -187,13 +190,13 @@ function AccountActions({
           mobile ? "" : "md:justify-center md:px-0 lg:justify-start lg:px-4"
         }`}
         href="/cambia-password"
-        onClick={onNavigate}
+        onNavigate={(event) => { event.preventDefault(); onNavigate?.(); controller.requestExit(() => { controller.prepareNavigation(); router.push("/cambia-password"); }); }}
         title="Cambia password"
       >
         <Icon name="key" />
         <span className={mobile ? "" : "md:sr-only lg:not-sr-only"}>Password</span>
       </Link>
-      <form action="/api/auth/logout" method="post">
+      <form action="/api/auth/logout" method="post" onSubmit={(event) => { event.preventDefault(); const form = event.currentTarget; onNavigate?.(); controller.requestLogout(form); }}>
         <button
           aria-label="Logout"
           className={`flex min-h-11 w-full items-center gap-3 rounded-control px-4 text-sm font-medium text-shell-text-secondary hover:bg-shell-hover hover:text-shell-text ${
@@ -223,47 +226,9 @@ export function StaffShell({
   const drawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!drawerOpen) return;
-
-    const previousOverflow = document.body.style.overflow;
-    const menuButton = menuButtonRef.current;
-    document.body.style.overflow = "hidden";
-    closeButtonRef.current?.focus();
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      menuButton?.focus();
-    };
-  }, [drawerOpen]);
-
-  function handleDrawerKeyDown(event: React.KeyboardEvent<HTMLElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setDrawerOpen(false);
-      return;
-    }
-    if (event.key !== "Tab") return;
-
-    const focusable = Array.from(
-      drawerRef.current?.querySelectorAll<HTMLElement>(
-        'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      ) ?? [],
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable.at(-1);
-    if (!first || !last) return;
-
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
+  const controller = useStaffDraftHost();
+  function closeMenu() { setDrawerOpen(false); requestAnimationFrame(() => menuButtonRef.current?.focus()); }
+  const menuActive = useStaffOverlay(drawerOpen, "staff-mobile-menu", drawerRef, closeMenu);
 
   return (
     <div className="min-h-screen bg-page-background" data-staff-shell>
@@ -295,7 +260,7 @@ export function StaffShell({
           aria-expanded={drawerOpen}
           aria-label="Apri navigazione"
           className="inline-flex size-11 items-center justify-center rounded-control text-shell-text hover:bg-shell-hover"
-          onClick={() => setDrawerOpen(true)}
+          onClick={() => controller.requestExit(() => setDrawerOpen(true))}
           ref={menuButtonRef}
           type="button"
         >
@@ -308,25 +273,25 @@ export function StaffShell({
           <button
             aria-label="Chiudi navigazione"
             className="absolute inset-0 h-full w-full bg-black/55"
-            onClick={() => setDrawerOpen(false)}
+            onClick={closeMenu}
             tabIndex={-1}
             type="button"
           />
           <aside
             aria-label="Menu area Staff"
-            aria-modal="true"
+            aria-modal={menuActive || undefined}
             className="absolute inset-y-0 left-0 flex w-[min(86vw,320px)] flex-col bg-shell p-4 shadow-2xl"
             id="staff-mobile-navigation"
-            onKeyDown={handleDrawerKeyDown}
             ref={drawerRef}
-            role="dialog"
+            role={menuActive ? "dialog" : undefined}
+            inert={!menuActive}
           >
             <div className="flex min-h-14 items-center justify-between">
               <BrandLogo className="w-[124px]" />
               <button
                 aria-label="Chiudi menu"
                 className="inline-flex size-11 items-center justify-center rounded-control text-shell-text hover:bg-shell-hover"
-                onClick={() => setDrawerOpen(false)}
+                onClick={closeMenu}
                 ref={closeButtonRef}
                 type="button"
               >

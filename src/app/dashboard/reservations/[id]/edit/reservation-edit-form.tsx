@@ -1,221 +1,68 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type FormEvent } from "react";
-import { PartyCompositionFields, compositionFormState, compositionPayload } from "@/app/prenota/party-composition-fields";
+import { usePathname } from "next/navigation";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { StaffSensitiveRegion, useStaffDraftBinding, useStaffResource } from "@/app/_components/staff/staff-draft-host";
+import { useAgendaContext } from "@/app/dashboard/agenda-context";
+import { StaffReservationFields, reservationFormPayload, reservationFormValues } from "@/app/dashboard/reservations/new/reservation-create-form";
+import { rescheduledAgendaHref } from "@/modules/dashboard/domain/agenda-navigation";
 
-import type { StaffReservationDto } from "@/modules/reservations/domain/staff-dto";
+const fieldLabels: Record<string, string> = { localDate: "Data", serviceType: "Servizio", arrivalTime: "Orario", partySize: "Coperti", compositionMode: "Composizione", compositionCount: "Numero bambini", compositionGames: "Richiesta giochi", customerFirstName: "Nome", customerLastName: "Cognome", customerPhone: "Telefono", customerEmail: "Email", notes: "NC condivisa", highChair: "Seggiolone", stroller: "Passeggino", accessibility: "Accessibilità", celiac: "Celiachia", animals: "Animali", allergies: "Allergie", intolerances: "Intolleranze", celebration: "Ricorrenza", capacityOverride: "Override", capacityOverrideReason: "Motivo override" };
+function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 
-const fieldClassName =
-  "mt-2 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-base text-zinc-950 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100";
-
-function stringValue(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === "string" ? value : "";
-}
-
-function checked(formData: FormData, name: string): boolean {
-  return formData.get(name) === "on";
-}
-
-export function ReservationEditForm(props: {
-  reservation: StaffReservationDto;
-}) {
-  const [localDate, setLocalDate] = useState(props.reservation.localDate);
-  const [serviceType, setServiceType] = useState<"LUNCH" | "DINNER">(
-    props.reservation.serviceType,
-  );
-  const [partySize, setPartySize] = useState(String(props.reservation.partySize));
-  const [arrivalTime, setArrivalTime] = useState(props.reservation.arrivalTime);
-  const [slots, setSlots] = useState<
-    { time: string; remainingCapacity: number; reason?: string }[]
-  >([
-    {
-      time: props.reservation.arrivalTime,
-      remainingCapacity: 0,
-      reason: "CURRENT",
-    },
-  ]);
-  const [composition, setComposition] = useState(compositionFormState(props.reservation));
-  const [version, setVersion] = useState(props.reservation.version);
-  const [availabilityMessage, setAvailabilityMessage] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<{
-    kind: "success" | "error";
-    text: string;
-  } | null>(null);
-  const partySizeIsValid = Number.isInteger(Number(partySize)) && Number(partySize) > 0;
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const covers = Number(partySize);
-
-    if (!Number.isInteger(covers) || covers < 1) {
-      return () => controller.abort();
-    }
-
-    const query = new URLSearchParams({
-      date: localDate,
-      service: serviceType,
-      partySize: String(covers),
-    });
-    void fetch(`/api/staff/availability?${query.toString()}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        const body = (await response.json()) as {
-          error?: string;
-          slots?: { time: string; remainingCapacity: number; reason?: string }[];
-        };
-        if (!response.ok) throw new Error(body.error);
-
-        const nextSlots = (body.slots ?? []).filter(
-          (slot) => slot.reason !== "SLOT_IN_PAST",
-        );
-        if (
-          localDate === props.reservation.localDate &&
-          serviceType === props.reservation.serviceType &&
-          !nextSlots.some((slot) => slot.time === props.reservation.arrivalTime)
-        ) {
-          nextSlots.unshift({
-            time: props.reservation.arrivalTime,
-            remainingCapacity: 0,
-            reason: "CURRENT",
-          });
-        }
-        setSlots(nextSlots);
-        setAvailabilityMessage(
-          "L’anteprima è indicativa; il server esclude questa prenotazione nel controllo definitivo.",
-        );
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setAvailabilityMessage("Slot non consultabili. Riprova.");
-      });
-
-    return () => controller.abort();
-  }, [localDate, partySize, props.reservation, serviceType]);
-
+export function ReservationEditForm({ reservationId }: { reservationId: string }) {
+  const resource = useStaffResource("STAFF", reservationId), agenda = useAgendaContext(), pathname = usePathname();
+  const reservation = resource.data;
+  const initial = useMemo(() => reservation ? reservationFormValues(reservation.localDate, reservation.serviceType, reservation) : {}, [reservation]);
+  const binding = useStaffDraftBinding({ kind: "EDIT", resourceId: reservationId, values: initial, version: reservation?.version ?? null,
+    route: pathname, originPath: agenda.origin(reservation?.localDate ?? "2000-01-01"), allowed: resource.ready });
+  const error = useRef<HTMLDivElement>(null), [review, setReview] = useState(false), [selected, setSelected] = useState<readonly string[]>([]);
+  useEffect(() => { if (binding.record?.error) error.current?.focus(); }, [binding.record?.error]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSubmitting(true);
-    setMessage(null);
-
-    const formData = new FormData(event.currentTarget);
-    const capacityOverride = checked(formData, "capacityOverride");
-    const payload = {
-      version,
-      localDate,
-      serviceType,
-      arrivalTime,
-      partySize: Number(partySize),
-      ...compositionPayload(composition),
-      customerFirstName: stringValue(formData, "customerFirstName"),
-      customerLastName: stringValue(formData, "customerLastName"),
-      customerPhone: stringValue(formData, "customerPhone"),
-      customerEmail: stringValue(formData, "customerEmail"),
-      highChair: checked(formData, "highChair"),
-      stroller: checked(formData, "stroller"),
-      accessibility: checked(formData, "accessibility"),
-      celiac: checked(formData, "celiac"),
-      allergies: stringValue(formData, "allergies"),
-      intolerances: stringValue(formData, "intolerances"),
-      celebration: stringValue(formData, "celebration"),
-      animals: checked(formData, "animals"),
-      notes: stringValue(formData, "notes"),
-      capacityOverride,
-      capacityOverrideReason: capacityOverride
-        ? stringValue(formData, "capacityOverrideReason")
-        : null,
-    };
-
-    try {
-      const response = await fetch(
-        `/api/staff/reservations/${props.reservation.id}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        },
-      );
-      const body = (await response.json()) as {
-        changed?: boolean;
-        error?: string;
-        reservation?: StaffReservationDto;
-      };
-
-      if (!response.ok || !body.reservation) {
-        setMessage({
-          kind: "error",
-          text: body.error ?? "Non è stato possibile aggiornare.",
-        });
-        return;
-      }
-
-      setVersion(body.reservation.version);
-      setMessage({
-        kind: "success",
-        text:
-          body.changed === false
-            ? "Nessuna modifica da salvare. Versione e disponibilità sono state ricontrollate."
-            : "Prenotazione aggiornata. Versione e disponibilità sono state ricontrollate.",
-      });
-    } catch {
-      setMessage({ kind: "error", text: "Errore di rete. Riprova." });
-    } finally {
-      setSubmitting(false);
+    const record = binding.key ? binding.controller.getSnapshot().drafts.records[binding.key] : null;
+    if (!record || record.phase === "PENDING" || reservation?.status !== "CONFIRMED") return;
+    const fields = reservationFormPayload(record.values), payload = JSON.stringify({ version: record.baseVersion, ...fields });
+    const outcome = await binding.controller.mutate({ key: record.key, url: `/api/staff/reservations/${reservationId}`, method: "PATCH", payload,
+      validate: body => {
+        if (!object(body) || !object(body.reservation) || body.reservation.id !== reservationId || !Number.isInteger(body.reservation.version) ||
+          typeof body.reservation.localDate !== "string" || (body.reservation.serviceType !== "LUNCH" && body.reservation.serviceType !== "DINNER")) return null;
+        const destination = rescheduledAgendaHref(body.reservation.localDate, body.reservation.serviceType);
+        const rescheduled = fields.localDate !== record.baseline.localDate || fields.serviceType !== record.baseline.serviceType || fields.arrivalTime !== record.baseline.arrivalTime;
+        return { resourceId: reservationId, version: Number(body.reservation.version),
+          text: body.changed === false ? "Nessuna modifica da salvare. Versione e disponibilità sono state ricontrollate." : "Prenotazione aggiornata. Versione e disponibilità sono state ricontrollate.",
+          ...(rescheduled ? { destinationPath: destination } : {}) };
+      } });
+    if (outcome.confirmed && outcome.foreground && outcome.receipt) {
+      binding.controller.setAgenda({ feedback: outcome.receipt.text, destinationHref: outcome.receipt.destinationPath ?? null, focusReservationId: reservationId });
+      agenda.navigate(outcome.receipt.originPath, []);
     }
   }
-
-  return (
-    <form className="mt-6 rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-9" onSubmit={submit}>
-      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        <label className="text-sm font-bold text-zinc-800">Data<input className={fieldClassName} name="localDate" onChange={(event) => setLocalDate(event.target.value)} required type="date" value={localDate} /></label>
-        <label className="text-sm font-bold text-zinc-800">Servizio<select className={fieldClassName} name="serviceType" onChange={(event) => setServiceType(event.target.value as "LUNCH" | "DINNER")} value={serviceType}><option value="LUNCH">Pranzo</option><option value="DINNER">Cena</option></select></label>
-        <label className="text-sm font-bold text-zinc-800">In quanti siete? (coperti totali)<input className={fieldClassName} min="1" name="partySize" onChange={(event) => setPartySize(event.target.value)} required step="1" type="number" value={partySize} /></label>
-        <div className="min-w-0 sm:col-span-2 lg:col-span-4"><PartyCompositionFields allowUnknown={props.reservation.childrenCount === null && Number(partySize) === props.reservation.partySize} onChange={setComposition} partySize={Number(partySize)} state={composition} /></div>
-        <label className="text-sm font-bold text-zinc-800">Slot<select className={fieldClassName} name="arrivalTime" onChange={(event) => setArrivalTime(event.target.value)} required value={arrivalTime}><option value="">Seleziona…</option>{(partySizeIsValid ? slots : []).map((slot) => <option key={slot.time} value={slot.time}>{slot.time}{slot.reason === "CURRENT" ? " · attuale" : ` · ${slot.remainingCapacity} posti residui`}</option>)}</select><span className="mt-2 block text-xs font-normal leading-5 text-zinc-500">{partySizeIsValid ? availabilityMessage : "Inserisci un numero di persone valido."}</span></label>
-        <label className="text-sm font-bold text-zinc-800">Nome<input className={fieldClassName} defaultValue={props.reservation.customer.firstName} maxLength={80} name="customerFirstName" required /></label>
-        <label className="text-sm font-bold text-zinc-800">Cognome<input className={fieldClassName} defaultValue={props.reservation.customer.lastName} maxLength={80} name="customerLastName" required /></label>
-        <label className="text-sm font-bold text-zinc-800">Telefono<input className={fieldClassName} defaultValue={props.reservation.customer.phone} maxLength={40} name="customerPhone" required type="tel" /></label>
-        <label className="text-sm font-bold text-zinc-800">Email<input className={fieldClassName} defaultValue={props.reservation.customer.email ?? ""} maxLength={254} name="customerEmail" type="email" /></label>
+  const record = binding.record, cancelled = reservation?.status === "CANCELLED";
+  const latest = reservation ? reservationFormValues(reservation.localDate, reservation.serviceType, reservation) : {};
+  return <>
+    {resource.error ? <div role="alert" className="mt-5 border border-danger p-3"><p>{resource.error}</p><button className="min-h-11 underline" type="button" onClick={() => void resource.reload()}>Riprova lettura</button></div> : null}
+    {binding.resumeRequired ? <div className="mt-5 border border-warning p-4"><p>È disponibile una bozza Edit temporanea. Verrà verificato nuovamente l’accesso prima di mostrarla.</p><button className="min-h-11 underline" type="button" onClick={() => void binding.resume()}>Continua modifica</button></div> : null}
+    {!record && !resource.error && !binding.resumeRequired ? <p className="mt-5" role="status">Verifica dell’accesso e caricamento della prenotazione…</p> : null}
+    <StaffSensitiveRegion allowed={record !== null && reservation !== null}>{record && reservation ? <form className="mt-6 min-w-0 rounded-surface border border-border bg-surface p-4 sm:p-7" onSubmit={submit}>
+      {cancelled ? <p className="mb-4 font-semibold">Prenotazione cancellata: NC e dati prenotazione in sola lettura. La bozza non è stata salvata.</p> : null}
+      <StaffReservationFields values={record.values} patch={binding.patch} pending={binding.pending || cancelled} original={reservation} baseline={record.baseline} phone={false} />
+      {record.error ? <div ref={error} role="alert" tabIndex={-1} className="mt-4 rounded-control border border-danger p-3 text-danger">{record.error}</div> : null}
+      {record.error || review ? <section className="mt-4 rounded-control border border-warning p-4" aria-label="Rivalutazione della bozza">
+        <p className="text-sm">La rilettura aggiorna un contesto separato: non sostituisce la bozza o la sua versione. Un409 può riguardare anche stato o capacità.</p>
+        <button type="button" className="mt-2 min-h-11 underline" disabled={binding.pending} onClick={async () => { await resource.reload(); setReview(true); setSelected([]); }}>Rileggi dati canonici separatamente</button>
+        {review && !resource.error ? <>
+          <p className="mt-3 text-sm">Versione della bozza: {record.baseVersion}. Versione canonica riletta: {reservation.version}.</p>
+          <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><caption className="mb-2 text-left">Scegli esplicitamente i campi della tua bozza da riapplicare; gli altri mantengono il valore canonico riletto.</caption><thead><tr><th>Riapplica</th><th>Campo</th><th>Bozza</th><th>Canonico</th></tr></thead><tbody>{Object.entries(fieldLabels).map(([field, label]) => <tr className="border-t border-border" key={field}><td><input type="checkbox" aria-label={`Riapplica ${label}`} checked={selected.includes(field)} onChange={event => setSelected(current => event.target.checked ? [...current, field] : current.filter(key => key !== field))} /></td><th className="p-2 font-medium">{label}</th><td className="max-w-xs p-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{String(record.values[field] ?? "")}</td><td className="max-w-xs p-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{String(latest[field] ?? "")}</td></tr>)}</tbody></table></div>
+          <button type="button" className="mt-3 min-h-11 underline" disabled={binding.pending || cancelled} onClick={() => { binding.controller.review(record.key, { version: reservation.version, serverValues: latest, selectedFields: selected }); setReview(false); }}>Usa il confronto e prepara la bozza</button>
+          <p className="mt-2 text-xs">Questa scelta non salva. Premi Salva modifiche dopo aver verificato tutti i campi.</p>
+        </> : null}
+      </section> : null}
+      <div className="mt-5 flex flex-wrap gap-3"><button className="min-h-11 rounded-control bg-brand-primary px-5 py-2 text-brand-on-primary disabled:opacity-50" disabled={binding.pending || cancelled} type="submit">{binding.pending ? "Salvataggio…" : "Salva modifiche"}</button>
+        <Link className="inline-flex min-h-11 items-center rounded-control border border-border px-4" href={record.originPath} onNavigate={event => { event.preventDefault(); agenda.navigate(record.originPath, [record.key]); }}>Torna Agenda</Link>
+        <Link className="inline-flex min-h-11 items-center underline" href={`/dashboard/reservations/${reservationId}`} onNavigate={event => { event.preventDefault(); agenda.navigate(`/dashboard/reservations/${reservationId}`, [record.key]); }}>Apri dettaglio e note interne</Link>
       </div>
-
-      {props.reservation.legacyPreference || props.reservation.roomCode ? <p className="mt-4 text-sm text-text-secondary [overflow-wrap:anywhere]">Preferenza storica: {props.reservation.legacyPreference ?? props.reservation.roomCode}. Non è un’assegnazione definitiva.</p> : null}
-
-      <fieldset className="mt-6 rounded-2xl bg-zinc-100 p-5">
-        <legend className="px-1 font-black text-zinc-950">Esigenze e indicatori</legend>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            ["highChair", "Seggiolone", props.reservation.highChair],
-            ["stroller", "Passeggino", props.reservation.stroller],
-            ["accessibility", "Accessibilità", props.reservation.accessibility],
-            ["celiac", "Celiachia", props.reservation.celiac],
-            ["animals", "Animali", props.reservation.animals],
-          ].map(([name, label, defaultChecked]) => <label className="flex items-center gap-3 text-sm font-bold text-zinc-800" key={String(name)}><input className="size-4 accent-orange-500" defaultChecked={Boolean(defaultChecked)} name={String(name)} type="checkbox" />{String(label)}</label>)}
-        </div>
-        {props.reservation.legacyAllergy !== null ? <section aria-label="Allergia storica" className="mt-5 text-sm text-text-secondary [overflow-wrap:anywhere]"><h2 className="font-bold">Allergia storica</h2><p className="whitespace-pre-wrap">{props.reservation.legacyAllergy}</p><p className="mt-1">Sola lettura</p></section> : null}
-        <div className="mt-5 grid gap-5 sm:grid-cols-2">
-          <label className="text-sm font-bold text-zinc-800">Allergie dichiarate<textarea className={fieldClassName} defaultValue={props.reservation.allergies ?? ""} maxLength={300} name="allergies" rows={2} /></label>
-          <label className="text-sm font-bold text-zinc-800">Intolleranze<textarea className={fieldClassName} defaultValue={props.reservation.intolerances ?? ""} maxLength={300} name="intolerances" rows={2} /></label>
-          <label className="text-sm font-bold text-zinc-800">Compleanno o ricorrenza<textarea className={fieldClassName} defaultValue={props.reservation.celebration ?? ""} maxLength={200} name="celebration" rows={2} /></label>
-          <label className="text-sm font-bold text-zinc-800">Note<textarea className={fieldClassName} defaultValue={props.reservation.notes ?? ""} maxLength={1000} name="notes" rows={2} /></label>
-        </div>
-      </fieldset>
-
-      <section className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-5">
-        <label className="flex items-center gap-3 text-sm font-black text-orange-950"><input className="size-4 accent-orange-600" name="capacityOverride" type="checkbox" />Override esplicito della sola capacità (Staff/Admin)</label>
-        <p className="mt-2 text-xs text-orange-900">È valido solo se data, servizio, orario o persone causano un superamento reale. Un override già registrato resta invariato quando modifichi soltanto contatti o note.</p>
-        <label className="mt-4 block text-sm font-bold text-orange-950">Motivo dell&apos;override<textarea className={fieldClassName} maxLength={500} name="capacityOverrideReason" rows={2} /></label>
-      </section>
-
-      {message ? <div className={`mt-6 rounded-2xl p-4 font-bold ${message.kind === "success" ? "bg-emerald-50 text-emerald-900" : "bg-red-50 text-red-800"}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}</div> : null}
-
-      <div className="mt-7 flex flex-wrap gap-3">
-        <button className="rounded-xl bg-zinc-950 px-6 py-3.5 font-bold text-white hover:bg-orange-600 focus:outline-none focus:ring-4 focus:ring-orange-200 disabled:opacity-60" disabled={submitting} type="submit">{submitting ? "Salvataggio…" : "Salva modifiche"}</button>
-        <Link className="rounded-xl border border-zinc-300 px-6 py-3.5 font-bold text-zinc-800 focus:outline-none focus:ring-4 focus:ring-zinc-200" href={`/dashboard?date=${localDate}`}>Torna alla dashboard</Link>
-      </div>
-    </form>
-  );
+    </form> : null}</StaffSensitiveRegion>
+  </>;
 }

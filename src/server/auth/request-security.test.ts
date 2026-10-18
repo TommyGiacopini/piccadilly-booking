@@ -9,6 +9,13 @@ import {
 } from "@/server/auth/request-security";
 
 describe("authentication request security", () => {
+  it("admits an exact reservation detail UUID without expanding callback policies", () => {
+    const path = "/dashboard/reservations/123e4567-e89b-42d3-a456-426614174000";
+    expect(resolveSafePostLoginPath(path)).toBe(path);
+    for (const invalid of [path + "/extra", path + "?date=2099-01-01", path + "#fragment", path + "/", "/dashboard/reservations/not-a-uuid", "/dashboard/reservations/%31" + path.slice(25), "https://evil.example" + path, "//evil.example" + path]) {
+      expect(resolveSafePostLoginPath(invalid)).toBe("/dashboard");
+    }
+  });
   it("allows only known internal post-login destinations", () => {
     expect(resolveSafePostLoginPath("/dashboard")).toBe("/dashboard");
     expect(resolveSafePostLoginPath("/dashboard/reservations/new")).toBe(

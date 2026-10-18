@@ -647,3 +647,27 @@ L'infrastruttura definitiva e le procedure operative saranno implementate in mil
 - `docs/adr/004-environment-separation.md`;
 - `docs/adr/005-notification-outbox.md`.
 - `docs/adr/011-manual-room-table-assignment.md`.
+
+## T06-B — Root client draft host e confini applicativi
+
+Il root layout resta Server Component: aggiunge soltanto import e wrapper StaffDraftHost sotto body, conservando metadata, font, lingua e staging banner. Ogni istanza del provider crea il proprio store; nessun singleton server o di modulo contiene PII. Fuori dalle superfici Staff il provider non richiede auth-context o NI e non importa eager form o dossier. L’host sopravvive al passaggio Dashboard/Admin nello stesso documento.
+
+staff-draft-state definisce CLEAN, DIRTY, PENDING, DIRTY_CONFLICT, ERROR e CONFIRMED. La chiave è tenant/actor/sessionBinding/kind/resource. L’host è il proprietario di payload congelati, tentativi, GET autorizzati e bozze; i componenti sono editor controllati. Una rilettura canonica aggiorna un contesto separato; la riapplicazione dei campi scelti è esplicita, senza incremento versione locale. Le risposte stale sono recintate da auth epoch, instance, attempt, resource e versione base. Le request non dipendono dal mount del form. Una conferma detached non naviga, non riapre editor e non sposta focus.
+
+POST /api/auth/draft-context è l’unica API nuova. Accetta solo challenge UUID entro1024 byte effettivi. Valida Origin/proxy e sessione canonici, ruolo e password-change; deriva tenant lato server. Il binding HMAC-SHA256 usa come chiave il secret della sessione già validata e un array JSON versionato/domain-separated contenente sessionID/actorID/tenantID. Il valore è solo un identificatore di uguaglianza, non una credenziale. Risposte private/no-store, errori statici, nessun token o sessionID grezzo restituito. La revoca canonica di utenti disabilitati resta invariata.
+
+Esistenza in RAM e permesso di visualizzare sono distinti. Quarantena invalida lease, proof e letture; il ritorno richiede contesto live e autorizzazione risorsa. pagehide nasconde sincronicamente le regioni e rimuove copie applicative; pageshow e foreground riaprono la barriera. La verifica BFCache deve distinguere attivazione reale da fallback browser. Nessuna garanzia di cancellazione forense della memoria.
+
+Un solo coordinatore possiede focus trap, inert e scroll lock. Il dossier cede il focus al pannello assignment canonico, senza dialog annidati o mutation assignment aggiuntive. Il repository Dashboard usa select positivo e una proiezione bounded di sole presenze nello stesso RepeatableRead. mapReservation cambia soltanto il tipo di input; corpo, writer, lock, transazioni e audit restano invariati. Nessuna migration nuova: schema16 e migration1–16 sono protetti.
+
+### T06-B F01–F04 — correzione mirata dopo Work Final QG
+
+Ogni submit PHONE/Edit/NI congela payload, risorsa, base e tentativo e acquisisce il busy lock prima della prima await. Il controller richiede una nuova challenge live a draft-context, senza riusare/coalescere la proof di visualizzazione; confronta attore, tenant, binding e ruolo e ricontrolla epoch, generazione, istanza e attempt prima della dispatch. Edit/NI richiedono anche una lettura autorizzata della risorsa. Errori temporanei non inviano la mutation, mantengono la bozza in quarantena e richiedono recupero esplicito. Identità diversa invalida i record precedenti; nessun retry automatico o incremento locale della versione.
+
+Il logout considera tutte le bozze non salvate della sessione, comprese quelle retained senza editor attivo. Il guard distingue la perdita dopo logout confermato da un logout fallito e non promette cancellazione delle operazioni server già inviate. La review NI distingue snapshot corrente, rilettura pending, failure e snapshot confermato: adozione/riapplicazione richiedono l'esito corrente, con fencing per risorsa e generazione. Agenda usa enfasi strong e bordi/peso distinti per bambini e note presenti, conservando label e privacy.
+
+### F01-TOCTOU-01 — binding autorevole al confine HTTP
+
+Il controller congela anche il sessionBinding originale del draft prima delle await e lo invia obbligatoriamente in X-Piccadilly-Draft-Session-Binding. I form non possono sovrascrivere l'header; proof e GET successivi non sostituiscono il proprietario. Il helper condiviso draft-session-context estrae una sola cookie, usa il validatore canonico e restituisce internamente utente e binding dalla medesima sessione. La proof riusa questa risoluzione senza cambiare il contratto pubblico. La derivazione unica resta HMAC-SHA256, chiave secret validato UTF-8 e messaggio JSON.stringify(["CB06/session/v1", sessionId, actorId, tenantId]), output base64url senza padding.
+
+Soltanto POST PHONE, PATCH UPDATE e PUT NI aggiungono la guard prima dei servizi; GET, DELETE, business writer, audit, transazioni, versioning e idempotenza restano canonici. Header presente invalido →400 DRAFT_SESSION_BINDING_INVALID; valido differente →403 DRAFT_SESSION_MISMATCH; confronto constant-time di32 byte canonici. D01 mantiene compatibili i chiamanti legacy senza header, senza attestare la provenienza universale di tali richieste. Client senza binding valido non invia; rifiuto server non causa fallback, retry automatico, redirect o ACK su altra istanza. Una request già autenticata A non viene annullata da un login B successivo. BFCache, R1–R4, WASM e Linux mantengono le riserve documentate.

@@ -59,6 +59,9 @@ export interface DashboardReservation {
   celebration: string | null;
   animals: boolean;
   notes: string | null;
+  privateNotesPresent: boolean;
+  legacyNotesPresent: boolean;
+  legacyNotesState: "ACTIVE" | "CLEARED" | null;
   overrideApplied: boolean;
   overrideReason: string | null;
   createdAt: string;
@@ -91,6 +94,9 @@ export interface DashboardAssignmentSource {
 
 export interface DashboardReservationSource {
   reservation: StoredReservation;
+  privateNotesPresent: boolean;
+  legacyNotesPresent: boolean;
+  legacyNotesState: "ACTIVE" | "CLEARED" | null;
   assignment: DashboardAssignmentSource | null;
   notificationHealth?: DashboardNotificationHealth;
 }
@@ -285,6 +291,9 @@ export function toDashboardReservation(
     celebration: preferences.celebration,
     animals: preferences.animals,
     notes: reservation.notes,
+    privateNotesPresent: source.privateNotesPresent,
+    legacyNotesPresent: source.legacyNotesPresent,
+    legacyNotesState: source.legacyNotesState,
     overrideApplied: reservation.capacityOverride,
     overrideReason: reservation.capacityOverrideReason,
     createdAt: reservation.createdAt.toISOString(),

@@ -64,7 +64,7 @@ function mapSpecialDateRule(override: {
   };
 }
 
-export function mapReservation(row: PrismaReservation): StoredReservation {
+export function mapReservation(row: Omit<PrismaReservation, "privateNotes">): StoredReservation {
   return {
     id: row.id,
     restaurantId: row.restaurantId,

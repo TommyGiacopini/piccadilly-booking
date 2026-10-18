@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { StaffShell } from "@/app/_components/staff/staff-shell";
+import { AgendaContext } from "@/app/dashboard/agenda-context";
 import {
   canAccessStaffArea,
   getCurrentUser,
@@ -19,7 +20,7 @@ export default async function DashboardLayout({
 
   return (
     <StaffShell role={user.role} username={user.username}>
-      {children}
+      <AgendaContext>{children}</AgendaContext>
     </StaffShell>
   );
 }

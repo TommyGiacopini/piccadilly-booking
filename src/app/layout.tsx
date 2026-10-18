@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 
 import { StagingBanner } from "@/app/_components/staging-banner";
+import { StaffDraftHost } from "@/app/_components/staff/staff-draft-host";
 import { getAppEnvironment } from "@/shared/config/app-environment";
 
 import "./globals.css";
@@ -57,7 +58,7 @@ export default function RootLayout({
     <html className={inter.variable} lang="it">
       <body>
         <StagingBanner />
-        {children}
+        <StaffDraftHost>{children}</StaffDraftHost>
       </body>
     </html>
   );

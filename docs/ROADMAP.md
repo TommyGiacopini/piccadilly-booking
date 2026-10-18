@@ -884,3 +884,11 @@ T04 revised riprenderà solo dopo chiusura Foundation A e nuova autorizzazione. 
 - microservizi;
 - multi-ristorante;
 - analytics avanzate.
+
+## 6. Checkpoint Controller —16 ottobre2026, T06-B
+
+T06-A CLOSED; T06-SEC CLOSED WITH DOCUMENTED RESERVATIONS; PR29 merged e indipendentemente verificata su main aa6e5aca21741b448cbcf85e7f39096f3c75f928. Il precedente checkpoint9 ottobre resta storico.
+
+T06-B design frozen e implementazione locale autorizzata per Agenda, dettaglio, PHONE/Edit e CB06 root draft host. Scope49 path (32 modificati,17 aggiunti,0 eliminati), dopo estensioni Controller limitate a tre assertion di presentazione nei test T04/T05 e all'assertion non deterministica del secret alterato in session-token.test.ts. Nessuna modifica alle rispettive prove di dominio, DB, Arrival, versioning, audit, concorrenza o al codice auth di produzione. Nessuna migration17, modifica manifest o writer. Sono richiesti21 gruppi applicativi B-U01–03, B-PG01–03, B-H01–02, B-E01–11, B-R01 e B-S01, con condizioni G01–06/SQ01–06. I21 test del prototipo non sostituiscono quelli applicativi.
+
+L’integrazione richiede clean install, isolamento PostgreSQL positivo prima di seed/migration, targeted/full Vitest e Playwright, Prisma validate/generate, lint, strict typecheck, build, hash protetti e ZIP esterno. Le assertion UI sostituite devono avere mapping di equivalenza, conservando prove DB, audit, idempotenza e versioning. Il Work Final Quality Gate è ancora richiesto separatamente. Nessuna pubblicazione Git o operazione persistente/deploy è autorizzata. T06-C/D, Render e Asporti restano fuori perimetro.
