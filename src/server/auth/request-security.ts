@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 
 const ALLOWED_POST_LOGIN_PATHS = new Set([
   "/dashboard",
+  "/dashboard/assign-room",
   "/dashboard/reservations/new",
   "/admin",
   "/admin/audit",

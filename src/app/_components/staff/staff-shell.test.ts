@@ -9,6 +9,7 @@ describe("T01 Staff shell navigation", () => {
   it("keeps Admin destinations hidden from Staff", () => {
     expect(buildStaffNavigation("STAFF").map((item) => item.label)).toEqual([
       "Agenda",
+      "ASSEGNA SALA",
       "Nuova prenotazione",
     ]);
   });
@@ -16,6 +17,7 @@ describe("T01 Staff shell navigation", () => {
   it("exposes only existing authorized destinations to Admin", () => {
     expect(buildStaffNavigation("ADMIN").map((item) => item.label)).toEqual([
       "Agenda",
+      "ASSEGNA SALA",
       "Nuova prenotazione",
       "Configurazioni",
       "Admin",
@@ -23,6 +25,8 @@ describe("T01 Staff shell navigation", () => {
   });
 
   it("distinguishes Agenda, creation and Admin active states", () => {
+    expect(isStaffNavigationActive("/dashboard/assign-room", "/dashboard")).toBe(false);
+    expect(isStaffNavigationActive("/dashboard/assign-room", "/dashboard/assign-room")).toBe(true);
     expect(isStaffNavigationActive("/dashboard", "/dashboard")).toBe(true);
     expect(
       isStaffNavigationActive(

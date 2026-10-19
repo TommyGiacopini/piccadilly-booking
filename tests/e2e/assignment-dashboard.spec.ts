@@ -242,8 +242,10 @@ async function chooseRoomAndTable(
   const room = selectableRoom(context, roomCode);
   const table = room.tables.find((candidate) => candidate.isActive)!;
   await dialog.getByTestId("assignment-room-select").selectOption(room.id);
-  await dialog.locator("label").filter({ hasText: table.name }).getByRole("checkbox").check();
-  await dialog.getByTestId("assignment-internal-notes").fill(note);
+  // T06-C selects only a room. Legacy table/note writes are asserted separately.
+  void note;
+  await expect(dialog.getByRole("checkbox")).toHaveCount(0);
+  await expect(dialog.locator("textarea")).toHaveCount(0);
   return { room, table };
 }
 
@@ -304,13 +306,16 @@ test.describe.serial("M10-C dashboard assegnazioni", () => {
 
       const saveResponse = page.waitForResponse(
         (response) =>
-          response.request().method() === "PUT" &&
-          response.url().endsWith(`/reservations/${assignedReservation.id}/assignment`),
+          response.request().method() === "POST" &&
+          response.url().endsWith(`/reservations/${assignedReservation.id}/room-assignment`),
       );
       await dialog.getByTestId("assignment-save").click();
       expect((await saveResponse).status()).toBe(200);
       await expect(dialog).toBeHidden();
       await expect(card.getByTestId("final-room-name")).toHaveText(selected.room.name);
+      // Preserve the old digital-table contract through its canonical API.
+      await assignViaApi(page.request, assignedReservation.id, "sala-1", `Nota UI M10-C ${e2eRunId}`);
+      await page.reload();
       await expect(card.getByTestId("assigned-table-names")).toContainText(selected.table.name);
       await expect(card.getByTestId("customer-room-preference")).toContainText("Sala 2");
       await expect(page.locator('[data-summary-label="Assegnate"]')).toContainText("1");
@@ -334,52 +339,18 @@ test.describe.serial("M10-C dashboard assegnazioni", () => {
     }
   });
 
-  test("Staff riassegna, modifica note e rimuove logicamente l'assegnazione", async ({
-    page,
-  }) => {
-    const localDate = "2099-12-02";
-    await login(page, "STAFF");
-    const reservation = await createReservation(
-      page.request,
-      staffPayload({
-        localDate,
-        lastName: `Reassign UI ${e2eRunId}`,
-        preference: "sala-3",
-      }),
-    );
-
+  test("Staff preserves legacy notes/tables, blocks implicit room cleanup and retains deliberate legacy reassignment/clear", async ({ page }) => {
+    const localDate = "2099-12-02"; await login(page, "STAFF"); const reservation = await createReservation(page.request, staffPayload({ localDate, lastName: `Reassign UI ${e2eRunId}`, preference: "sala-3" }));
     try {
-      await assignViaApi(page.request, reservation.id, "sala-1");
-      await page.goto(`/dashboard?date=${localDate}`);
-      const card = reservationCard(page, reservation.id);
-      const current = await readAssignment(page.request, reservation.id);
-      const dialog = await openAssignment(card);
-      const next = await chooseRoomAndTable(
-        dialog,
-        current,
-        "sala-2",
-        `Nota riassegnata M10-C ${e2eRunId}`,
-      );
-      await dialog.getByTestId("assignment-save").click();
-      await expect(dialog).toBeHidden();
-      await expect(card.getByTestId("final-room-name")).toHaveText(next.room.name);
-      await expect(card.getByTestId("customer-room-preference")).toContainText("Sala 3");
-
-      const clearDialog = await openAssignment(card);
-      await clearDialog.getByRole("button", { name: "Rimuovi assegnazione" }).click();
-      const clearResponse = page.waitForResponse(
-        (response) =>
-          response.request().method() === "DELETE" &&
-          response.url().endsWith(`/reservations/${reservation.id}/assignment`),
-      );
-      await clearDialog.getByTestId("assignment-clear-confirm").click();
-      expect((await clearResponse).status()).toBe(200);
-      await expect(clearDialog).toBeHidden();
-      await expect(card.getByTestId("unassigned-badge")).toHaveText("DA ASSEGNARE");
-      await expect(card.getByTestId("customer-room-preference")).toContainText("Sala 3");
-    } finally {
-      await clearAndCancel(page.request, reservation.id);
-    }
+      await assignViaApi(page.request, reservation.id, "sala-1"); await page.goto(`/dashboard?date=${localDate}`); const card = reservationCard(page, reservation.id), current = await readAssignment(page.request, reservation.id), next = selectableRoom(current, "sala-2");
+      const dialog = await openAssignment(card); await expect(dialog).toContainText(current.assignment!.internalNotes!); await expect(dialog).toContainText(current.assignment!.tables[0].name); await expect(dialog.getByRole("checkbox")).toHaveCount(0);
+      await dialog.getByTestId("assignment-room-select").selectOption(next.id); const waiting = page.waitForResponse(r => r.request().method() === "POST" && r.url().endsWith(`/${reservation.id}/room-assignment`)); await dialog.getByTestId("assignment-save").click(); const blocked = await waiting; expect(blocked.status()).toBe(409); expect((await blocked.json()).code).toBe("LEGACY_TABLE_LINKS_PRESENT");
+      expect(await readAssignment(page.request, reservation.id)).toEqual(current);
+      const changed = await assignViaApi(page.request, reservation.id, "sala-2", `Nota riassegnata M10-C ${e2eRunId}`); await page.reload(); await expect(card.getByTestId("final-room-name")).toHaveText(changed.room.name); await expect(card.getByTestId("customer-room-preference")).toContainText("Sala 3");
+      const state = await readAssignment(page.request, reservation.id); const clear = await page.request.delete(`/api/staff/reservations/${reservation.id}/assignment`, { headers: { origin }, data: { version: state.reservation.version } }); expect(clear.status()).toBe(200); expect((await readAssignment(page.request, reservation.id)).assignment).toBeNull();
+      const retained = await database.query("SELECT a.internal_notes,a.cleared_at,(SELECT count(*)::int FROM reservation_assignment_tables t WHERE t.assignment_id=a.id) AS links FROM reservation_assignments a WHERE a.restaurant_id=$1 AND a.reservation_id=$2", [e2eRestaurantId, reservation.id]); expect(retained.rows[0].internal_notes).toBe(`Nota riassegnata M10-C ${e2eRunId}`); expect(retained.rows[0].cleared_at).not.toBeNull(); expect(retained.rows[0].links).toBe(1);
+      await page.reload(); await expect(card.getByTestId("unassigned-badge")).toHaveText("DA ASSEGNARE"); await expect(card.getByTestId("customer-room-preference")).toContainText("Sala 3");
+    } finally { await clearAndCancel(page.request, reservation.id); }
   });
 
   test("Admin conserva la sala assegnata disattivata e non introduce un'altra sala inattiva", async ({
@@ -435,8 +406,8 @@ test.describe.serial("M10-C dashboard assegnazioni", () => {
       const beforeNoOp = await readAssignment(page.request, reservation.id);
       const saveResponse = page.waitForResponse(
         (response) =>
-          response.request().method() === "PUT" &&
-          response.url().endsWith(`/reservations/${reservation.id}/assignment`),
+          response.request().method() === "POST" &&
+          response.url().endsWith(`/reservations/${reservation.id}/room-assignment`),
       );
       await dialog.getByTestId("assignment-save").click();
       expect((await saveResponse).status()).toBe(200);
@@ -525,24 +496,17 @@ test.describe.serial("M10-C dashboard assegnazioni", () => {
       const card = reservationCard(page, reservation.id);
       await expect(card.getByTestId("assignment-grandfathering-warning")).toBeVisible();
       const dialog = await openAssignment(card);
-      const currentCheckbox = dialog
-        .locator("label")
-        .filter({ hasText: currentTable.name })
-        .getByRole("checkbox");
-      const decoyCheckbox = dialog
-        .locator("label")
-        .filter({ hasText: decoyTable!.name })
-        .getByRole("checkbox");
-      await expect(currentCheckbox).toBeChecked();
-      await expect(currentCheckbox).toBeEnabled();
-      await expect(decoyCheckbox).not.toBeChecked();
-      await expect(decoyCheckbox).toBeDisabled();
+      // OLD checked/enabled retained table -> read-only reference + persisted flags.
+      await expect(dialog).toContainText(currentTable.name); await expect(dialog.getByRole("checkbox")).toHaveCount(0);
+      expect((await readAssignment(page.request, reservation.id)).assignment?.tables).toContainEqual(expect.objectContaining({ id: currentTable.id, isActive: false }));
+      const forbidden = await page.request.put(`/api/staff/reservations/${reservation.id}/assignment`, { headers: { origin }, data: { version: context.reservation.version, roomId: assigned.room.id, tableIds: [currentTable.id, decoyTable!.id], internalNotes: `Nota interna M10-C ${e2eRunId}` } });
+      expect(forbidden.status()).toBe(409); expect((await forbidden.json()).code).toBe("ROOM_UNAVAILABLE");
 
       const beforeNoOp = await readAssignment(page.request, reservation.id);
       const saveResponse = page.waitForResponse(
         (response) =>
-          response.request().method() === "PUT" &&
-          response.url().endsWith(`/reservations/${reservation.id}/assignment`),
+          response.request().method() === "POST" &&
+          response.url().endsWith(`/reservations/${reservation.id}/room-assignment`),
       );
       await dialog.getByTestId("assignment-save").click();
       expect((await saveResponse).status()).toBe(200);
@@ -613,8 +577,8 @@ test.describe.serial("M10-C dashboard assegnazioni", () => {
       const beforeNoOp = await readAssignment(page.request, reservation.id);
       const saveResponse = page.waitForResponse(
         (response) =>
-          response.request().method() === "PUT" &&
-          response.url().endsWith(`/reservations/${reservation.id}/assignment`),
+          response.request().method() === "POST" &&
+          response.url().endsWith(`/reservations/${reservation.id}/room-assignment`),
       );
       await dialog.getByTestId("assignment-save").click();
       expect((await saveResponse).status()).toBe(200);
@@ -671,25 +635,15 @@ test.describe.serial("M10-C dashboard assegnazioni", () => {
         `Scelta vincente M10-C ${e2eRunId}`,
       );
 
-      const staleResponse = page.waitForResponse(
-        (response) =>
-          response.request().method() === "PUT" &&
-          response.url().endsWith(`/reservations/${reservation.id}/assignment`),
-      );
-      await dialog.getByTestId("assignment-save").click();
-      expect((await staleResponse).status()).toBe(409);
-      await expect(dialog).toContainText("La prenotazione è cambiata mentre lavoravi");
-      await expect(dialog.getByTestId("assignment-reload-conflict")).toBeVisible();
-      expect((await readAssignment(page.request, reservation.id)).assignment?.room.id).toBe(
-        winner.room.id,
-      );
-
-      await dialog.getByTestId("assignment-reload-conflict").click();
-      await expect(dialog.getByTestId("assignment-room-select")).toHaveValue(winner.room.id);
-      await expect(card.getByTestId("final-room-name")).toHaveText(winner.room.name);
-      expect((await readAssignment(page.request, reservation.id)).assignment?.internalNotes).toBe(
-        `Scelta vincente M10-C ${e2eRunId}`,
-      );
+      // The legacy stale request still proves a real VERSION_CONFLICT; ROOM
+      // additionally detects the fresh version before dispatch and preserves choice.
+      const staleResponse = await page.request.put(`/api/staff/reservations/${reservation.id}/assignment`, { headers: { origin }, data: { version: staleContext.reservation.version, roomId: selectableRoom(staleContext, "sala-2").id, tableIds: [], internalNotes: `Scelta stale M10-C ${e2eRunId}` } });
+      expect(staleResponse.status()).toBe(409); expect((await staleResponse.json()).code).toBe("VERSION_CONFLICT");
+      await dialog.getByTestId("assignment-save").click(); await expect(dialog.getByRole("alert")).toContainText("Versione modificata"); await expect(dialog.getByTestId("assignment-reload-conflict")).toBeVisible();
+      expect((await readAssignment(page.request, reservation.id)).assignment?.room.id).toBe(winner.room.id);
+      await dialog.getByTestId("assignment-reload-conflict").click(); await dialog.getByRole("button", { name: "Adotta sala riletta" }).click(); await expect(dialog.getByTestId("assignment-room-select")).toHaveValue(winner.room.id);
+      expect((await readAssignment(page.request, reservation.id)).assignment?.internalNotes).toBe(`Scelta vincente M10-C ${e2eRunId}`);
+      await page.reload(); await expect(card.getByTestId("final-room-name")).toHaveText(winner.room.name);
     } finally {
       await clearAndCancel(page.request, reservation.id);
     }

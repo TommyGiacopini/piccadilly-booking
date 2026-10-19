@@ -43,6 +43,8 @@ import {
   type ReservationAssignmentTransactionClient,
 } from "@/modules/rooms/infrastructure/reservation-assignment-repository";
 import { readEffectiveServiceRooms } from "@/modules/rooms/infrastructure/service-instance-repository";
+import { writeReservationRoom } from "@/modules/rooms/infrastructure/reservation-assignment-repository";
+import { roomAssignmentCommandSchema, type RoomAssignmentResult } from "@/modules/rooms/domain/room-assignment-workspace";
 
 export interface ReservationAssignmentActor {
   id: string;
@@ -392,14 +394,14 @@ export async function clearReservationAssignmentForScheduleChange(
   return true;
 }
 
-function assertNewReferences(input: {
-  command: PutReservationAssignmentInput;
+function assertRoomReference(input: {
+  roomId: string;
   current: StoredAssignment | null;
   catalog: AssignmentRoomCatalog;
   availability: AssignmentAvailabilityContext;
-}): { roomCode: string } {
+}) {
   const selectedRoom = input.catalog.find(
-    (room) => room.id === input.command.roomId,
+    (room) => room.id === input.roomId,
   );
   if (!selectedRoom) {
     throw validationError("La sala o i tavoli selezionati non sono validi.");
@@ -426,6 +428,16 @@ function assertNewReferences(input: {
     }
   }
 
+  return { selectedRoom, activeCurrent, roomRetained, roomCode: selectedRoom.code };
+}
+
+function assertNewReferences(input: {
+  command: PutReservationAssignmentInput;
+  current: StoredAssignment | null;
+  catalog: AssignmentRoomCatalog;
+  availability: AssignmentAvailabilityContext;
+}): { roomCode: string } {
+  const { selectedRoom, activeCurrent, roomRetained, roomCode } = assertRoomReference({ ...input, roomId: input.command.roomId });
   const currentTableIds = new Set(
     roomRetained
       ? activeCurrent?.tables.map((row) => row.diningTableId) ?? []
@@ -447,7 +459,54 @@ function assertNewReferences(input: {
     }
   }
 
-  return { roomCode: selectedRoom.code };
+  return { roomCode };
+}
+
+export async function assignReservationRoom(input: {
+  actor: ReservationAssignmentActor; reservationId: string; rawPayload: unknown; now?: Date;
+}): Promise<RoomAssignmentResult> {
+  const parsed = roomAssignmentCommandSchema.safeParse(input.rawPayload);
+  if (!parsed.success) throw validationError("I dati della sala non sono validi.");
+  const command = parsed.data, now = input.now ?? new Date();
+  assertNow(now);
+  return runReservationTransaction(async client => {
+    const state = await lockedMutationState(client, { actor: input.actor, reservationId: input.reservationId, now });
+    assertConfirmed(state.reservation);
+    if (state.reservation.localDate !== command.expectedLocalDate || state.reservation.serviceType !== command.expectedServiceType) {
+      throw new ReservationAssignmentError("RESERVATION_CONTEXT_CHANGED", "Data o servizio modificati. Rileggi la prenotazione e rivaluta la scelta.");
+    }
+    const active = state.assignment?.clearedAt === null ? state.assignment : null;
+    function result(changed: boolean, assignment: StoredAssignment, version: number): RoomAssignmentResult {
+      return { changed, reservationId: state.reservation.id, reservationVersion: version, assignment: {
+        id: assignment.id, roomId: assignment.roomId, roomCode: assignment.room.code,
+        legacyTableCount: assignment.tables.length, legacyNotesPresent: assignment.internalNotes !== null,
+      } };
+    }
+    if (active?.roomId === command.roomId) return result(false, active, state.reservation.version);
+    assertVersion(state.reservation, command.version);
+    if (state.assignment && state.assignment.tables.length > 0) {
+      throw new ReservationAssignmentError("LEGACY_TABLE_LINKS_PRESENT", "Questa prenotazione contiene collegamenti digitali a tavoli legacy. Il cambio sala non è disponibile in questo flusso. I dati sono stati conservati.");
+    }
+    // Existing eligibility rules, including historical and grandfathered behavior,
+    // are shared. This is validation only; never call the full-state PUT writer.
+    const { roomCode } = assertRoomReference({ roomId: command.roomId, current: state.assignment, catalog: state.catalog, availability: state.availability });
+    const reservation = await incrementReservationAssignmentVersion(client, {
+      restaurantId: state.freshActor.restaurantId, reservationId: state.reservation.id,
+      expectedVersion: command.version, updatedAt: now,
+    });
+    if (!reservation) throw new ReservationAssignmentError("VERSION_CONFLICT", "La prenotazione è stata modificata. Rileggi i dati.");
+    await writeReservationRoom(client, { assignmentId: state.assignment?.id ?? null,
+      restaurantId: state.freshActor.restaurantId, reservationId: state.reservation.id,
+      roomId: command.roomId, actorId: state.freshActor.id, now });
+    await insertReservationAssignmentAudit(client, {
+      actor: state.freshActor, reservationId: state.reservation.id, action: active ? "REASSIGNED" : "ASSIGNED", correlationId: randomUUID(),
+      previousState: reservationAssignmentAuditSnapshot(active ? assignmentAuditValue(active) : null),
+      newState: reservationAssignmentAuditSnapshot({ finalRoomCode: roomCode, tableIds: [], internalNotes: state.assignment?.internalNotes ?? null }), createdAt: now,
+    });
+    const saved = await readReservationAssignment(client, { restaurantId: state.freshActor.restaurantId, reservationId: state.reservation.id });
+    if (!saved || saved.clearedAt !== null) throw new Error("Room assignment persistence invariant failed.");
+    return result(true, saved, reservation.version);
+  });
 }
 
 async function lockedMutationState(

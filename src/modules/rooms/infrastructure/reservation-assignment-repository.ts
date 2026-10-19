@@ -370,3 +370,23 @@ export async function insertAutomaticReservationUnassignmentAudit(
 }
 
 export const reservationAssignmentReadClient = prisma;
+
+/** Room intent deliberately has no table/note replacement parameters. */
+export async function writeReservationRoom(
+  client: ReservationAssignmentTransactionClient,
+  input: { assignmentId: string | null; restaurantId: string; reservationId: string; roomId: string; actorId: string; now: Date },
+): Promise<void> {
+  if (input.assignmentId === null) {
+    await client.reservationAssignment.create({ data: {
+      restaurantId: input.restaurantId, reservationId: input.reservationId,
+      roomId: input.roomId, assignedByUserId: input.actorId, updatedByUserId: input.actorId,
+      createdAt: input.now, updatedAt: input.now,
+    } });
+    return;
+  }
+  const result = await client.reservationAssignment.updateMany({
+    where: { id: input.assignmentId, restaurantId: input.restaurantId, reservationId: input.reservationId },
+    data: { roomId: input.roomId, clearedAt: null, updatedAt: input.now, updatedByUserId: input.actorId },
+  });
+  if (result.count !== 1) throw new Error("Room assignment update invariant failed.");
+}

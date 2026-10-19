@@ -1,7 +1,11 @@
 import "dotenv/config";
 
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { POST as roomAssignmentRoute } from "@/app/api/staff/reservations/[id]/room-assignment/route";
+import * as assignmentService from "@/modules/rooms/application/reservation-assignment-service";
+import { assignReservationRoom } from "@/modules/rooms/application/reservation-assignment-service";
+import { readDraftRequestSession, DRAFT_SESSION_BINDING_HEADER } from "@/server/auth/draft-session-context";
 
 import {
   DELETE as deleteAssignmentRoute,
@@ -742,6 +746,112 @@ describe.sequential(
       } else {
         process.env.AUTH_RATE_LIMIT_SECRET = originalAuthRateLimitSecret;
       }
+    });
+
+    describe("T06-C authoritative room intent", () => {
+      const command = (version = 1, roomId: string = roomOneId) => ({ version, roomId, expectedLocalDate: futureDate, expectedServiceType: "DINNER" });
+      async function http(id: string, cookie: string | null, binding: string | null, body: unknown = command(), origin = "http://localhost:4000") {
+        const headers = new Headers({ origin, "content-type": "application/json" });
+        if (cookie) headers.set("cookie", cookie);
+        if (binding !== null) headers.set(DRAFT_SESSION_BINDING_HEADER, binding);
+        return roomAssignmentRoute(new Request(`http://localhost:4000/api/staff/reservations/${id}/room-assignment`, { method: "POST", headers, body: JSON.stringify(body) }), { params: Promise.resolve({ id }) });
+      }
+      async function binding(cookie: string) {
+        const session = await readDraftRequestSession(new Request("http://localhost:4000", { headers: { cookie } }));
+        expect(session !== null).toBe(true); return session!.sessionBinding;
+      }
+      it("preserves notes and entity through room changes, clear/reactivation and stale identical no-op", async () => {
+        const r = await createReservation();
+        await putReservationAssignment({ actor: staffActor, reservationId: r.id, rawPayload: putPayload(1, { tableIds: [] }), now });
+        const original = await prisma.reservationAssignment.findUniqueOrThrow({ where: { restaurantId_reservationId: { restaurantId, reservationId: r.id } } });
+        const call = (version: number, roomId: string) => assignReservationRoom({ actor: staffActor, reservationId: r.id, rawPayload: command(version, roomId), now: new Date(now.getTime() + version * 1000) });
+        await call(2, roomTwoId);
+        const before = await databaseFingerprint(); expect((await call(1, roomTwoId)).changed).toBe(false); expect(await databaseFingerprint()).toBe(before);
+        await deleteReservationAssignment({ actor: staffActor, reservationId: r.id, rawPayload: { version: 3 }, now: new Date(now.getTime() + 5000) });
+        const result = await call(4, roomOneId); expect(result.reservationVersion).toBe(5);
+        const stored = await prisma.reservationAssignment.findUniqueOrThrow({ where: { id: original.id } });
+        expect(stored).toMatchObject({ internalNotes: original.internalNotes, assignedByUserId: original.assignedByUserId, createdAt: original.createdAt, roomId: roomOneId, clearedAt: null });
+        expect(JSON.stringify(result)).not.toContain(original.internalNotes!);
+      });
+      it("blocks active and cleared legacy links without any data loss, but permits same-room no-op", async () => {
+        const r = await createReservation(); await putReservationAssignment({ actor: staffActor, reservationId: r.id, rawPayload: putPayload(1), now });
+        const before = await databaseFingerprint();
+        expect((await assignReservationRoom({ actor: staffActor, reservationId: r.id, rawPayload: command(1), now })).changed).toBe(false);
+        await expect(assignReservationRoom({ actor: staffActor, reservationId: r.id, rawPayload: command(2, roomTwoId), now })).rejects.toMatchObject({ code: "LEGACY_TABLE_LINKS_PRESENT" });
+        expect(await databaseFingerprint()).toBe(before);
+        await deleteReservationAssignment({ actor: staffActor, reservationId: r.id, rawPayload: { version: 2 }, now });
+        const cleared = await databaseFingerprint();
+        await expect(assignReservationRoom({ actor: staffActor, reservationId: r.id, rawPayload: command(3), now })).rejects.toMatchObject({ code: "LEGACY_TABLE_LINKS_PRESENT" });
+        expect(await databaseFingerprint()).toBe(cleared);
+      });
+      it("checks context before even an identical stale no-op", async () => {
+        const r = await createReservation(); await assignReservationRoom({ actor: staffActor, reservationId: r.id, rawPayload: command(), now });
+        const before = await databaseFingerprint();
+        for (const patch of [{ expectedLocalDate: "2099-06-17" }, { expectedServiceType: "LUNCH" }]) await expect(assignReservationRoom({ actor: staffActor, reservationId: r.id, rawPayload: { ...command(), ...patch }, now })).rejects.toMatchObject({ code: "RESERVATION_CONTEXT_CHANGED" });
+        expect(await databaseFingerprint()).toBe(before);
+      });
+      it.each([true, false])("serializes identical/different room intents: identical=%s", async identical => {
+        const r = await createReservation();
+        const values = await Promise.allSettled([roomOneId, identical ? roomOneId : roomTwoId].map(roomId => assignReservationRoom({ actor: staffActor, reservationId: r.id, rawPayload: command(1, roomId), now })));
+        if (identical) expect(values.map(v => v.status === "fulfilled" && v.value.changed).sort()).toEqual([false, true]);
+        else { expect(values.filter(v => v.status === "fulfilled")).toHaveLength(1); expect(values.find(v => v.status === "rejected")).toMatchObject({ reason: { code: "VERSION_CONFLICT" } }); }
+        expect(await prisma.reservationAuditEvent.count({ where: { restaurantId, reservationId: r.id } })).toBe(1);
+        expect((await prisma.reservation.findUniqueOrThrow({ where: { id: r.id } })).version).toBe(2);
+      });
+      it("keeps availability, historical, cancelled and tenant guards", async () => {
+        const r = await createReservation(), old = await createReservation({ localDate: historicalDate }), cancelled = await createReservation({ status: "CANCELLED" });
+        await expect(assignReservationRoom({ actor: staffActor, reservationId: r.id, rawPayload: command(1, unavailableRoomId), now })).rejects.toMatchObject({ code: "ROOM_UNAVAILABLE" });
+        await expect(assignReservationRoom({ actor: otherStaffActor, reservationId: r.id, rawPayload: command(), now })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        await expect(assignReservationRoom({ actor: staffActor, reservationId: cancelled.id, rawPayload: command(), now })).rejects.toMatchObject({ code: "RESERVATION_CANCELLED" });
+        expect((await assignReservationRoom({ actor: staffActor, reservationId: old.id, rawPayload: { ...command(1, unavailableRoomId), expectedLocalDate: historicalDate }, now })).changed).toBe(true);
+      });
+      it.each(["same user new session", "other user", "other tenant", "admin"])("SERVER_REJECTED_BEFORE_WRITER for delayed proof A / cookie B: %s", async kind => {
+        const r = await createReservation(); const ownerBinding = await binding(staffCookie);
+        const userId = kind === "same user new session" ? staffId : kind === "other tenant" ? otherStaffId : kind === "admin" ? adminId : concurrentActorId;
+        const b = await createSessionForUser(userId), cookieB = `${getSessionCookieName(getAppEnvironment())}=${b.token}`;
+        expect((await binding(cookieB)) === ownerBinding).toBe(false);
+        const before = await databaseFingerprint(), spy = vi.spyOn(assignmentService, "assignReservationRoom");
+        try {
+          const response = await http(r.id, cookieB, ownerBinding);
+          expect(response.status).toBe(403); expect(await response.json()).toEqual({ code: "DRAFT_SESSION_MISMATCH" });
+          expect(spy).not.toHaveBeenCalled(); expect(await databaseFingerprint()).toBe(before);
+        } finally { spy.mockRestore(); }
+      });
+      it.each([null, "", "invalid", "A".repeat(42), "A".repeat(44), "A".repeat(43) + "=", "A".repeat(43) + "," + "A".repeat(43), "B".repeat(43)])("rejects missing/noncanonical/combined binding before writer %#", async invalid => {
+        const r = await createReservation(), before = await databaseFingerprint(), spy = vi.spyOn(assignmentService, "assignReservationRoom");
+        try { const response = await http(r.id, staffCookie, invalid); expect(response.status).toBe(400); expect(await response.json()).toEqual({ code: "DRAFT_SESSION_BINDING_INVALID" }); expect(spy).not.toHaveBeenCalled(); expect(await databaseFingerprint()).toBe(before); } finally { spy.mockRestore(); }
+      });
+      it("accepts matching Staff/Admin requests and preserves headerless legacy PUT", async () => {
+        const r = await createReservation();
+        expect((await http(r.id, staffCookie, await binding(staffCookie))).status).toBe(200);
+        expect((await http(r.id, adminCookie, await binding(adminCookie), command(2, roomTwoId))).status).toBe(200);
+        const response = await putAssignmentRoute(assignmentMutationRequest({ method: "PUT", reservationId: r.id, cookie: staffCookie, body: putPayload(3) }), { params: Promise.resolve({ id: r.id }) });
+        expect(response.status).toBe(200);
+      });
+      it.each(["revoked", "expired", "disabled"])("rejects %s request session before room writer", async kind => {
+        const r = await createReservation(), created = await createSessionForUser(concurrentActorId);
+        const cookie = `${getSessionCookieName(getAppEnvironment())}=${created.token}`, b = await binding(cookie);
+        if (kind === "disabled") await prisma.user.update({ where: { id: concurrentActorId }, data: { isActive: false } });
+        else await prisma.session.update({ where: { id: created.id }, data: kind === "revoked" ? { revokedAt: new Date() } : { expiresAt: new Date("2020-01-01") } });
+        const before = await databaseFingerprint(), spy = vi.spyOn(assignmentService, "assignReservationRoom");
+        try { const response = await http(r.id, cookie, b); expect(response.status).toBe(401); expect(spy).not.toHaveBeenCalled(); expect(await databaseFingerprint()).toBe(before); if (kind === "disabled") expect((await prisma.session.findUniqueOrThrow({ where: { id: created.id } })).revokedAt).not.toBeNull(); } finally { spy.mockRestore(); }
+      });
+      it("preserves canonical HTTP409 and stale identical no-op with matching binding", async () => {
+        const r = await createReservation(), b = await binding(staffCookie);
+        expect((await http(r.id, staffCookie, b)).status).toBe(200); const before = await databaseFingerprint();
+        const stale = await http(r.id, staffCookie, b, command(1, roomTwoId)); expect(stale.status).toBe(409); expect((await stale.json()).code).toBe("VERSION_CONFLICT");
+        const noop = await http(r.id, staffCookie, b); expect(noop.status).toBe(200); expect(await noop.json()).toMatchObject({ changed: false, reservationVersion: 2 }); expect(await databaseFingerprint()).toBe(before);
+      });
+      it("does not bypass Origin, strict payload, password guard or resource isolation", async () => {
+        const r = await createReservation(), b = await binding(staffCookie), before = await databaseFingerprint();
+        expect((await http(r.id, null, b)).status).toBe(401);
+        expect((await http(r.id, staffCookie, b, command(), "https://other.invalid")).status).toBe(403);
+        expect((await http(r.id, staffCookie, b, { ...command(), internalNotes: null })).status).toBe(400);
+        expect((await http(r.id, otherStaffCookie, await binding(otherStaffCookie))).status).toBe(404);
+        expect(await databaseFingerprint()).toBe(before);
+        await prisma.user.update({ where: { id: staffId }, data: { mustChangePassword: true } });
+        expect((await http(r.id, staffCookie, b)).status).toBe(403);
+      });
     });
 
     it("persists all room-only transitions with exactly one version and minimized audit per change", async () => {
@@ -2787,7 +2897,7 @@ describe.sequential(
       ).resolves.toMatchObject({ actorRole: "STAFF" });
     });
 
-    it("rolls back assignment and reservation version when audit persistence fails", async () => {
+    it.each([false, true])("rolls back assignment and reservation version when audit persistence fails (room intent=%s)", async roomIntent => {
       const reservation = await createReservation();
       const before = await prisma.reservation.findUniqueOrThrow({
         where: { id: reservation.id },
@@ -2810,13 +2920,9 @@ describe.sequential(
         FOR EACH ROW EXECUTE FUNCTION m10a_test_reject_assignment_audit();
       `);
       try {
-        await expect(
-          putReservationAssignment({
-            actor: staffActor,
-            reservationId: reservation.id,
-            rawPayload: putPayload(1),
-            now,
-          }),
+        await expect(roomIntent
+          ? assignReservationRoom({ actor: staffActor, reservationId: reservation.id, rawPayload: { version: 1, roomId: roomOneId, expectedLocalDate: futureDate, expectedServiceType: "DINNER" }, now })
+          : putReservationAssignment({ actor: staffActor, reservationId: reservation.id, rawPayload: putPayload(1), now }),
         ).rejects.toThrow("synthetic M10-A assignment audit failure");
       } finally {
         await prisma.$executeRawUnsafe(

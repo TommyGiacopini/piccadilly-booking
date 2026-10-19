@@ -93,3 +93,8 @@ STAFF e ADMIN possono usare le API solo con sessione valida, account attivo, `di
 - Hard delete alla rimozione: rifiutato per perdita di storia.
 - Vincoli temporali sul riuso del tavolo: rifiutati finché non esiste un modello approvato di durata/occupazione.
 - Materializzazione delle istanze durante letture o correzioni storiche: rifiutata perché viola ADR 009.
+
+## Addendum T06-C — room-only e legacy conservativo
+Il nuovo workspace/pannello ordinario usa POST room-assignment e non il PUT full-state. Il servizio condivide lock/guard/transazioni/audit canonici; la write mirata non modifica note legacy o junction e preserva l'autore iniziale. Stessa sala attiva è no-op; sala diversa con link e riattivazione cleared con link sono bloccate esplicitamente. Cleared senza link può riattivarsi conservando note. Il vecchio PUT continua a consentire sostituzioni deliberate di sala/tavoli/note e DELETE resta clear logico: contratto backend distinto, senza fallback automatici dalla nuova UI.
+
+Lo schema rimane16. roomAssignedAt è derivato da lineage audit affidabile nel ciclo attivo; createdAt/updatedAt dell'entity riutilizzata non lo sostituiscono. Unknown è un risultato valido. Nessun journal, Undo, assignedAt persistito, collision detection o capacità per sala. Binding obbligatorio sul nuovo endpoint, room intent nel controller ROOT esistente e nessuna nuova credenziale.

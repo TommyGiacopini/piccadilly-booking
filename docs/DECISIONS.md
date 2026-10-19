@@ -498,3 +498,12 @@ Il Controller autorizza soltanto remediation locale in11 path nominati, su scope
 È ratificato il confronto server della sessione proprietaria del draft con la sessione autenticata nella stessa richiesta HTTP. Actor e HMAC derivano da un'unica autenticazione canonica; nessuna seconda lettura indipendente. Il binding è un vincolo aggiuntivo di uguaglianza, non una credenziale. La proof client resta utile ma non chiude da sola l'interleaving cookie A/B. I test devono distinguere CLIENT_NO_DISPATCH, SERVER_REJECTED_BEFORE_WRITER, AUTHORIZED_MUTATION e LEGACY_COMPATIBLE_MUTATION.
 
 D01 consente compatibilità legacy senza header, condizionata all'obbligo verificato dei tre submit T06-B di inviare sempre il binding originale, senza fallback. Il server non dispone di discriminatore autorevole per tutti i client headerless: non si dichiara protezione universale della loro provenienza. Il futuro Work Security QG deve valutare espressamente questo limite. Sono preservati idempotenza PHONE, no-op NI anche stale,409, auth/revoca/password-change/Origin e tutte le policy canoniche. Request già autenticata A può completare dopo login B; nessuna promessa di cancellazione automatica o revoca transazionale concorrente. Pubblicazione, merge, deploy, DB persistente e T06-C/D rimangono vietati.
+
+## 2026-10-19 — T06-C room assignment workspace
+Il Controller approva32 path (22M/10A/0D),435 record finali attesi e403 file baseline protetti; implementazione locale, PostgreSQL temporaneo e QG. Nessuna pubblicazione Git, deploy o T06-D.
+
+Nuovo endpoint mirato, dati legacy preservati e blocco conservativo anche su cleared con link; nessun retry che ricada sul PUT legacy. Undo personale revocato dall'Owner. Ordinamento assegnazione audit-derived con unknown esplicito, nessuna migration17.
+
+Cinque estensioni rispetto al candidato27: host/type/test per kind ROOM, request-security e relativo test soltanto per il callback esatto /dashboard/assign-room. Nessun nuovo secret o dipendenza; T06-B non viene riprogettata. Il nuovo endpoint richiede binding obbligatorio e non adotta D01 headerless. Le API legacy preservano i contratti esistenti.
+
+Il ritiro dei controlli tavoli/note/clear dalla UI ordinaria richiede mapping OLD→NEW nei test: scritture deliberate sulle API legacy e prove DB conservate; UI room-only verifica readonly, blocchi, conferme e focus. Nessuna copertura di dominio eliminata.

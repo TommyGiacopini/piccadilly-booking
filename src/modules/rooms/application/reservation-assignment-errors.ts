@@ -5,6 +5,8 @@ export type ReservationAssignmentErrorCode =
   | "VERSION_CONFLICT"
   | "RESERVATION_CANCELLED"
   | "ROOM_UNAVAILABLE"
+  | "LEGACY_TABLE_LINKS_PRESENT"
+  | "RESERVATION_CONTEXT_CHANGED"
   | "INVARIANT";
 
 export class ReservationAssignmentError extends Error {
@@ -30,6 +32,8 @@ export function reservationAssignmentErrorStatus(
     case "VERSION_CONFLICT":
     case "RESERVATION_CANCELLED":
     case "ROOM_UNAVAILABLE":
+    case "LEGACY_TABLE_LINKS_PRESENT":
+    case "RESERVATION_CONTEXT_CHANGED":
       return 409;
     case "INVARIANT":
       return 500;

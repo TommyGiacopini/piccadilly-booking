@@ -1,4 +1,4 @@
-export type StaffDraftKind = "PHONE" | "EDIT" | "NI";
+export type StaffDraftKind = "PHONE" | "EDIT" | "NI" | "ROOM";
 export type StaffDraftPhase = "CLEAN" | "DIRTY" | "PENDING" | "DIRTY_CONFLICT" | "ERROR" | "CONFIRMED";
 export type StaffDraftValues = Readonly<Record<string, string | number | boolean | null>>;
 export interface StaffDraftIdentity { actorId: string; tenantId: string; sessionBinding: string; role: "STAFF" | "ADMIN" }

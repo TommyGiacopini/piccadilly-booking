@@ -956,3 +956,16 @@ PHONE preserva payload, consenso, notifiche, Idempotency-Key, replay e retry. Ne
 NI usa il suo endpoint Staff autorizzato e un editor unico. NC passa da Staff Edit. Le note legacy restano separate. CANCELLED è read-only per NC, NI e assignment; Arrival T03 conserva i guard già approvati.
 
 Le bozze PHONE/Edit/NI sono esclusivamente RAM client, segregate per tenant, attore, binding di sessione, tipo e risorsa. Link e chiusure controllate offrono Resta, Esci conservando, Scarta selettivamente. Back/Forward nativi completano la transizione: il recupero è esplicito e richiede nuova autorizzazione. Nessuna promessa di recupero dopo reload, chiusura o navigazione documentale completa. Non esistono autosave o persistenza delle bozze.
+
+## T06-C — ASSEGNA SALA (implementazione locale autorizzata)
+Baseline a178d32ee61de68846f2f66a8e35b85454c890e7, schema16. Questo checkpoint supera soltanto i precedenti rinvii di T06-C; T06-D e deploy restano esclusi.
+
+Il workspace /dashboard/assign-room espone data, singolo servizio, vista tutte le sale e vista singola sala. Selezione prenotazione → + sulla sala → conferma esplicita server. Sala1/Sala2/Sala3 — Giochi sono principali; Galleria/Terrazzo separate conservano EXPLICIT_ONLY. Conteggi CONFIRMED e coperti sono informativi, senza capacità per sala o tavoli digitali. CANCELLED esclusa dai totali; correzioni storiche secondo M10/T04.
+
+Le righe compatte preservano nome, coperti, ora, TA/Bimbi/unknown, esigenze dichiarate e indicatori NC/NI autonome/legacy ACTIVE/CLEARED. Nessun testo NI nel read model della lista. Consultazione nel dettaglio Staff autorizzato T06-B, senza duplicare editor. Nessuna attribuzione materiale delle NC.
+
+Tre ordini crescenti: ora di arrivo (arrivalTime), creazione prenotazione, ingresso dimostrabile nella sala corrente dall'audit. Assignment.createdAt/updatedAt non sono fallback. Cronologia assente, ambigua o incoerente → null e "Momento di assegnazione non disponibile". Nessun assignedAt persistito, backfill o migration17.
+
+Il nuovo POST room-assignment modifica soltanto la sala: stessa sala attiva no-op anche stale; cambio senza link consentito; active/cleared con link incompatibili bloccati; cleared senza link riattivabile preservando note e autore iniziale. Guard status e data/servizio attesi precedono il no-op. PUT/DELETE legacy restano canonici per operazioni deliberate; il pannello ordinario non consente tavoli/note legacy/cleanup.
+
+Conflitti richiedono rilettura e scelta esplicita. Errori di rete dopo invio hanno esito incerto. Nessun Undo, auto-assignment, collision detection, capacità sala o navigazione automatica alla destinazione.

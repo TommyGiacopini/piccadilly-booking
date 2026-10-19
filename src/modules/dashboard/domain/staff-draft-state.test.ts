@@ -19,7 +19,8 @@ async function controllerFixture(kind: StaffDraftKind) {
   const compiled = transpileModule(controllerSource + "\nglobalThis.factory = createStaffDraftController;", { compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.CommonJS } }).outputText;
   const owner = { actorId: randomUUID(), tenantId: randomUUID(), sessionBinding: "A".repeat(43), role: "STAFF" as const };
   let proofs = 0, mutations = 0;
-  const mutationHeaders: Headers[] = [];
+  const mutationHeaders: Headers[] = [], resourceUrls: string[] = [];
+  let roomResource = { reservation: { id: "", version: 1, status: "CONFIRMED", localDate: "2099-12-18", serviceType: "DINNER" }, assignment: null, rooms: [] };
   let mutationResponse = async () => Response.json({ version: 2 });
   let proofResponse: (challenge: string) => Promise<Response> = async challenge => Response.json({ ...owner, challenge });
   const id = randomUUID();
@@ -28,9 +29,9 @@ async function controllerFixture(kind: StaffDraftKind) {
     requestAnimationFrame: (callback: () => void) => callback(), flushSync: (callback: () => void) => callback(),
     fetch: async (url: string, init: RequestInit = {}) => {
       if (url === "/api/auth/draft-context") { ++proofs; return proofResponse(JSON.parse(String(init.body)).challenge as string); }
-      if (!init.method || init.method === "GET") return Response.json(kind === "NI"
+      if (!init.method || init.method === "GET") { resourceUrls.push(url); if (kind === "ROOM") return Response.json({ ...roomResource, reservation: { ...roomResource.reservation, id } }); return Response.json(kind === "NI"
         ? { reservation: { id, version: 1, status: "CONFIRMED" }, privateNotes: null, privateNotesPresent: false, legacyAssignment: null }
-        : { reservation: { id, version: 1, status: "CONFIRMED", customer: { firstName: "Fake", lastName: "Test", phone: "+390000000000" }, localDate: "2099-12-18", arrivalTime: "19:00", serviceType: "DINNER" } });
+        : { reservation: { id, version: 1, status: "CONFIRMED", customer: { firstName: "Fake", lastName: "Test", phone: "+390000000000" }, localDate: "2099-12-18", arrivalTime: "19:00", serviceType: "DINNER" } }); }
       ++mutations; mutationHeaders.push(new Headers(init.headers)); return mutationResponse();
     },
   });
@@ -39,11 +40,48 @@ async function controllerFixture(kind: StaffDraftKind) {
   await controller.verifySession();
   controller.initialize({ kind, resourceId: id, instanceId: randomUUID(), route: "/dashboard", originPath: "/dashboard", values: { note: "old" }, baseVersion: kind === "PHONE" ? null : 1 });
   const key = draftState.staffDraftKey(owner, kind, id);
-  controller.patchDraft(key, { note: "ARTIFICIAL_DRAFT" }); controller.activateDraft("editor", key);
+  controller.patchDraft(key, { note: "ARTIFICIAL_DRAFT", ...(kind === "ROOM" ? { roomId: randomUUID(), expectedLocalDate: "2099-12-18", expectedServiceType: "DINNER" } : {}) }); controller.activateDraft("editor", key);
   const submit = () => controller.mutate({ key, url: "/api/staff/reservations/" + id, method: kind === "PHONE" ? "POST" : kind === "EDIT" ? "PATCH" : "PUT", payload: '{"note":"ARTIFICIAL_DRAFT"}', idempotencyKey: kind === "PHONE" ? "fixed-key" : undefined,
     validate: () => ({ resourceId: id, version: 2, text: "confirmed" }) });
-  return { controller, key, owner, submit, mutationHeaders, setMutation: (next: typeof mutationResponse) => { mutationResponse = next; }, setProof: (next: typeof proofResponse) => { proofResponse = next; }, counts: () => ({ proofs, mutations }) };
+  return { controller, key, owner, submit, mutationHeaders, resourceUrls, setRoom: (patch: Partial<typeof roomResource.reservation>) => { roomResource = { ...roomResource, reservation: { ...roomResource.reservation, ...patch } }; }, setMutation: (next: typeof mutationResponse) => { mutationResponse = next; }, setProof: (next: typeof proofResponse) => { proofResponse = next; }, counts: () => ({ proofs, mutations }) };
 }
+
+describe("T06-C ROOM controller integration", () => {
+  it("retains only the room surface marker through same-session proof and wipes it on identity change", async () => {
+    const f = await controllerFixture("ROOM"); f.controller.openRoomSurface("DETAIL:synthetic");
+    f.controller.quarantine(); expect(f.controller.getSnapshot().roomSurface).toBe("DETAIL:synthetic");
+    await f.controller.verifySession(); expect(f.controller.getSnapshot().roomSurface).toBe("DETAIL:synthetic");
+    f.setProof(async challenge => Response.json({ ...f.owner, challenge, sessionBinding: "C".repeat(42) + "A" }));
+    await f.controller.verifySession(); expect(f.controller.getSnapshot().roomSurface).toBeNull();
+  });
+  it.each(["", "invalid", "B".repeat(43)])("requires the original valid owner binding before ROOM dispatch %#", async value => {
+    const f = await controllerFixture("ROOM"); f.controller.getSnapshot().drafts.identity!.sessionBinding = value;
+    expect((await f.submit()).confirmed).toBe(false); expect(f.counts().mutations).toBe(0);
+  });
+  it("rereads ASSIGNMENT explicitly and sends the frozen owner header", async () => {
+    const f = await controllerFixture("ROOM"); expect((await f.submit()).confirmed).toBe(true);
+    expect(f.resourceUrls).toHaveLength(1); expect(f.resourceUrls[0]).toMatch(/\/assignment$/u);
+    expect(f.mutationHeaders[0].get("X-Piccadilly-Draft-Session-Binding") === f.owner.sessionBinding).toBe(true);
+  });
+  it.each([{ version: 2 }, { localDate: "2099-12-19" }, { serviceType: "LUNCH" }, { status: "CANCELLED" }])("does not dispatch when authoritative context changed %#", async patch => {
+    const f = await controllerFixture("ROOM"); f.setRoom(patch); expect((await f.submit()).confirmed).toBe(false); expect(f.counts().mutations).toBe(0);
+  });
+  it("has a synchronous busy lock and rejects duplicate submit", async () => {
+    const f = await controllerFixture("ROOM"); let release: () => void = () => undefined;
+    const pending = new Promise<void>(resolve => { release = resolve; }); f.setProof(async challenge => { await pending; return Response.json({ ...f.owner, challenge }); });
+    const first = f.submit(); expect((await f.submit()).confirmed).toBe(false); release(); expect((await first).confirmed).toBe(true); expect(f.counts().mutations).toBe(1);
+  });
+  it("preserves PHONE/EDIT/NI when a ROOM record is discarded", () => {
+    let state = authorizeStaffDrafts(createStaffDraftState(), identity);
+    for (const kind of ["PHONE", "EDIT", "NI", "ROOM"] as const) state = initializeStaffDraft(state, { kind, resourceId: "same", instanceId: kind, route: "/dashboard", originPath: "/dashboard", values: { roomId: "room" }, baseVersion: 1 });
+    state = discardStaffDraft(state, staffDraftKey(identity, "ROOM", "same"));
+    expect(Object.values(state.records).map(r => r.kind).sort()).toEqual(["EDIT", "NI", "PHONE"]);
+  });
+  it("fresh session mismatch prevents ROOM dispatch", async () => {
+    const f = await controllerFixture("ROOM"); f.setProof(async challenge => Response.json({ ...f.owner, challenge, sessionBinding: "C".repeat(42) + "A" }));
+    expect((await f.submit()).confirmed).toBe(false); expect(f.counts().mutations).toBe(0);
+  });
+});
 
 describe("F01-TOCTOU original binding dispatch and server rejection fencing", () => {
   for (const kind of ["PHONE", "EDIT", "NI"] as const) {
