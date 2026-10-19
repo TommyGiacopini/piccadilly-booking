@@ -38,6 +38,8 @@ test("T06-C select plus explicit confirmation updates room view and Agenda witho
   await expect(row).toContainText("4 coperti"); await expect(row).toContainText("Bimbi (1)"); await expect(row).toContainText("NI autonoma presente"); await expect(row).not.toContainText("T06C_NI_PRIVATE_MARKER");
   await row.getByRole("radio").check(); await page.getByRole("button", { name: "Assegna selezionata a Sala 1", exact: true }).click();
   const dialog = page.getByTestId("assignment-dialog"); await expect(dialog.getByTestId("assignment-room-select")).not.toHaveValue("");
+  await expect(dialog).toHaveAccessibleName("Sala definitiva e riferimenti legacy");
+  await expect(dialog).toHaveAccessibleDescription(/4 coperti.*Arrivo previsto: 19:00.*Sala attuale: DA ASSEGNARE.*Sala di destinazione: Sala 1/u);
   expect((await stored(r.id)).assignment_id).toBeNull();
   const waiting = page.waitForResponse(resp => resp.request().method() === "POST" && resp.url().endsWith(`/${r.id}/room-assignment`));
   await dialog.getByTestId("assignment-save").click(); const response = await waiting; expect(response.status()).toBe(200);
@@ -90,11 +92,83 @@ test("T06-C responsive keyboard confirmation survives resize and cancel sends no
   const dialog = page.getByTestId("assignment-dialog"); await expect(dialog.getByTestId("assignment-room-select")).not.toHaveValue("");
   for (const viewport of [{ width: 320, height: 640 }, { width: 390, height: 844 }, { width: 820, height: 1180 }, { width: 1023, height: 900 }, { width: 1024, height: 900 }, { width: 1280, height: 720 }, { width: 1440, height: 900 }]) {
     await page.setViewportSize(viewport); await expect(dialog).toBeVisible(); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(dialog.getByTestId("assignment-reservation-summary")).toContainText("4 coperti · Arrivo previsto: 19:00");
+    await expect(dialog.getByTestId("assignment-reservation-summary")).toContainText("Sala di destinazione: Sala 1");
     await page.screenshot({ path: info.outputPath(`room-${viewport.width}.png`), fullPage: true });
   }
   const selected = await dialog.getByTestId("assignment-room-select").inputValue(); await dialog.getByTestId("assignment-save").focus(); await page.keyboard.press("Tab"); await expect(dialog.getByRole("button", { name: "Chiudi gestione assegnazione" })).toBeFocused();
   await page.keyboard.press("Escape"); const guard = page.getByRole("dialog").filter({ hasText: "Esci conservando" }); await expect(guard).toBeVisible();
   await guard.getByRole("button", { name: "Resta", exact: true }).click(); await expect(dialog.getByTestId("assignment-room-select")).toHaveValue(selected); expect((await stored(r.id)).assignment_id).toBeNull();
+});
+
+for (const surface of ["WORKSPACE", "AGENDA", "DETAIL"] as const) test(`C-UX01 authoritative accessible reservation identity from ${surface}`, async ({ page }, info) => {
+  await login(page); const r = await create(page.request, "UX " + surface);
+  const response = await page.request.get(`/api/staff/reservations/${r.id}`); expect(response.status()).toBe(200);
+  const staff = (await response.json()).reservation, name = staff.customer.firstName + " " + staff.customer.lastName;
+  const c = await context(page.request, r.id), room1 = c.rooms.find((v: { code: string }) => v.code === "sala-1"), room2 = c.rooms.find((v: { code: string }) => v.code === "sala-2");
+  const before = await stored(r.id); let dispatched = 0;
+  page.on("request", request => { if (request.method() === "POST" && request.url().endsWith(`/${r.id}/room-assignment`)) dispatched++; });
+  if (surface === "WORKSPACE") {
+    await workspace(page); await page.locator(`[data-room-reservation="${r.id}"]`).getByRole("radio").check();
+    await page.getByRole("button", { name: "Assegna selezionata a Sala 1", exact: true }).click();
+  } else if (surface === "AGENDA") {
+    await page.goto(`/dashboard?date=${date}&service=DINNER`);
+    await page.locator(`article[data-reservation-id="${r.id}"]`).getByRole("button", { name: "Assegna sala", exact: true }).click();
+  } else {
+    await page.goto(`/dashboard/reservations/${r.id}`); await page.getByRole("button", { name: "Assegna sala", exact: true }).click();
+  }
+  const dialog = page.getByRole("dialog", { name: "Sala definitiva e riferimenti legacy", exact: true });
+  const summary = dialog.getByTestId("assignment-reservation-summary"); await expect(summary).toContainText("Prenotazione: " + name);
+  await expect(summary).toContainText("4 coperti · Arrivo previsto: 19:00"); await expect(summary).toContainText("Sala attuale: DA ASSEGNARE");
+  await dialog.getByTestId("assignment-room-select").selectOption(room1.id);
+  await expect(dialog).toHaveAccessibleDescription(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&") + ".*4 coperti.*19:00.*DA ASSEGNARE.*Sala 1", "u"));
+  await expect(dialog.getByTestId("assignment-save")).toBeEnabled();
+  await expect.poll(() => dialog.evaluate(element => element.contains(document.activeElement))).toBe(true);
+  await page.setViewportSize({ width: 390, height: 844 }); await expect(summary).toBeVisible();
+  await expect(summary).toContainText(name); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath(`c-ux01-${surface.toLowerCase()}.png`), fullPage: true });
+  await info.attach("accessible-dialog", { body: await dialog.ariaSnapshot(), contentType: "text/plain" });
+  await page.keyboard.press("Escape");
+  const exitGuard = page.getByRole("dialog", { name: "Modifiche non salvate" });
+  await exitGuard.getByRole("checkbox", { name: "Scarta soltanto la bozza ROOM", exact: true }).check();
+  await exitGuard.getByRole("button", { name: "Scarta selezionate ed esci", exact: true }).click();
+  await expect(dialog).toBeHidden(); expect(dispatched).toBe(0); expect(await stored(r.id)).toEqual(before);
+  // Reopen an assigned reservation to distinguish current room from destination.
+  expect((await roomPost(page.request, r.id, room1.id, 1, (await proof(page.request)).sessionBinding)).status()).toBe(200);
+  await page.goto(`/dashboard/reservations/${r.id}`); await page.getByRole("button", { name: "Gestisci assegnazione", exact: true }).click();
+  await expect(summary).toContainText("Sala attuale: Sala 1"); await dialog.getByTestId("assignment-room-select").selectOption(room2.id);
+  await expect(summary).toContainText("Sala di destinazione: Sala 2");
+  const assigned = await stored(r.id);
+  await page.route(`**/api/staff/reservations/${r.id}/room-assignment`, route => route.abort("failed"));
+  await dialog.getByTestId("assignment-save").click();
+  const alert = dialog.getByRole("alert"); await expect(alert).toBeFocused();
+  await expect(dialog).toHaveAttribute("aria-describedby", await alert.getAttribute("id") ?? "");
+  await expect(alert).toHaveAccessibleDescription(/4 coperti.*19:00.*Sala attuale: Sala 1.*Sala di destinazione: Sala 2/u);
+  await expect(summary).toContainText(name); expect(await stored(r.id)).toEqual(assigned);
+  await page.unrouteAll({ behavior: "wait" });
+});
+
+for (const failure of ["DELAYED", "FAILED", "INCONSISTENT"] as const) test(`C-UX01 blocks ambiguous identity ${failure} without mutation`, async ({ page }) => {
+  await login(page); const r = await create(page.request, "Identity " + failure); const before = await stored(r.id);
+  let release: () => void = () => undefined, reached: () => void = () => undefined, dispatched = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; }), held = new Promise<void>(resolve => { reached = resolve; });
+  const pattern = `**/api/staff/reservations/${r.id}`;
+  await page.route(pattern, async route => {
+    const response = await route.fetch(); reached();
+    if (failure === "DELAYED") { await gate; await route.fulfill({ response }); }
+    else if (failure === "FAILED") await route.fulfill({ status: 500, json: { error: "INTERNAL ERROR" } });
+    else { const body = await response.json(); body.reservation.version++; await route.fulfill({ response, json: body }); }
+  });
+  page.on("request", request => { if (request.method() === "POST" && request.url().endsWith(`/${r.id}/room-assignment`)) dispatched++; });
+  await workspace(page); await page.locator(`[data-room-reservation="${r.id}"]`).getByRole("radio").check(); await page.getByRole("button", { name: "Assegna selezionata a Sala 1", exact: true }).click(); await held;
+  const dialog = page.getByTestId("assignment-dialog"), save = dialog.getByTestId("assignment-save");
+  await expect(save).toBeVisible(); await expect(save).toBeDisabled(); await expect(dialog.getByTestId("assignment-reservation-summary")).toHaveCount(0);
+  await save.dispatchEvent("click"); expect(dispatched).toBe(0); expect(await stored(r.id)).toEqual(before);
+  if (failure === "DELAYED") release();
+  await page.unrouteAll({ behavior: "wait" });
+  if (failure !== "DELAYED") await dialog.getByRole("button", { name: "Rileggi identificazione e assegnazione" }).click();
+  await expect(save).toBeEnabled(); await expect(dialog.getByTestId("assignment-reservation-summary")).toContainText("4 coperti");
+  expect(dispatched).toBe(0); expect(await stored(r.id)).toEqual(before);
 });
 
 test("T06-C real server409 after GET retains choice until explicit reapply", async ({ page }) => {
