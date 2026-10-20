@@ -895,3 +895,9 @@ L’integrazione richiede clean install, isolamento PostgreSQL positivo prima di
 
 ## Checkpoint T06-C —19 ottobre2026
 T06-B CLOSED e merged su main a178d32ee61de68846f2f66a8e35b85454c890e7 (tree abc94dfc97913332ea30c0179a4f35f2127b8f78),425 file/schema16. T06-C: design approvato e implementazione locale autorizzata su32 path (22M/10A), senza migration17. Workspace ASSEGNA SALA, intento room-only, conservazione legacy e integrazione ROOM nel controller volatile. Sono richiesti targeted/full Vitest e Playwright, Prisma, lint, typecheck, build, integrità sorgenti e pacchetto evidenze esterno. Work Final QG indipendente rimane necessario. Nessuna autorizzazione Git, deploy, DB persistente, T06-D, Render o Asporti.
+
+## Checkpoint T06-D —20 ottobre2026
+
+T06-A CLOSED; T06-SEC CLOSED WITH RESERVATIONS; T06-B/C CLOSED e merged. T06-D conclude il percorso UX T06 con navigazione Staff/Admin, hub /admin e breadcrumb sulle funzionalità esistenti. Scope13 (11M/2A),437 file attesi e424 protetti. Nessun nuovo endpoint, migrazione, permesso, dipendenza o comportamento gestionale.
+
+Implementazione locale autorizzata; matrice D01 navigazione, D02 ruoli, D03 draft lifecycle, D04 responsive/accessibilità, D05 regressioni. Sono richiesti targeted/full Vitest e Playwright (workers1/retries0), Prisma generate/validate, lint, strict typecheck, build, hash/freeze, PostgreSQL temporaneo con guard prima del seed e pacchetto portabile esterno. Work Final QG indipendente rimane richiesto. Pubblicazione Git, deploy, DB persistente, Render e T07 non autorizzati.

@@ -72,7 +72,7 @@ test.describe("T01 route-specific auth returnTo", () => {
     await expect(
       page
         .getByRole("navigation", { name: "Navigazione area Staff" })
-        .getByRole("link", { name: "Configurazioni" }),
+        .getByRole("link", { name: "Impostazioni operative" }),
     ).toHaveAttribute("aria-current", "page");
     await expect(
       page.getByRole("heading", { name: "Impostazioni operative" }),

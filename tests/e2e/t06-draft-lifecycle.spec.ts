@@ -390,7 +390,7 @@ for (const kind of ["PHONE", "EDIT", "NI"] as const) {
     await page.getByRole("link", { name: "Admin", exact: true }).click(); await keep(page); await expect(page).toHaveURL(/\/admin$/u);
     await page.goBack(); await resume(page, kind); await expect(field).toHaveValue(marker);
     await page.goForward(); await expect(page).toHaveURL(/\/admin$/u);
-    await page.getByRole("link", { name: "Configurazioni", exact: true }).click(); await expect(page).toHaveURL(/\/admin\/configuration$/u);
+    await page.getByRole("navigation", { name: "Navigazione area Staff" }).getByRole("link", { name: "Impostazioni operative", exact: true }).click(); await expect(page).toHaveURL(/\/admin\/configuration$/u);
     await page.evaluate(() => history.go(-2)); await expect(page).toHaveURL(start); await resume(page, kind); await expect(field).toHaveValue(marker);
     await page.getByRole("link", { name: "Admin", exact: true }).click(); await keep(page);
     await page.getByRole("button", { name: "Torna al draft " + kind, exact: true }).click(); await resume(page, kind); await expect(field).toHaveValue(marker);

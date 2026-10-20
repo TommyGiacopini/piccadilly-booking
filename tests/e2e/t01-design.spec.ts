@@ -420,13 +420,13 @@ test.describe.serial("T01 design foundations, auth e shell", () => {
       name: "Navigazione area Staff",
     });
     await expect(
-      navigation.getByRole("link", { name: "Configurazioni" }),
+      navigation.getByRole("link", { name: "Impostazioni operative" }),
     ).toBeVisible();
     await expect(navigation.getByRole("link", { name: "Admin" })).toBeVisible();
     await navigation.getByRole("link", { name: "Admin" }).click();
     await expect(page).toHaveURL(/\/admin$/);
     await expect(
-      page.getByRole("heading", { name: "Area tecnica ADMIN" }),
+      page.getByRole("heading", { name: "Hub Admin" }),
     ).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await screenshot(page, "admin-shell-1280x720.png");
