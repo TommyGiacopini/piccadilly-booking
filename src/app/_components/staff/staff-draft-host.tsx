@@ -35,6 +35,7 @@ export interface StaffHostView {
   notice: string | null;
   detachedReceipt: StaffDraftReceipt | null;
   privateNotesSurface: string | null;
+  roomSurface: string | null;
   agenda: VolatileAgendaState;
 }
 const emptyAgenda = (): VolatileAgendaState => ({ originPath: "/dashboard", query: "", order: "OLDEST", scrollY: 0, focusReservationId: null, feedback: null, destinationHref: null });
@@ -73,7 +74,7 @@ function createStaffDraftController() {
       return "00000000-0000-8000-8000-" + localSequence.toString(16).padStart(12, "0");
     }
   }
-  let view: StaffHostView = { drafts: createStaffDraftState(), revision: 0, resourceGeneration: 0, overlay: null, guard: null, notice: null, detachedReceipt: null, privateNotesSurface: null, agenda: emptyAgenda() };
+  let view: StaffHostView = { drafts: createStaffDraftState(), revision: 0, resourceGeneration: 0, overlay: null, guard: null, notice: null, detachedReceipt: null, privateNotesSurface: null, roomSurface: null, agenda: emptyAgenda() };
   const initial = view, listeners = new Set<() => void>(), resources = new Map<string, ResourceEntry>();
   const reads = new Map<string, Promise<ResourceData | null>>(), activeDrafts = new Map<string, { key: string; navigation: number }>();
   const readGenerations = new Map<string, number>();
@@ -87,7 +88,7 @@ function createStaffDraftController() {
   const draftUpdate = (drafts: StaffDraftState) => update({ drafts });
   function erasePersonalState() {
     ++proofGeneration; proofFlight = null; authorizedRoute = ""; resources.clear(); reads.clear(); readGenerations.clear(); deferred.clear(); activeDrafts.clear(); phoneLocalId = null;
-    update({ drafts: invalidateStaffDrafts(view.drafts), agenda: emptyAgenda(), overlay: null, guard: null, notice: null, detachedReceipt: null, privateNotesSurface: null });
+    update({ drafts: invalidateStaffDrafts(view.drafts), agenda: emptyAgenda(), overlay: null, guard: null, notice: null, detachedReceipt: null, privateNotesSurface: null, roomSurface: null });
   }
   function quarantine() {
     ++proofGeneration; proofFlight = null; authorizedRoute = ""; resources.clear(); reads.clear();
@@ -121,7 +122,7 @@ function createStaffDraftController() {
         const changed = view.drafts.identity !== null && !sameDraftSession(view.drafts.identity, identity);
         if (changed) { resources.clear(); reads.clear(); deferred.clear(); activeDrafts.clear(); phoneLocalId = null; }
         authorizedRoute = route;
-        update({ drafts: authorizeStaffDrafts(view.drafts, identity), ...(changed ? { agenda: emptyAgenda(), detachedReceipt: null, privateNotesSurface: null, notice: "Sessione cambiata: nessuna bozza precedente è stata ripristinata." } : {}) });
+        update({ drafts: authorizeStaffDrafts(view.drafts, identity), ...(changed ? { agenda: emptyAgenda(), detachedReceipt: null, privateNotesSurface: null, roomSurface: null, notice: "Sessione cambiata: nessuna bozza precedente è stata ripristinata." } : {}) });
         for (const [key, pending] of deferred) {
           if (matchesStaffDraftAttempt(view.drafts, key, pending.stamp)) {
             draftUpdate(settleStaffDraftAttempt(view.drafts, key, pending.stamp, pending.outcome));
@@ -180,7 +181,7 @@ function createStaffDraftController() {
     }
     if (state !== view.drafts) draftUpdate(state);
     if (view.drafts.identity || Object.keys(view.drafts.records).length || view.drafts.auth === "CHECKING") quarantine();
-    update({ overlay: null, guard: null, privateNotesSurface: null });
+    update({ overlay: null, guard: null, privateNotesSurface: null, roomSurface: null });
     // The observer may mount after a child started proof. Its navigation
     // generation invalidates that response, so start a proof for this route.
     if (staffPath(route) && (view.drafts.identity || view.drafts.auth === "CHECKING")) void verifySession();
@@ -278,10 +279,23 @@ function createStaffDraftController() {
         update({ notice: "Sessione cambiata: nessun dato della bozza precedente è stato inviato." }); return result;
       }
       if (current.kind !== "PHONE") {
-        const resource = await readResource(current.kind === "NI" ? "NI" : "STAFF", stamp.resourceId, true);
+        const resource = await readResource(current.kind === "ROOM" ? "ASSIGNMENT" : current.kind === "NI" ? "NI" : "STAFF", stamp.resourceId, true);
         if (!currentAttempt()) { rejectDispatch(false); return result; }
-        const reservation = current.kind === "NI" && resource && "reservation" in resource ? resource.reservation : resource;
+        const reservation = (current.kind === "NI" || current.kind === "ROOM") && resource && "reservation" in resource ? resource.reservation : resource;
         if (!reservation || !("status" in reservation) || reservation.status !== "CONFIRMED") { rejectDispatch(false); return result; }
+        if (current.kind === "ROOM") {
+          if (!("localDate" in reservation) || !("serviceType" in reservation) ||
+              !Number.isInteger(reservation.version) || reservation.version < 1 ||
+              reservation.localDate !== stamp.values.expectedLocalDate || reservation.serviceType !== stamp.values.expectedServiceType) {
+            if (ownsAttempt()) draftUpdate(settleStaffDraftAttempt(view.drafts, input.key, stamp, { kind: "DIRTY_CONFLICT", error: "Data o servizio modificati. Rileggi lo stato e rivaluta esplicitamente la scelta." }));
+            return result;
+          }
+          const assignment = resource && "assignment" in resource ? resource.assignment : null;
+          if (reservation.version !== stamp.baseVersion && assignment?.room.id !== stamp.values.roomId) {
+            if (ownsAttempt()) draftUpdate(settleStaffDraftAttempt(view.drafts, input.key, stamp, { kind: "DIRTY_CONFLICT", error: "Versione modificata. Rileggi lo stato e rivaluta esplicitamente la scelta." }));
+            return result;
+          }
+        }
       }
       if (!currentAttempt()) { rejectDispatch(false); return result; }
     } catch { rejectDispatch(true); return result; }
@@ -378,6 +392,14 @@ function createStaffDraftController() {
     resumeDraft: (owner: string, key: string) => { activeDrafts.set(owner, { key, navigation: navigationGeneration }); update({}); },
     releaseDraft: (owner: string) => { activeDrafts.delete(owner); },
     openPrivateNotes: (id: string) => update({ privateNotesSurface: id }),
+    openRoomSurface: (owner: string) => { if (sessionVisible()) update({ roomSurface: owner }); },
+    closeRoomSurface: (owner: string) => { if (view.roomSurface === owner) update({ roomSurface: null }); },
+    invalidateRoomResource: (id: string) => {
+      const key = "ASSIGNMENT:" + id;
+      resources.delete(key); reads.delete(key);
+      readGenerations.set(key, (readGenerations.get(key) ?? 0) + 1);
+      update({ resourceGeneration: view.resourceGeneration + 1 });
+    },
     closePrivateNotes: (id: string) => {
       const key = view.drafts.identity ? staffDraftKey(view.drafts.identity, "NI", id) : null;
       const record = key ? view.drafts.records[key] : null;
@@ -526,7 +548,7 @@ export function useStaffDraftBinding(input: {
   const resumeRequired = input.allowed && key !== null && view.drafts.records[key] !== undefined && record === null;
   async function resume() {
     if (!key || !await controller.verifySession()) return;
-    if (input.kind !== "PHONE" && !await controller.readResource(input.kind === "NI" ? "NI" : "STAFF", input.resourceId, true)) return;
+    if (input.kind !== "PHONE" && !await controller.readResource(input.kind === "ROOM" ? "ASSIGNMENT" : input.kind === "NI" ? "NI" : "STAFF", input.resourceId, true)) return;
     if (controller.getSnapshot().drafts.records[key]) controller.resumeDraft(owner, key);
   }
   return { key, record, resumeRequired, resume, pending: record?.phase === "PENDING", update: (values: StaffDraftValues) => { if (key) controller.updateDraft(key, values); }, patch: (values: StaffDraftValues) => { if (key) controller.patchDraft(key, values); }, controller };

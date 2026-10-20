@@ -19,6 +19,7 @@ export interface StaffNavigationItem {
 
 const baseNavigation: StaffNavigationItem[] = [
   { href: "/dashboard", icon: "agenda", label: "Agenda" },
+  { href: "/dashboard/assign-room", icon: "add", label: "ASSEGNA SALA" },
   {
     href: "/dashboard/reservations/new",
     icon: "add",
@@ -52,6 +53,7 @@ export function isStaffNavigationActive(
     return (
       pathname === href ||
       (pathname.startsWith("/dashboard/") &&
+        !pathname.startsWith("/dashboard/assign-room") &&
         !pathname.startsWith("/dashboard/reservations/new"))
     );
   }

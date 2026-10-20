@@ -242,6 +242,8 @@ async function clearAndCancel(
   expect(cancelled.ok(), await cancelled.text()).toBe(true);
 }
 
+// T06-C: retain every lifecycle/DB assertion through the canonical legacy API;
+// the new room-only intent must not replace these reschedule/impact contracts.
 test.describe.serial("M10-B lifecycle assegnazioni", () => {
   test.afterAll(async () => {
     await database.end();
@@ -281,6 +283,15 @@ test.describe.serial("M10-B lifecycle assegnazioni", () => {
     );
     expect(stored.rows[0]?.cleared_at).not.toBeNull();
     expect(stored.rows[0]?.audits).toBe("1");
+    // T06-C cannot reactivate an old service selection after this reschedule.
+    const proof = await page.request.post("/api/auth/draft-context", { headers: { origin }, data: { challenge: crypto.randomUUID() } });
+    expect(proof.status()).toBe(200); const identity = await proof.json();
+    const staleRoom = await page.request.post(`/api/staff/reservations/${reservation.id}/room-assignment`, {
+      headers: { origin, "X-Piccadilly-Draft-Session-Binding": identity.sessionBinding },
+      data: { version: 3, roomId: assigned.room.id, expectedLocalDate: original.localDate, expectedServiceType: original.serviceType },
+    });
+    expect(staleRoom.status()).toBe(409); expect((await staleRoom.json()).code).toBe("RESERVATION_CONTEXT_CHANGED");
+    expect((await assignmentContext(page.request, reservation.id)).assignment).toBeNull();
     await clearAndCancel(page.request, reservation.id);
   });
 

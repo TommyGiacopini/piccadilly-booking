@@ -9,6 +9,10 @@ import {
 } from "@/server/auth/request-security";
 
 describe("authentication request security", () => {
+  it("admits only the exact room workspace login callback", () => {
+    expect(resolveSafePostLoginPath("/dashboard/assign-room")).toBe("/dashboard/assign-room");
+    for (const value of ["/dashboard/assign-room/", "/dashboard/assign-room/extra", "/dashboard/assign-room?date=2026-10-19", "/dashboard/assign-room#room", "//evil.invalid/dashboard/assign-room"]) expect(resolveSafePostLoginPath(value)).toBe("/dashboard");
+  });
   it("admits an exact reservation detail UUID without expanding callback policies", () => {
     const path = "/dashboard/reservations/123e4567-e89b-42d3-a456-426614174000";
     expect(resolveSafePostLoginPath(path)).toBe(path);

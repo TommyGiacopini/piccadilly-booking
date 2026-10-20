@@ -21,7 +21,7 @@ interface Room {
   tables: Array<{ id: string; name: string; isActive: boolean }>;
 }
 interface Context {
-  reservation: { version: number; status: "CONFIRMED" | "CANCELLED" };
+  reservation: { version: number; status: "CONFIRMED" | "CANCELLED"; localDate: string; serviceType: "LUNCH" | "DINNER" };
   assignment: null | { id: string; room: { id: string; name: string }; tables: Array<{ id: string; name: string }>; internalNotes: string | null };
   rooms: Room[];
 }
@@ -84,19 +84,23 @@ async function open(page: Page, id: string) {
   return dialog;
 }
 
+// OLD full-state UI save -> new room-only HTTP plus identical persisted-state checks.
 async function save(page: Page, dialog: Locator, id: string, expected: { version: number; roomId: string; tableIds: string[]; internalNotes: string | null }) {
-  const responsePromise = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith(`/reservations/${id}/assignment`));
-  await dialog.getByTestId("assignment-save").click();
-  const response = await responsePromise;
-  expect(response.request().postDataJSON()).toEqual(expected);
+  const context = await read(page.request, id);
+  const waiting = page.waitForResponse(r => r.request().method() === "POST" && r.url().endsWith("/" + id + "/room-assignment"));
+  await dialog.getByTestId("assignment-save").click(); const response = await waiting;
   expect(response.status(), await response.text()).toBe(200);
-  const body = await response.json();
-  expect(body).toMatchObject({ changed: true, reservationVersion: expected.version + 1, assignment: { room: { id: expected.roomId } } });
-  expect(body.assignment.tables.map((table: { id: string }) => table.id).sort()).toEqual(expected.tableIds);
-  await expect(dialog).toBeHidden();
-  const db = await stored(id);
-  expect(db).toMatchObject({ version: expected.version + 1, room_id: expected.roomId, tableIds: expected.tableIds, internal_notes: expected.internalNotes, cleared_at: null });
-  return db;
+  expect(response.request().postDataJSON()).toEqual({ version: expected.version, roomId: expected.roomId, expectedLocalDate: context.reservation.localDate, expectedServiceType: context.reservation.serviceType });
+  expect(response.request().headers()["x-piccadilly-draft-session-binding"]?.length).toBe(43);
+  expect(await response.json()).toMatchObject({ changed: true, reservationVersion: expected.version + 1, assignment: { roomId: expected.roomId } });
+  await expect(dialog).toBeHidden(); const db = await stored(id);
+  expect(db).toMatchObject({ version: expected.version + 1, room_id: expected.roomId, tableIds: expected.tableIds, internal_notes: expected.internalNotes, cleared_at: null }); return db;
+}
+async function legacy(request: APIRequestContext, id: string, version: number, roomId: string, tableIds: string[], internalNotes: string | null) {
+  const response = await request.put("/api/staff/reservations/" + id + "/assignment", { headers, data: { version, roomId, tableIds, internalNotes } });
+  expect(response.status(), await response.text()).toBe(200);
+  expect(await response.json()).toMatchObject({ changed: true, reservationVersion: version + 1 });
+  const db = await stored(id); expect(db).toMatchObject({ version: version + 1, room_id: roomId, tableIds, internal_notes: internalNotes, cleared_at: null }); return db;
 }
 
 async function cancel(request: APIRequestContext, id: string) {
@@ -161,284 +165,98 @@ test.afterAll(async () => {
   } finally { await database.end(); }
 });
 
-test.describe.serial("T04 Revised room-only assignment", () => {
+test.describe.serial("T04 Revised room-only assignment — T06-C UI mapping", () => {
   test("room-only without configured tables persists neutral Agenda, filters and partition summary", async ({ page }) => {
-    const date = "2099-11-04";
-    await login(page);
-    const ref = await create(page.request, payload(date, "Empty room"));
+    const date = "2099-11-04"; await login(page); const ref = await create(page.request, payload(date, "Empty room"));
     try {
-      await page.goto(`/dashboard?date=${date}&service=DINNER`);
-      const row = card(page, ref.id);
-      await expect(row.getByTestId("unassigned-badge")).toHaveText("DA ASSEGNARE");
-      await expect(row.getByTestId("assigned-table-names")).toHaveText("—");
-      const dialog = await open(page, ref.id);
-      await expect(dialog.getByText("Preferenza storica di sala", { exact: true })).toBeVisible();
-      await expect(dialog.getByText("Non specificata", { exact: true })).toBeVisible();
+      await page.goto(`/dashboard?date=${date}&service=DINNER`); const row = card(page, ref.id);
+      await expect(row.getByTestId("unassigned-badge")).toHaveText("DA ASSEGNARE"); await expect(row.getByTestId("assigned-table-names")).toHaveText("—");
+      const dialog = await open(page, ref.id); await expect(dialog.getByText("Non specificata", { exact: true })).toBeVisible();
+      await expect(dialog.getByRole("checkbox")).toHaveCount(0); await expect(dialog.locator("textarea")).toHaveCount(0);
       await dialog.getByTestId("assignment-room-select").selectOption(emptyRoomId);
-      await expect(dialog.getByText("Nessun tavolo configurato. Puoi salvare la sala senza tavoli.")).toBeVisible();
-      await expect(dialog.getByRole("group", { name: "Tavoli · opzionale (0/20)" })).toBeVisible();
       const db = await save(page, dialog, ref.id, { version: 1, roomId: emptyRoomId, tableIds: [], internalNotes: null });
-      expect(db.actions.filter((action: string) => action === "ASSIGNED")).toHaveLength(1);
-      await expect(row.getByTestId("final-room-name")).toHaveText("Sala sintetica T04 senza tavoli");
-      await expect(row.getByTestId("assigned-table-names")).toHaveText("DA ASSEGNARE");
-      await expect(row.getByTestId("unassigned-badge")).toHaveCount(0);
-      await expect(page.locator('[data-summary-label="Assegnate"] dd')).toHaveText("1");
-      await expect(page.locator('[data-summary-label="Da assegnare"] dd')).toHaveText("0");
-      await expect(page.getByTestId("final-room-covers")).toContainText("Sala sintetica T04 senza tavoli: 4");
-      await page.reload();
-      expect((await read(page.request, ref.id)).assignment?.tables).toEqual([]);
-      await expect(card(page, ref.id).getByTestId("assigned-table-names")).toHaveText("DA ASSEGNARE");
-      await page.getByTestId("final-room-filter").selectOption(`t04-empty-${e2eRunId}`);
-      await page.getByRole("button", { name: "Applica filtri" }).click();
-      await expect(card(page, ref.id)).toBeVisible();
-      await page.getByTestId("assignment-status-filter").selectOption("UNASSIGNED");
-      await page.getByRole("button", { name: "Applica filtri" }).click();
-      await expect(card(page, ref.id)).toHaveCount(0);
-      evidence("room-only-empty", { requestVersion: 1, responseVersion: db.version, junctionCount: db.tableIds.length, actions: db.actions });
+      expect(db.actions.filter((a: string) => a === "ASSIGNED")).toHaveLength(1);
+      await expect(row.getByTestId("final-room-name")).toHaveText("Sala sintetica T04 senza tavoli"); await expect(row.getByTestId("assigned-table-names")).toHaveText("DA ASSEGNARE"); await expect(row.getByTestId("unassigned-badge")).toHaveCount(0);
+      await expect(page.locator('[data-summary-label="Assegnate"] dd')).toHaveText("1"); await expect(page.locator('[data-summary-label="Da assegnare"] dd')).toHaveText("0"); await expect(page.getByTestId("final-room-covers")).toContainText("Sala sintetica T04 senza tavoli: 4");
+      await page.reload(); expect((await read(page.request, ref.id)).assignment?.tables).toEqual([]); await expect(card(page, ref.id).getByTestId("assigned-table-names")).toHaveText("DA ASSEGNARE");
+      await page.getByTestId("final-room-filter").selectOption(`t04-empty-${e2eRunId}`); await page.getByRole("button", { name: "Applica filtri" }).click(); await expect(card(page, ref.id)).toBeVisible();
+      await page.getByTestId("assignment-status-filter").selectOption("UNASSIGNED"); await page.getByRole("button", { name: "Applica filtri" }).click(); await expect(card(page, ref.id)).toHaveCount(0);
+      evidence("room-only-empty", { finalVersion: db.version, junctionCount: db.tableIds.length, actions: db.actions });
     } finally { await cancel(page.request, ref.id); }
   });
-
-  test("panel transitions preserve loaded tables/notes, explicit room reset, separate DELETE and same-entity reactivation", async ({ page }) => {
-    const date = "2099-11-05";
-    await login(page);
-    const ref = await create(page.request, payload(date, "Transitions"));
+  test("panel transitions preserve loaded tables/notes, explicit legacy replacement, DELETE and same-entity reactivation", async ({ page }) => {
+    const date = "2099-11-05"; await login(page); const ref = await create(page.request, payload(date, "Transitions"));
     try {
-      await page.goto(`/dashboard?date=${date}&service=DINNER`);
-      const context = await read(page.request, ref.id);
-      const room = context.rooms.find((candidate) => candidate.id !== longRoomId && candidate.isActive && candidate.isAvailableForService !== false && candidate.tables.some((table) => table.isActive))!;
-      expect(room).toBeTruthy();
-      const table = room.tables.find((candidate) => candidate.isActive)!;
-      const note = "Nota sintetica T04 da conservare";
-      let dialog = await open(page, ref.id);
-      await dialog.getByTestId("assignment-room-select").selectOption(room.id);
-      await dialog.getByTestId("assignment-internal-notes").fill(note);
-      const first = await save(page, dialog, ref.id, { version: 1, roomId: room.id, tableIds: [], internalNotes: note });
-      dialog = await open(page, ref.id);
-      await dialog.locator("label").filter({ hasText: table.name }).getByRole("checkbox").check();
-      await save(page, dialog, ref.id, { version: 2, roomId: room.id, tableIds: [table.id], internalNotes: note });
-      const beforeOpen = await stored(ref.id);
-      dialog = await open(page, ref.id);
-      await expect(dialog.locator("label").filter({ hasText: table.name }).getByRole("checkbox")).toBeChecked();
-      await expect(dialog.getByTestId("assignment-internal-notes")).toHaveValue(note);
-      expect(await stored(ref.id)).toEqual(beforeOpen);
-      await dialog.getByRole("button", { name: "Rimuovi tutti i tavoli", exact: true }).click();
-      expect((await stored(ref.id)).tableIds).toEqual([table.id]);
-      await save(page, dialog, ref.id, { version: 3, roomId: room.id, tableIds: [], internalNotes: note });
-      dialog = await open(page, ref.id);
-      await dialog.locator("label").filter({ hasText: table.name }).getByRole("checkbox").check();
-      await save(page, dialog, ref.id, { version: 4, roomId: room.id, tableIds: [table.id], internalNotes: note });
-      dialog = await open(page, ref.id);
-      await dialog.getByTestId("assignment-room-select").selectOption(emptyRoomId);
-      await expect(dialog.getByText(/Sala cambiata: la selezione tavoli è stata azzerata/u)).toBeVisible();
-      await expect(dialog.getByTestId("assignment-internal-notes")).toHaveValue(note);
-      await save(page, dialog, ref.id, { version: 5, roomId: emptyRoomId, tableIds: [], internalNotes: note });
-      dialog = await open(page, ref.id);
-      await dialog.getByRole("button", { name: "Rimuovi assegnazione", exact: true }).click();
-      const responsePromise = page.waitForResponse((response) => response.request().method() === "DELETE" && response.url().endsWith(`/reservations/${ref.id}/assignment`));
-      await dialog.getByTestId("assignment-clear-confirm").click();
-      const response = await responsePromise;
-      expect(response.request().postDataJSON()).toEqual({ version: 6 });
-      expect(await response.json()).toEqual({ changed: true, reservationVersion: 7, assignment: null });
-      await expect(dialog).toBeHidden();
-      const cleared = await stored(ref.id);
-      expect(cleared.cleared_at).not.toBeNull();
-      expect(cleared.assignment_id).toBe(first.assignment_id);
-      await expect(card(page, ref.id).getByTestId("unassigned-badge")).toBeVisible();
-      dialog = await open(page, ref.id);
-      await dialog.getByTestId("assignment-room-select").selectOption(emptyRoomId);
-      const reactivated = await save(page, dialog, ref.id, { version: 7, roomId: emptyRoomId, tableIds: [], internalNotes: null });
-      expect(reactivated.assignment_id).toBe(first.assignment_id);
-      expect(reactivated.actions.filter((action: string) => action === "ASSIGNED")).toHaveLength(2);
-      expect(reactivated.actions.filter((action: string) => action === "REASSIGNED")).toHaveLength(4);
-      expect(reactivated.actions.filter((action: string) => action === "UNASSIGNED")).toHaveLength(1);
-      evidence("transitions", { finalVersion: reactivated.version, sameEntity: reactivated.assignment_id === first.assignment_id, junctionCount: reactivated.tableIds.length, actions: reactivated.actions });
+      const context = await read(page.request, ref.id), room = context.rooms.find(r => r.id !== longRoomId && r.isActive && r.isAvailableForService !== false && r.tables.some(t => t.isActive))!;
+      expect(room).toBeTruthy(); const table = room.tables.find(t => t.isActive)!, note = "Nota sintetica T04 da conservare";
+      const first = await legacy(page.request, ref.id, 1, room.id, [], note);
+      await legacy(page.request, ref.id, 2, room.id, [table.id], note); const before = await stored(ref.id);
+      await page.goto(`/dashboard?date=${date}&service=DINNER`); let dialog = await open(page, ref.id);
+      await expect(dialog).toContainText(table.name); await expect(dialog).toContainText(note); await expect(dialog.getByRole("checkbox")).toHaveCount(0); await expect(dialog.locator("textarea")).toHaveCount(0); expect(await stored(ref.id)).toEqual(before);
+      await page.keyboard.press("Escape");
+      await legacy(page.request, ref.id, 3, room.id, [], note); await legacy(page.request, ref.id, 4, room.id, [table.id], note);
+      // Explicit legacy PUT retains its full-state contract; the ordinary UI never clears tables.
+      await legacy(page.request, ref.id, 5, emptyRoomId, [], note);
+      const removed = await page.request.delete(`/api/staff/reservations/${ref.id}/assignment`, { headers, data: { version: 6 } });
+      expect(removed.status()).toBe(200); expect(await removed.json()).toEqual({ changed: true, reservationVersion: 7, assignment: null });
+      const cleared = await stored(ref.id); expect(cleared.cleared_at).not.toBeNull(); expect(cleared.assignment_id).toBe(first.assignment_id); expect(cleared.internal_notes).toBe(note);
+      await page.reload(); await expect(card(page, ref.id).getByTestId("unassigned-badge")).toBeVisible(); dialog = await open(page, ref.id); await dialog.getByTestId("assignment-room-select").selectOption(emptyRoomId);
+      const again = await save(page, dialog, ref.id, { version: 7, roomId: emptyRoomId, tableIds: [], internalNotes: note });
+      expect(again.assignment_id).toBe(first.assignment_id); expect(again.actions.filter((a: string) => a === "ASSIGNED")).toHaveLength(2); expect(again.actions.filter((a: string) => a === "REASSIGNED")).toHaveLength(4); expect(again.actions.filter((a: string) => a === "UNASSIGNED")).toHaveLength(1);
+      // Legacy deliberate note clearing remains separately supported.
+      await legacy(page.request, ref.id, 8, emptyRoomId, [], null);
+      evidence("transitions", { finalVersion: 9, sameEntity: again.assignment_id === first.assignment_id, roomIntentPreservedNotes: true, actions: again.actions });
     } finally { await cancel(page.request, ref.id); }
   });
-
   test("Foundation composition/games and T03 arrival remain independent; Admin reads cancelled room-only history", async ({ page, browser }) => {
-    const date = "2099-11-06";
-    await login(page);
-    const ref = await create(page.request, payload(date, "Foundation", 2, true));
-    const unknown = await create(page.request, payload(date, "Unknown", null, null));
+    const date = "2099-11-06"; await login(page); const ref = await create(page.request, payload(date, "Foundation", 2, true)), unknown = await create(page.request, payload(date, "Unknown", null, null));
     try {
-      const arrival = await page.request.put(`/api/staff/reservations/${ref.id}/arrival`, { headers, data: { version: 1, arrived: true } });
-      expect(arrival.status()).toBe(200);
-      const before = await stored(ref.id);
-      await page.goto(`/dashboard?date=${date}&service=DINNER`);
-      const row = card(page, ref.id);
-      await expect(row).toContainText("4 coperti");
-      await expect(row).toContainText("Bimbi (2)");
-      await expect(row.getByText("SALA GIOCHI RICHIESTA", { exact: true })).toBeVisible();
-      await expect(row.getByTestId("arrival-state")).toHaveText("ARRIVATO");
-      await expect(card(page, unknown.id)).toContainText("4 coperti");
-      await expect(card(page, unknown.id)).toContainText("Composizione non specificata");
-      await expect(card(page, unknown.id).getByText("TA", { exact: true })).toHaveCount(0);
-      await expect(card(page, unknown.id).getByText(/^Bimbi \(\d+\)$/u)).toHaveCount(0);
-      const dialog = await open(page, ref.id);
-      await dialog.getByTestId("assignment-room-select").selectOption(emptyRoomId);
-      await dialog.getByTestId("assignment-internal-notes").fill("Storia T04 sintetica");
-      const after = await save(page, dialog, ref.id, { version: 2, roomId: emptyRoomId, tableIds: [], internalNotes: "Storia T04 sintetica" });
+      expect((await page.request.put(`/api/staff/reservations/${ref.id}/arrival`, { headers, data: { version: 1, arrived: true } })).status()).toBe(200); const before = await stored(ref.id);
+      await page.goto(`/dashboard?date=${date}&service=DINNER`); const row = card(page, ref.id);
+      await expect(row).toContainText("4 coperti"); await expect(row).toContainText("Bimbi (2)"); await expect(row.getByText("SALA GIOCHI RICHIESTA", { exact: true })).toBeVisible(); await expect(row.getByTestId("arrival-state")).toHaveText("ARRIVATO");
+      await expect(card(page, unknown.id)).toContainText("4 coperti"); await expect(card(page, unknown.id)).toContainText("Composizione non specificata"); await expect(card(page, unknown.id).getByText("TA", { exact: true })).toHaveCount(0); await expect(card(page, unknown.id).getByText(/^Bimbi \(\d+\)$/u)).toHaveCount(0);
+      const after = await legacy(page.request, ref.id, 2, emptyRoomId, [], "Storia T04 sintetica");
       expect(after).toMatchObject({ children_count: 2, game_room_preference: true, arrived_at: before.arrived_at, preferences: before.preferences, allergies: before.allergies });
-      await expect(row.getByText("SALA GIOCHI RICHIESTA", { exact: true })).toBeVisible();
-      await expect(row.getByTestId("arrival-state")).toHaveText("ARRIVATO");
-      await cancel(page.request, ref.id);
-      const adminContext = await browser.newContext({ baseURL: origin });
-      try {
-        const admin = await adminContext.newPage();
-        await login(admin, "ADMIN");
-        await admin.goto(`/dashboard?date=${date}&service=DINNER&status=ALL`);
-        const history = await open(admin, ref.id);
-        await expect(history.getByText("Cancellata · assegnazione solo storica")).toBeVisible();
-        await expect(history.getByText("Tavoli: DA ASSEGNARE", { exact: true })).toBeVisible();
-        await expect(history).toContainText("Storia T04 sintetica");
-        await expect(history.getByTestId("assignment-save")).toHaveCount(0);
-        await expect(history.getByRole("button", { name: "Rimuovi assegnazione", exact: true })).toHaveCount(0);
-        for (const method of ["put", "delete"] as const) {
-          const response = await admin.request[method](`/api/staff/reservations/${ref.id}/assignment`, { headers, data: method === "put" ? { version: 4, roomId: emptyRoomId, tableIds: [], internalNotes: "Storia T04 sintetica" } : { version: 4 } });
-          expect(response.status()).toBe(409);
-          expect(await response.json()).toMatchObject({ code: "RESERVATION_CANCELLED" });
-        }
-        expect((await stored(ref.id)).assignment_id).toBe(after.assignment_id);
-        evidence("foundation-arrival-cancelled", { composition: [after.children_count, after.game_room_preference], arrivalPreserved: String(after.arrived_at) === String(before.arrived_at), historyRetained: true, cancelledVersion: (await stored(ref.id)).version });
-      } finally { await adminContext.close(); }
+      await page.reload(); await expect(row.getByTestId("arrival-state")).toHaveText("ARRIVATO"); await expect(row.getByText("SALA GIOCHI RICHIESTA", { exact: true })).toBeVisible(); await cancel(page.request, ref.id);
+      const ctx = await browser.newContext({ baseURL: origin }); try {
+        const admin = await ctx.newPage(); await login(admin, "ADMIN"); await admin.goto(`/dashboard?date=${date}&service=DINNER&status=ALL`); const history = await open(admin, ref.id);
+        await expect(history.getByText("Cancellata · assegnazione solo storica")).toBeVisible(); await expect(history).toContainText("Nessun collegamento attivo"); await expect(history).toContainText("Storia T04 sintetica"); await expect(history.getByTestId("assignment-save")).toHaveCount(0); await expect(history.getByRole("button", { name: "Rimuovi assegnazione", exact: true })).toHaveCount(0);
+        for (const method of ["put", "delete"] as const) { const response = await admin.request[method](`/api/staff/reservations/${ref.id}/assignment`, { headers, data: method === "put" ? { version: 4, roomId: emptyRoomId, tableIds: [], internalNotes: "Storia T04 sintetica" } : { version: 4 } }); expect(response.status()).toBe(409); expect(await response.json()).toMatchObject({ code: "RESERVATION_CANCELLED" }); }
+        expect((await stored(ref.id)).assignment_id).toBe(after.assignment_id); evidence("foundation-arrival-cancelled", { historyRetained: true, arrivalPreserved: true, composition: [after.children_count, after.game_room_preference] });
+      } finally { await ctx.close(); }
     } finally { await cancel(page.request, ref.id); await cancel(page.request, unknown.id); }
   });
-
-  test("authentic Staff PATCH conflict requires explicit GET refresh and server version; double submit emits one PUT", async ({ page }) => {
-    const date = "2099-11-07";
-    await login(page);
-    const data = payload(date, "Conflict");
-    const ref = await create(page.request, data);
+  test("authentic Staff PATCH conflict requires explicit reread; double submit emits one room command", async ({ page }) => {
+    const date = "2099-11-07"; await login(page); const data = payload(date, "Conflict"), ref = await create(page.request, data);
     try {
-      await page.goto(`/dashboard?date=${date}&service=DINNER`);
-      const dialog = await open(page, ref.id);
-      await dialog.getByTestId("assignment-room-select").selectOption(emptyRoomId);
-      await dialog.getByTestId("assignment-internal-notes").fill("Scelta locale T04");
-      const { verbalConsentConfirmed: _consent, sendWhatsAppConfirmation: _notification, ...editable } = data;
-      void _consent; void _notification;
-      const concurrent = await page.request.patch(`/api/staff/reservations/${ref.id}`, { headers, data: { ...editable, version: 1, childrenCount: 2, gameRoomPreference: true, notes: "Aggiornamento concorrente reale" } });
-      expect(concurrent.status(), await concurrent.text()).toBe(200);
-      expect((await stored(ref.id)).version).toBe(2);
-      let puts = 0;
-      let gets = 0;
-      const bodies: unknown[] = [];
-      page.on("request", (request) => { if (request.url().endsWith(`/reservations/${ref.id}/assignment`)) { if (request.method() === "PUT") { puts++; bodies.push(request.postDataJSON()); } if (request.method() === "GET") gets++; } });
-      const conflictPromise = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith(`/reservations/${ref.id}/assignment`));
-      await dialog.getByTestId("assignment-save").click();
-      const conflict = await conflictPromise;
-      expect(conflict.status()).toBe(409);
-      expect(await conflict.json()).toMatchObject({ code: "VERSION_CONFLICT" });
-      const alert = dialog.getByRole("alert");
-      await expect(alert).toBeFocused();
-      await expect(dialog).toHaveAttribute("aria-describedby", await alert.getAttribute("id") ?? "");
-      await expect(dialog.getByTestId("assignment-save")).toBeDisabled();
-      await expect(dialog.getByTestId("assignment-internal-notes")).toHaveValue("Scelta locale T04");
-      expect((await stored(ref.id)).assignment_id).toBeNull();
-      expect(puts).toBe(1); expect(gets).toBe(0);
-      await page.keyboard.press("Tab");
-      expect(await dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true);
-      const reloadPromise = page.waitForResponse((response) => response.request().method() === "GET" && response.url().endsWith(`/reservations/${ref.id}/assignment`));
-      await dialog.getByTestId("assignment-reload-conflict").click();
-      expect((await (await reloadPromise).json()).reservation.version).toBe(2);
-      await expect(dialog.getByTestId("assignment-room-select")).toHaveValue("");
-      await dialog.getByTestId("assignment-room-select").selectOption(emptyRoomId);
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => { release = resolve; });
-      await page.route(`**/api/staff/reservations/${ref.id}/assignment`, async (route) => { if (route.request().method() === "PUT") { await gate; } await route.continue(); });
-      const successPromise = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith(`/reservations/${ref.id}/assignment`));
-      await dialog.getByTestId("assignment-save").evaluate((node) => { (node as HTMLButtonElement).click(); (node as HTMLButtonElement).click(); });
-      await expect(dialog).toHaveAttribute("aria-busy", "true");
-      await expect(dialog.getByTestId("assignment-save")).toBeDisabled();
-      await expect.poll(() => puts).toBe(2);
-      expect((await stored(ref.id)).version).toBe(2);
-      release();
-      const success = await successPromise;
-      expect(success.status()).toBe(200);
-      expect(success.request().postDataJSON()).toEqual({ version: 2, roomId: emptyRoomId, tableIds: [], internalNotes: null });
-      expect(await success.json()).toMatchObject({ reservationVersion: 3, changed: true });
-      await expect(dialog).toBeHidden();
-      expect(puts).toBe(2); expect(gets).toBe(1);
-      const db = await stored(ref.id);
-      expect(db).toMatchObject({ version: 3, children_count: 2, game_room_preference: true, tableIds: [] });
-      expect(db.actions.filter((action: string) => action === "ASSIGNED")).toHaveLength(1);
-      evidence("conflict-double-submit", { staleStatus: 409, requestBodies: bodies, putCount: puts, explicitGetCount: gets, finalVersion: db.version, assignmentAuditCount: db.actions.filter((action: string) => action === "ASSIGNED").length });
+      await page.goto(`/dashboard?date=${date}&service=DINNER`); const dialog = await open(page, ref.id); await dialog.getByTestId("assignment-room-select").selectOption(emptyRoomId);
+      const { verbalConsentConfirmed: _consent, sendWhatsAppConfirmation: _notification, ...editable } = data; void _consent; void _notification;
+      expect((await page.request.patch(`/api/staff/reservations/${ref.id}`, { headers, data: { ...editable, version: 1, childrenCount: 2, gameRoomPreference: true, notes: "Aggiornamento concorrente reale" } })).status()).toBe(200);
+      const stale = await page.request.put(`/api/staff/reservations/${ref.id}/assignment`, { headers, data: { version: 1, roomId: emptyRoomId, tableIds: [], internalNotes: null } }); expect(stale.status()).toBe(409); expect(await stale.json()).toMatchObject({ code: "VERSION_CONFLICT" });
+      let commands = 0; page.on("request", r => { if (r.method() === "POST" && r.url().endsWith(`/${ref.id}/room-assignment`)) commands++; });
+      await dialog.getByTestId("assignment-save").click(); const alert = dialog.getByRole("alert"); await expect(alert).toContainText("Versione modificata"); await expect(alert).toBeFocused(); await expect(dialog).toHaveAttribute("aria-describedby", await alert.getAttribute("id") ?? ""); await expect(dialog.getByTestId("assignment-save")).toBeDisabled(); await expect(dialog.getByTestId("assignment-room-select")).toHaveValue(emptyRoomId); expect(commands).toBe(0); expect((await stored(ref.id)).assignment_id).toBeNull();
+      await dialog.getByTestId("assignment-reload-conflict").click(); await dialog.getByRole("button", { name: "Riapplica scelta su versione riletta" }).click();
+      let release!: () => void; const pending = new Promise<void>(resolve => { release = resolve; });
+      await page.route(`**/api/staff/reservations/${ref.id}/room-assignment`, async route => { await pending; await route.continue(); });
+      const waiting = page.waitForResponse(r => r.request().method() === "POST" && r.url().endsWith(`/${ref.id}/room-assignment`));
+      await dialog.getByTestId("assignment-save").evaluate(node => { (node as HTMLButtonElement).click(); (node as HTMLButtonElement).click(); }); await expect(dialog).toHaveAttribute("aria-busy", "true"); await expect(dialog.getByTestId("assignment-save")).toBeDisabled(); await expect.poll(() => commands).toBe(1); expect((await stored(ref.id)).version).toBe(2);
+      release(); expect((await waiting).status()).toBe(200); await expect(dialog).toBeHidden(); const db = await stored(ref.id); expect(db).toMatchObject({ version: 3, children_count: 2, game_room_preference: true, tableIds: [] }); expect(db.actions.filter((a: string) => a === "ASSIGNED")).toHaveLength(1); evidence("conflict-double-submit", { legacy409: true, clientNoDispatchOnFreshConflict: true, commands, finalVersion: db.version });
     } finally { await page.unrouteAll({ behavior: "ignoreErrors" }); await cancel(page.request, ref.id); }
   });
-
   test("keyboard focus, long content, five viewports and declared 200% equivalent reflow survive network failure", async ({ page }) => {
-    const date = "2099-11-08";
-    await login(page);
-    const ref = await create(page.request, payload(date, "Responsive"));
-    const note = "Nota sintetica lunga T04 città\n".padEnd(1000, "N");
+    const date = "2099-11-08"; await login(page); const ref = await create(page.request, payload(date, "Responsive")), note = "Nota sintetica lunga T04 città\n".padEnd(1000, "N");
     try {
-      await page.goto(`/dashboard?date=${date}&service=DINNER`);
-      const trigger = card(page, ref.id).getByRole("button", { name: "Assegna sala", exact: true });
-      await trigger.focus(); await page.keyboard.press("Enter");
-      let dialog = page.getByTestId("assignment-dialog");
-      await expect(dialog.getByText("Caricamento dello stato corrente…")).toBeHidden();
-      await expect(dialog.getByRole("button", { name: "Chiudi gestione assegnazione" })).toBeFocused();
-      await dialog.getByTestId("assignment-room-select").selectOption(longRoomId);
-      const checkbox = dialog.getByRole("checkbox", { name: new RegExp(longTableName, "u") });
-      await checkbox.focus(); await page.keyboard.press("Space"); await expect(checkbox).toBeChecked();
-      await dialog.getByTestId("assignment-internal-notes").fill(note);
-      const metrics = [];
-      for (const viewport of [{ width: 320, height: 640 }, { width: 390, height: 844 }, { width: 820, height: 1180 }, { width: 1280, height: 720 }, { width: 1440, height: 900 }, { width: 640, height: 360 }]) {
-        await page.setViewportSize(viewport);
-        const saveButton = dialog.getByTestId("assignment-save");
-        await page.mouse.move(0, 0);
-        const normalContrast = await textContrast(saveButton);
-        await saveButton.hover();
-        const hoverContrast = await textContrast(saveButton);
-        await page.mouse.move(0, 0);
-        metrics.push({ viewport, ...(await noOverflow(page, dialog)), contrast: { normal: normalContrast, hover: hoverContrast }, reflow: viewport.width === 640 ? "200% equivalent: 1280x720 CSS viewport reduced to 640x360; not browser zoom" : null });
-        if (process.env.T04_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.T04_EVIDENCE_DIR, `t04-dialog-${viewport.width}x${viewport.height}.png`) });
-        await expect(dialog.getByTestId("assignment-internal-notes")).toHaveValue(note);
-        const targets = await dialog.locator("button:not(:disabled),select").evaluateAll((nodes) => nodes.map((node) => ({ tag: node.tagName, height: node.getBoundingClientRect().height, width: node.getBoundingClientRect().width })));
-        expect(targets.every((target) => target.height >= 44 && target.width >= 44)).toBe(true);
-      }
-      await dialog.getByTestId("assignment-save").focus(); await page.keyboard.press("Tab");
-      await expect(dialog.getByRole("button", { name: "Chiudi gestione assegnazione" })).toBeFocused();
-      await page.keyboard.press("Shift+Tab"); await expect(dialog.getByTestId("assignment-save")).toBeFocused();
-      await page.route(`**/api/staff/reservations/${ref.id}/assignment`, async (route) => { if (route.request().method() === "PUT") await route.abort("failed"); else await route.continue(); });
-      await dialog.getByTestId("assignment-save").click();
-      const error = dialog.getByRole("alert");
-      await expect(error).toContainText("Errore di rete. La scelta non è stata salvata.");
-      await expect(error).toBeFocused();
-      await expect(dialog).toHaveAttribute("aria-describedby", await error.getAttribute("id") ?? "");
-      await expect(dialog).toHaveAttribute("aria-busy", "false");
-      expect((await stored(ref.id)).version).toBe(1);
-      expect((await stored(ref.id)).assignment_id).toBeNull();
-      for (const viewport of [{ width: 320, height: 640 }, { width: 390, height: 844 }, { width: 820, height: 1180 }, { width: 1280, height: 720 }, { width: 1440, height: 900 }, { width: 640, height: 360 }]) { await page.setViewportSize(viewport); await noOverflow(page, dialog); }
-      await page.keyboard.press("Escape"); await expect(dialog).toBeHidden(); await expect(trigger).toBeFocused();
-      await page.unrouteAll({ behavior: "ignoreErrors" });
-      dialog = await open(page, ref.id);
-      await dialog.getByTestId("assignment-room-select").selectOption(longRoomId);
-      await dialog.getByRole("checkbox", { name: new RegExp(longTableName, "u") }).check();
-      await dialog.getByTestId("assignment-internal-notes").fill(note);
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => { release = resolve; });
-      await page.route(`**/api/staff/reservations/${ref.id}/assignment`, async (route) => { if (route.request().method() === "PUT") await gate; await route.continue(); });
-      const responsePromise = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith(`/reservations/${ref.id}/assignment`));
-      await dialog.getByTestId("assignment-save").click(); await expect(dialog).toHaveAttribute("aria-busy", "true");
-      for (const viewport of [{ width: 320, height: 640 }, { width: 390, height: 844 }, { width: 820, height: 1180 }, { width: 1280, height: 720 }, { width: 1440, height: 900 }, { width: 640, height: 360 }]) { await page.setViewportSize(viewport); await noOverflow(page, dialog); }
-      release();
-      const response = await responsePromise;
-      expect(response.status()).toBe(200);
-      expect(response.request().postDataJSON()).toEqual({ version: 1, roomId: longRoomId, tableIds: [longTableId], internalNotes: note });
-      await expect(dialog).toBeHidden();
-      await expect(card(page, ref.id).getByRole("status").filter({ hasText: "Assegnazione salvata." })).toBeVisible();
-      await expect(card(page, ref.id).getByTestId("final-room-name")).toHaveText(longRoomName);
-      const db = await stored(ref.id); expect(db).toMatchObject({ version: 2, tableIds: [longTableId], internal_notes: note });
-      await cancel(page.request, ref.id);
-      await page.goto(`/dashboard?date=${date}&service=DINNER&status=ALL`);
-      const history = await open(page, ref.id);
-      await expect(history).toContainText(longRoomName);
-      await expect(history).toContainText(longTableName);
-      expect(await history.locator("p").filter({ hasText: "Note interne:" }).innerText()).toContain(note);
-      await expect(history.getByTestId("assignment-save")).toHaveCount(0);
-      for (const viewport of [{ width: 320, height: 640 }, { width: 390, height: 844 }, { width: 820, height: 1180 }, { width: 1280, height: 720 }, { width: 1440, height: 900 }, { width: 640, height: 360 }]) { await page.setViewportSize(viewport); await noOverflow(page, history); }
-      if (process.env.T04_EVIDENCE_DIR) await page.screenshot({ path: join(process.env.T04_EVIDENCE_DIR, "t04-cancelled-long-history-reflow.png") });
-      evidence("responsive-keyboard", { metrics, longRoomCodePoints: [...longRoomName].length, longTableCodePoints: [...longTableName].length, notesCodePoints: [...note].length, failureFocus: "associated role=alert", cancelledLongHistoryUntruncated: true, target: "WCAG 2.2 AA engineering checks; no formal certification", finalVersion: db.version, cancelledVersion: (await stored(ref.id)).version });
+      await legacy(page.request, ref.id, 1, longRoomId, [longTableId], note); await page.goto(`/dashboard?date=${date}&service=DINNER`);
+      const trigger = card(page, ref.id).getByRole("button", { name: "Gestisci assegnazione", exact: true }); await trigger.focus(); await page.keyboard.press("Enter"); let dialog = page.getByTestId("assignment-dialog"); await expect(dialog).toContainText(note); await expect(dialog).toContainText(longTableName); await expect(dialog.getByRole("checkbox")).toHaveCount(0);
+      const metrics = []; const viewports = [{ width: 320, height: 640 }, { width: 390, height: 844 }, { width: 820, height: 1180 }, { width: 1280, height: 720 }, { width: 1440, height: 900 }, { width: 640, height: 360 }];
+      for (const viewport of viewports) { await page.setViewportSize(viewport); const save = dialog.getByTestId("assignment-save"); const normal = await textContrast(save); await save.hover(); const hover = await textContrast(save); await page.mouse.move(0, 0); metrics.push({ viewport, ...(await noOverflow(page, dialog)), contrast: { normal, hover }, reflow: viewport.width === 640 ? "200% equivalent CSS reflow, not browser zoom" : null }); await expect(dialog).toContainText(note); const targets = await dialog.locator("button:not(:disabled),select").evaluateAll(nodes => nodes.map(n => ({ width: n.getBoundingClientRect().width, height: n.getBoundingClientRect().height }))); expect(targets.every(n => n.width >= 44 && n.height >= 44)).toBe(true); }
+      await dialog.getByTestId("assignment-save").focus(); await page.keyboard.press("Tab"); await expect(dialog.getByRole("button", { name: "Chiudi gestione assegnazione" })).toBeFocused(); await page.keyboard.press("Shift+Tab"); await expect(dialog.getByTestId("assignment-save")).toBeFocused();
+      await page.route(`**/api/staff/reservations/${ref.id}/room-assignment`, route => route.abort("failed")); await dialog.getByTestId("assignment-save").click(); const error = dialog.getByRole("alert"); await expect(error).toContainText("Esito incerto"); await expect(error).toBeFocused(); await expect(dialog).toHaveAttribute("aria-describedby", await error.getAttribute("id") ?? ""); await expect(dialog).toHaveAttribute("aria-busy", "false"); expect((await stored(ref.id)).version).toBe(2);
+      await page.unrouteAll({ behavior: "ignoreErrors" }); await dialog.getByTestId("assignment-reload-conflict").click(); await dialog.getByRole("button", { name: "Riapplica scelta su versione riletta" }).click();
+      // Retry after explicit reread is a stale-identical no-op: notes/tables remain intact.
+      const before = await stored(ref.id); await dialog.getByTestId("assignment-save").click(); await expect(dialog).toBeHidden(); expect(await stored(ref.id)).toEqual(before); await expect(trigger).toBeFocused();
+      await cancel(page.request, ref.id); await page.goto(`/dashboard?date=${date}&service=DINNER&status=ALL`); dialog = await open(page, ref.id); await expect(dialog).toContainText(longRoomName); await expect(dialog).toContainText(longTableName); await expect(dialog).toContainText(note); await expect(dialog.getByTestId("assignment-save")).toHaveCount(0); for (const viewport of viewports) { await page.setViewportSize(viewport); await noOverflow(page, dialog); }
+      evidence("responsive-keyboard", { metrics, longHistoryPreserved: true, uncertainNetworkOutcomeNotClaimedFailed: true, noOpPreserved: true, noFormalWcagCertification: true });
     } finally { await page.unrouteAll({ behavior: "ignoreErrors" }); await cancel(page.request, ref.id); }
   });
 });
