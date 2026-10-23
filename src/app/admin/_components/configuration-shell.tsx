@@ -1,17 +1,5 @@
-import Link from "next/link";
+import { AdminSectionNavigation } from "@/app/_components/staff/staff-shell";
 import type { ReactNode } from "react";
-
-const links = [
-  { href: "/admin/users", label: "Utenti" },
-  { href: "/admin/configuration", label: "Impostazioni" },
-  { href: "/admin/public-settings", label: "Pubblico IT/EN" },
-  { href: "/admin/notification-settings", label: "Notifiche" },
-  { href: "/admin/rooms", label: "Sale e tavoli" },
-  { href: "/admin/schedules", label: "Orari settimanali" },
-  { href: "/admin/special-dates", label: "Date speciali" },
-  { href: "/admin/availability-preview", label: "Anteprima disponibilità" },
-  { href: "/admin/audit", label: "Audit" },
-] as const;
 
 export function ConfigurationShell({
   children,
@@ -27,7 +15,7 @@ export function ConfigurationShell({
       <div className="mx-auto max-w-6xl">
         <header className="rounded-3xl bg-zinc-950 px-6 py-7 text-white sm:px-9">
           <p className="text-xs font-bold tracking-[0.2em] text-orange-400 uppercase">
-            Piccadilly Booking · Configurazione tecnica
+            Piccadilly Booking · Area Admin
           </p>
           <h1 className="mt-3 text-3xl font-black tracking-tight sm:text-4xl">
             {title}
@@ -37,26 +25,7 @@ export function ConfigurationShell({
           </p>
         </header>
 
-        <nav
-          aria-label="Configurazione ristorante"
-          className="mt-5 flex flex-wrap gap-2"
-        >
-          {links.map((link) => (
-            <Link
-              className="rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-bold text-zinc-800 transition hover:border-orange-500 hover:text-orange-700"
-              href={link.href}
-              key={link.href}
-            >
-              {link.label}
-            </Link>
-          ))}
-          <Link
-            className="rounded-full px-4 py-2 text-sm font-bold text-zinc-600 hover:text-zinc-950"
-            href="/dashboard"
-          >
-            Dashboard tecnica
-          </Link>
-        </nav>
+        <AdminSectionNavigation />
 
         <div className="mt-6">{children}</div>
       </div>

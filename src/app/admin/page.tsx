@@ -1,37 +1,28 @@
+import { StaffNavigationLink } from "@/app/_components/staff/staff-shell";
+import { navigationGroupsForRole } from "@/app/_components/staff/staff-navigation";
 import { requireAdmin } from "@/server/auth/authorization";
-import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminTechnicalPage() {
-  const user = await requireAdmin();
-
-  return (
-    <main className="flex min-h-screen items-center justify-center px-5 py-12 sm:px-8">
-      <section className="w-full max-w-xl rounded-3xl border border-orange-200 bg-white p-8 shadow-[0_24px_80px_rgba(0,0,0,0.08)] sm:p-11">
-        <p className="text-sm font-bold tracking-[0.18em] text-orange-600 uppercase">
-          Verifica autorizzazione
-        </p>
-        <h1 className="mt-3 text-3xl font-black text-zinc-950">
-          Area tecnica ADMIN
-        </h1>
-        <p className="mt-5 leading-7 text-zinc-600">
-          Accesso autorizzato per {user.username}. La configurazione operativa è
-          disponibile nella sezione tecnica dedicata.
-        </p>
-        <Link
-          className="mt-7 inline-flex rounded-xl bg-orange-600 px-6 py-3 font-bold text-white"
-          href="/admin/configuration"
-        >
-          Apri configurazione
-        </Link>
-        <Link
-          className="mt-3 ml-3 inline-flex rounded-xl border border-orange-600 px-6 py-3 font-bold text-orange-700"
-          href="/admin/users"
-        >
-          Gestisci utenti
-        </Link>
-      </section>
-    </main>
-  );
+  await requireAdmin();
+  return <main className="min-h-screen px-4 py-8 sm:px-8">
+    <div className="mx-auto max-w-6xl">
+      <header className="rounded-3xl bg-shell px-6 py-7 text-shell-text sm:px-9">
+        <p className="text-xs font-semibold tracking-widest text-brand-copper uppercase">Piccadilly Booking</p>
+        <h1 className="mt-3 text-3xl font-bold sm:text-4xl">Hub Admin</h1>
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-shell-text-secondary sm:text-base">Accedi alle funzioni amministrative. Agenda, prenotazioni telefoniche e assegnazione sala restano nella sezione Operatività.</p>
+      </header>
+      <div className="mt-6 grid min-w-0 gap-5 xl:grid-cols-3">
+        {navigationGroupsForRole("ADMIN").filter(group => group.id !== "operations").map(group => <section key={group.id} aria-labelledby={"hub-" + group.id} className="min-w-0 rounded-2xl border border-border bg-surface p-5">
+          <h2 id={"hub-" + group.id} className="text-lg font-semibold text-text-primary">{group.label}</h2>
+          <ul className="mt-3 space-y-2">{group.items.map(item => <li key={item.href}>
+            <StaffNavigationLink href={item.href} className="flex min-h-11 items-center justify-between gap-3 rounded-control border border-border px-4 py-3 text-sm font-semibold text-text-primary hover:border-brand-copper focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-copper">
+              <span className="min-w-0">{item.label}</span><span aria-hidden="true">→</span>
+            </StaffNavigationLink>
+          </li>)}</ul>
+        </section>)}
+      </div>
+    </div>
+  </main>;
 }

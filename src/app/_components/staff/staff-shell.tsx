@@ -2,68 +2,52 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import type { ReactNode } from "react";
-import { useRef, useState } from "react";
-import { useStaffDraftHost, useStaffOverlay } from "@/app/_components/staff/staff-draft-host";
+import type { ComponentProps, ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useStaffDraftHost, useStaffHostView, useStaffOverlay } from "@/app/_components/staff/staff-draft-host";
 
 import { BrandLogo } from "@/app/_components/ui/brand-logo";
 
-type StaffRole = "ADMIN" | "STAFF";
-type NavigationIcon = "agenda" | "add" | "settings" | "admin";
+import {
+  adminHub, isStaffNavigationActive, navigationGroupForPath,
+  navigationGroupsForRole, staffBreadcrumbs,
+  type NavigationIcon, type StaffRole,
+} from "@/app/_components/staff/staff-navigation";
 
-export interface StaffNavigationItem {
-  href: string;
-  icon: NavigationIcon;
-  label: string;
+export function StaffNavigationLink({ href, onAccepted, ...props }: Omit<ComponentProps<typeof Link>, "href" | "onNavigate"> & { href: string; onAccepted?: () => void }) {
+  const controller = useStaffDraftHost(), router = useRouter();
+  return <Link {...props} prefetch={false} href={href} onNavigate={event => {
+    event.preventDefault();
+    controller.requestExit(() => {
+      onAccepted?.();
+      controller.prepareNavigation();
+      router.push(href);
+    });
+  }} />;
 }
 
-const baseNavigation: StaffNavigationItem[] = [
-  { href: "/dashboard", icon: "agenda", label: "Agenda" },
-  { href: "/dashboard/assign-room", icon: "add", label: "ASSEGNA SALA" },
-  {
-    href: "/dashboard/reservations/new",
-    icon: "add",
-    label: "Nuova prenotazione",
-  },
-];
-
-const adminNavigation: StaffNavigationItem[] = [
-  {
-    href: "/admin/configuration",
-    icon: "settings",
-    label: "Configurazioni",
-  },
-  { href: "/admin", icon: "admin", label: "Admin" },
-];
-
-export function buildStaffNavigation(role: StaffRole): StaffNavigationItem[] {
-  return role === "ADMIN"
-    ? [...baseNavigation, ...adminNavigation]
-    : [...baseNavigation];
+export function AdminSectionNavigation() {
+  const pathname = usePathname(), group = navigationGroupForPath(pathname);
+  if (!group || group.id === "operations") return null;
+  return <nav aria-label={"Navigazione " + group.label} className="mt-5 flex flex-wrap gap-2">
+    {group.items.map(item => <StaffNavigationLink key={item.href} href={item.href}
+      aria-current={isStaffNavigationActive(pathname, item.href) ? "page" : undefined}
+      className={"inline-flex min-h-11 items-center rounded-control border px-4 py-2 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-copper " + (isStaffNavigationActive(pathname, item.href) ? "border-brand-copper bg-surface text-text-primary underline underline-offset-4" : "border-border bg-white text-text-secondary hover:border-brand-copper")}>
+      {item.label}
+    </StaffNavigationLink>)}
+  </nav>;
 }
 
-export function isStaffNavigationActive(
-  pathname: string,
-  href: string,
-): boolean {
-  if (href === "/dashboard/reservations/new") {
-    return pathname.startsWith(href);
-  }
-  if (href === "/dashboard") {
-    return (
-      pathname === href ||
-      (pathname.startsWith("/dashboard/") &&
-        !pathname.startsWith("/dashboard/assign-room") &&
-        !pathname.startsWith("/dashboard/reservations/new"))
-    );
-  }
-  if (href === "/admin/configuration") {
-    return pathname.startsWith(href);
-  }
-  if (href === "/admin") {
-    return pathname.startsWith("/admin") && !pathname.startsWith("/admin/configuration");
-  }
-  return pathname === href;
+function StaffBreadcrumb({ role }: { role: StaffRole }) {
+  const items = staffBreadcrumbs(usePathname(), role);
+  if (!items.length) return null;
+  return <nav aria-label="Fil d’Arianna" className="border-b border-border px-4 py-2 text-sm text-text-secondary sm:px-8">
+    <ol className="flex flex-wrap items-center gap-x-2 gap-y-1">{items.map((item, index) => <li key={item.label} className="flex min-w-0 items-center gap-2">
+      {index > 0 ? <span aria-hidden="true">›</span> : null}
+      {item.href ? <StaffNavigationLink href={item.href} aria-label={"Vai a " + item.label} className="inline-flex min-h-11 items-center rounded-control underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-brand-copper">{item.label}</StaffNavigationLink>
+        : <span aria-current={index === items.length - 1 ? "page" : undefined}>{item.label}</span>}
+    </li>)}</ol>
+  </nav>;
 }
 
 function Icon({ name }: { name: NavigationIcon | "close" | "menu" | "key" | "logout" }) {
@@ -124,46 +108,24 @@ function Icon({ name }: { name: NavigationIcon | "close" | "menu" | "key" | "log
   );
 }
 
-function Navigation({
-  mobile = false,
-  onNavigate,
-  pathname,
-  role,
-}: {
-  mobile?: boolean;
-  onNavigate?: () => void;
-  pathname: string;
-  role: StaffRole;
+function Navigation({ mobile = false, onNavigate, pathname, role }: {
+  mobile?: boolean; onNavigate?: () => void; pathname: string; role: StaffRole;
 }) {
-  const controller = useStaffDraftHost(), router = useRouter();
-  return (
-    <nav aria-label="Navigazione area Staff" className="space-y-1">
-      {buildStaffNavigation(role).map((item) => {
-        const active = isStaffNavigationActive(pathname, item.href);
-        return (
-          <Link
-            aria-current={active ? "page" : undefined}
-            aria-label={item.label}
-            className={`relative flex min-h-11 items-center gap-3 rounded-r-control px-4 text-sm font-medium text-shell-text transition-colors before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:bg-transparent ${
-              active
-                ? "bg-shell-selected font-semibold before:bg-brand-copper"
-                : "hover:bg-shell-hover"
-            } ${mobile ? "" : "md:justify-center md:px-0 lg:justify-start lg:px-4"}`}
-            data-nav-label={item.label}
-            href={item.href}
-            key={item.href}
-            onNavigate={(event) => { event.preventDefault(); onNavigate?.(); controller.requestExit(() => { controller.prepareNavigation(); router.push(item.href); }); }}
-            title={item.label}
-          >
-            <Icon name={item.icon} />
-            <span className={mobile ? "" : "md:sr-only lg:not-sr-only"}>
-              {item.label}
-            </span>
-          </Link>
-        );
-      })}
-    </nav>
-  );
+  function itemLink(item: { href: string; label: string; icon: NavigationIcon }) {
+    const active = isStaffNavigationActive(pathname, item.href);
+    return <StaffNavigationLink key={item.href} href={item.href} onAccepted={onNavigate}
+      aria-current={active ? "page" : undefined} aria-label={item.label} title={item.label} data-nav-label={item.label}
+      className={`relative flex min-h-11 items-center gap-3 rounded-r-control px-4 py-2 text-sm text-shell-text before:absolute before:inset-y-0 before:left-0 before:w-[3px] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-copper ${active ? "bg-shell-selected font-semibold before:bg-brand-copper" : "font-medium before:bg-transparent hover:bg-shell-hover"} ${mobile ? "" : "md:justify-center md:px-0 lg:justify-start lg:px-4"}`}>
+      <Icon name={item.icon} /><span className={mobile ? "min-w-0" : "min-w-0 md:sr-only lg:not-sr-only"}>{item.label}</span>
+    </StaffNavigationLink>;
+  }
+  return <nav aria-label="Navigazione area Staff" className="space-y-4 pb-2">
+    {navigationGroupsForRole(role).map(group => <section key={group.id} aria-label={group.label}>
+      <h2 className={"mb-1 px-4 text-[11px] font-semibold tracking-wide text-shell-text-secondary uppercase " + (mobile ? "" : "md:sr-only lg:not-sr-only")}>{group.label}</h2>
+      <div className="space-y-1">{group.items.map(itemLink)}</div>
+    </section>)}
+    {role === "ADMIN" ? <div className="border-t border-white/15 pt-2">{itemLink(adminHub)}</div> : null}
+  </nav>;
 }
 
 function AccountActions({
@@ -177,7 +139,7 @@ function AccountActions({
   role: StaffRole;
   username: string;
 }) {
-  const controller = useStaffDraftHost(), router = useRouter();
+  const controller = useStaffDraftHost();
   return (
     <div className="border-t border-white/15 pt-3">
       <div className={mobile ? "mb-3 px-4" : "mb-3 hidden px-4 lg:block"}>
@@ -186,19 +148,19 @@ function AccountActions({
           {role === "ADMIN" ? "Amministratore" : "Staff"}
         </p>
       </div>
-      <Link
+      <StaffNavigationLink
         aria-label="Cambia password"
         className={`flex min-h-11 items-center gap-3 rounded-control px-4 text-sm font-medium text-shell-text-secondary hover:bg-shell-hover hover:text-shell-text ${
           mobile ? "" : "md:justify-center md:px-0 lg:justify-start lg:px-4"
         }`}
         href="/cambia-password"
-        onNavigate={(event) => { event.preventDefault(); onNavigate?.(); controller.requestExit(() => { controller.prepareNavigation(); router.push("/cambia-password"); }); }}
+        onAccepted={onNavigate}
         title="Cambia password"
       >
         <Icon name="key" />
         <span className={mobile ? "" : "md:sr-only lg:not-sr-only"}>Password</span>
-      </Link>
-      <form action="/api/auth/logout" method="post" onSubmit={(event) => { event.preventDefault(); const form = event.currentTarget; onNavigate?.(); controller.requestLogout(form); }}>
+      </StaffNavigationLink>
+      <form action="/api/auth/logout" method="post" onSubmit={(event) => { event.preventDefault(); controller.requestLogout(event.currentTarget); }}>
         <button
           aria-label="Logout"
           className={`flex min-h-11 w-full items-center gap-3 rounded-control px-4 text-sm font-medium text-shell-text-secondary hover:bg-shell-hover hover:text-shell-text ${
@@ -225,12 +187,65 @@ export function StaffShell({
 }) {
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const drawerRef = useRef<HTMLElement>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const controller = useStaffDraftHost();
-  function closeMenu() { setDrawerOpen(false); requestAnimationFrame(() => menuButtonRef.current?.focus()); }
+  const menuReturnFocusRef = useRef<HTMLElement | null>(null);
+  const controller = useStaffDraftHost(), hostView = useStaffHostView();
+  const deferredMenuFocus = useRef<{ guardId: string; pathname: string } | null>(null);
+  function acceptMenuNavigation() {
+    deferredMenuFocus.current = null;
+    setDrawerOpen(false);
+  }
+  const closeMenu = useCallback(() => {
+    menuReturnFocusRef.current = null;
+    setDrawerOpen(false);
+    const guard = controller.getSnapshot().guard;
+    if (guard) {
+      // The mobile trigger may disappear at the breakpoint. Keep focus owned
+      // by the guard until Stay; accepted navigation cancels this fallback.
+      deferredMenuFocus.current = { guardId: guard.id, pathname };
+      return;
+    }
+    requestAnimationFrame(() => {
+      const current = controller.getSnapshot();
+      if (current.guard || current.overlay) return;
+      const button = menuButtonRef.current;
+      if (button?.getClientRects().length) button.focus();
+      else document.getElementById("staff-main-content")?.focus();
+    });
+  }, [controller, pathname]);
+  useEffect(() => {
+    const pending = deferredMenuFocus.current;
+    if (!pending) return;
+    if (pathname !== pending.pathname || (hostView.guard && hostView.guard.id !== pending.guardId)) { deferredMenuFocus.current = null; return; }
+    if (hostView.guard || hostView.overlay) return;
+    deferredMenuFocus.current = null;
+    const frame = requestAnimationFrame(() => {
+      const current = controller.getSnapshot(), target = document.getElementById("staff-main-content");
+      if (!current.guard && !current.overlay && controller.sessionVisible() && window.location.pathname === pending.pathname && target?.getClientRects().length && !target.closest("[inert],[hidden]")) target.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [controller, hostView.guard, hostView.overlay, pathname]);
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 768px)");
+    function resize() { if (desktop.matches && drawerOpen) closeMenu(); }
+    desktop.addEventListener("change", resize);
+    return () => desktop.removeEventListener("change", resize);
+  }, [closeMenu, drawerOpen]);
   const menuActive = useStaffOverlay(drawerOpen, "staff-mobile-menu", drawerRef, closeMenu);
+  useEffect(() => {
+    if (!menuActive) return;
+    const target = menuReturnFocusRef.current;
+    menuReturnFocusRef.current = null;
+    if (!target) return;
+    // Restore the menu trigger after the host releases the exit dialog's inert
+    // state. The host remains the sole focus-trap and scroll-lock owner.
+    const frame = requestAnimationFrame(() => {
+      if (target.isConnected && drawerRef.current?.contains(target) && !target.closest("[inert]")) target.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [menuActive]);
 
   return (
     <div className="min-h-screen bg-page-background" data-staff-shell>
@@ -247,10 +262,10 @@ export function StaffShell({
           <BrandLogo className="w-[150px]" priority />
         </div>
         <div aria-hidden="true" className="mx-auto my-6 h-1 w-7 bg-brand-copper lg:hidden" />
-        <div className="min-h-0 flex-1 px-2 lg:px-3">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 lg:px-3">
           <Navigation pathname={pathname} role={role} />
         </div>
-        <div className="p-2 pb-4 lg:p-3 lg:pb-5">
+        <div className="shrink-0 p-2 pb-4 lg:p-3 lg:pb-5">
           <AccountActions role={role} username={username} />
         </div>
       </aside>
@@ -262,7 +277,7 @@ export function StaffShell({
           aria-expanded={drawerOpen}
           aria-label="Apri navigazione"
           className="inline-flex size-11 items-center justify-center rounded-control text-shell-text hover:bg-shell-hover"
-          onClick={() => controller.requestExit(() => setDrawerOpen(true))}
+          onClick={() => setDrawerOpen(true)}
           ref={menuButtonRef}
           type="button"
         >
@@ -271,23 +286,19 @@ export function StaffShell({
       </header>
 
       {drawerOpen ? (
-        <div className="fixed inset-0 z-[1100] md:hidden">
-          <button
-            aria-label="Chiudi navigazione"
-            className="absolute inset-0 h-full w-full bg-black/55"
-            onClick={closeMenu}
-            tabIndex={-1}
-            type="button"
-          />
-          <aside
+        <div className="fixed inset-0 z-[1100] md:hidden"
             aria-label="Menu area Staff"
             aria-modal={menuActive || undefined}
-            className="absolute inset-y-0 left-0 flex w-[min(86vw,320px)] flex-col bg-shell p-4 shadow-2xl"
             id="staff-mobile-navigation"
             ref={drawerRef}
             role={menuActive ? "dialog" : undefined}
             inert={!menuActive}
+            tabIndex={-1}
+            onClickCapture={event => {
+              if (event.target instanceof Element) menuReturnFocusRef.current = event.target.closest<HTMLElement>("a,button");
+            }}
           >
+          <aside className="absolute inset-y-0 left-0 z-10 flex w-[min(86vw,320px)] flex-col bg-shell p-4 shadow-2xl">
             <div className="flex min-h-14 items-center justify-between">
               <BrandLogo className="w-[124px]" />
               <button
@@ -300,21 +311,22 @@ export function StaffShell({
                 <Icon name="close" />
               </button>
             </div>
-            <div className="mt-6 flex-1">
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain">
               <Navigation
                 mobile
-                onNavigate={() => setDrawerOpen(false)}
+                onNavigate={acceptMenuNavigation}
                 pathname={pathname}
                 role={role}
               />
             </div>
             <AccountActions
               mobile
-              onNavigate={() => setDrawerOpen(false)}
+              onNavigate={acceptMenuNavigation}
               role={role}
               username={username}
             />
           </aside>
+          <div aria-hidden="true" data-staff-menu-backdrop className="absolute inset-0 bg-black/55" onPointerDown={closeMenu} />
         </div>
       ) : null}
 
@@ -323,6 +335,7 @@ export function StaffShell({
         id="staff-main-content"
         tabIndex={-1}
       >
+        <StaffBreadcrumb role={role} />
         {children}
       </div>
     </div>

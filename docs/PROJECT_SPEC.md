@@ -969,3 +969,13 @@ Tre ordini crescenti: ora di arrivo (arrivalTime), creazione prenotazione, ingre
 Il nuovo POST room-assignment modifica soltanto la sala: stessa sala attiva no-op anche stale; cambio senza link consentito; active/cleared con link incompatibili bloccati; cleared senza link riattivabile preservando note e autore iniziale. Guard status e data/servizio attesi precedono il no-op. PUT/DELETE legacy restano canonici per operazioni deliberate; il pannello ordinario non consente tavoli/note legacy/cleanup.
 
 Conflitti richiedono rilettura e scelta esplicita. Errori di rete dopo invio hanno esito incerto. Nessun Undo, auto-assignment, collision detection, capacità sala o navigazione automatica alla destinazione.
+
+## T06-D — Navigazione operativa e hub Admin
+
+La navigazione organizza soltanto funzioni esistenti. Operatività (STAFF/ADMIN): Agenda, Nuova prenotazione telefonica con etichetta breve «Nuova prenotazione», ASSEGNA SALA. Configurazione (ADMIN): Impostazioni operative, Orari settimanali, Date speciali, Sale, Anteprima disponibilità. Comunicazione (ADMIN): Contenuti pubblici IT/EN, Notifiche. Amministrazione (ADMIN): Gestione utenti, Registro audit. Tutte le route canoniche sono conservate; il collegamento Admin apre /admin.
+
+L'hub /admin contiene nove collegamenti nelle tre sezioni Admin, senza nuovi dati business, contatori o form. I form esistenti e le conferme impatto M9 restano invariati. STAFF non vede destinazioni Admin; i guard server di pagina e API rimangono l'autorità sull'accesso.
+
+La shell conserva brand, rail72px, sidebar216px e menu mobile accessibile. La navigazione scorre verticalmente separatamente dalle azioni account. Il breadcrumb è unico, con label statiche senza nomi cliente, NC, NI o UUID visualizzati. Il menu aperto si chiude al passaggio desktop senza navigare o rimontare editor.
+
+Sidebar, menu, hub, breadcrumb e navigazione secondaria usano il guard canonico del root draft host. Aprire il menu non abbandona l'editor; scegliere una destinazione richiede la decisione prevista per bozze attive. Resta conserva il menu e il trigger; navigazione e chiusura avvengono soltanto dopo consenso. PHONE/Edit/NI/ROOM, retained, pending, logout, recovery e Back/Forward mantengono il contratto T06-B/C. Nessun nuovo autosave o storage.

@@ -507,3 +507,13 @@ Nuovo endpoint mirato, dati legacy preservati e blocco conservativo anche su cle
 Cinque estensioni rispetto al candidato27: host/type/test per kind ROOM, request-security e relativo test soltanto per il callback esatto /dashboard/assign-room. Nessun nuovo secret o dipendenza; T06-B non viene riprogettata. Il nuovo endpoint richiede binding obbligatorio e non adotta D01 headerless. Le API legacy preservano i contratti esistenti.
 
 Il ritiro dei controlli tavoli/note/clear dalla UI ordinaria richiede mapping OLD→NEW nei test: scritture deliberate sulle API legacy e prove DB conservate; UI room-only verifica readonly, blocchi, conferme e focus. Nessuna copertura di dominio eliminata.
+
+## 2026-10-20 — T06-D navigazione e hub Admin
+
+Controller: design approvato e implementazione locale autorizzata su13 path (11M/2A/0D),437 file finali attesi,424 file baseline protetti. Baseline main4b1576cc3f93d57dc603cf0c38a911f7c8226ca8, tree e0525944f8da8d59d8f2e7a3ea7af15096dee210, schema16. Nessuna pubblicazione, merge, deploy, operazione persistente o T07.
+
+Un'unica sorgente di metadata alimenta quattro gruppi; Admin rimane accesso all'hub. Gruppi sempre aperti, nessuna nuova preferenza persistita. L'etichetta breve PHONE resta «Nuova prenotazione». ConfigurationShell elimina la duplicazione della navigazione e passa attraverso il guard esistente. Nessun nuovo controller o backend.
+
+Due estensioni del candidato11 riguardano esclusivamente locator/assertion di presentazione in t01-auth-return-to.spec.ts e t06-draft-lifecycle.spec.ts: «Configurazioni» diventa «Impostazioni operative» sulla stessa route e il locator viene circoscritto alla navigazione principale. ReturnTo, dinieghi, campi, history e sicurezza restano invariati. Il cambio di active state da Admin generico alla foglia specifica conserva e rende più precisa la verifica. Il vecchio heading «Area tecnica ADMIN» è sostituito dall'hub con nove destinazioni.
+
+Le riserve D01 headerless storico, BFCache senza attivazione reale certificata, T06-SEC R1–R4, WASM, Linux ed ESLint restano documentate. Nessuna nuova accettazione del rischio o approvazione deployment deriva da T06-D.
