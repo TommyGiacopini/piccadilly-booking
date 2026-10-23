@@ -131,6 +131,76 @@ test("D04 resizing an open mobile menu releases its trap without navigation", as
   await expect(page.locator("body")).not.toHaveCSS("overflow", "hidden");
 });
 
+for (const choice of ["STAY", "KEEP"] as const) test(`D-COV01 active dirty exit guard survives mobile to desktop resize: ${choice}`, async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await login(page); await phone(page);
+  const field = page.getByLabel("Note", { exact: true }), marker = "T06D_COV01_" + choice;
+  await field.fill(marker); const start = page.url();
+  const businessRequests: string[] = [];
+  page.on("request", request => {
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) && new URL(request.url()).pathname.startsWith("/api/staff/")) businessRequests.push(request.method() + " " + new URL(request.url()).pathname);
+  });
+  const reservationCount = async () => Number((await db.query("SELECT count(*)::int AS n FROM reservations WHERE restaurant_id=$1", [e2eRestaurantId])).rows[0].n);
+  const countBefore = await reservationCount();
+  await page.getByRole("button", { name: "Apri navigazione", exact: true }).click();
+  await page.getByRole("dialog", { name: "Menu area Staff", exact: true }).getByRole("link", { name: "Admin", exact: true }).click();
+  const dialog = guard(page); await expect(dialog).toBeVisible(); await expect(dialog).toHaveAttribute("aria-modal", "true");
+  await expect.poll(() => dialog.evaluate(node => node.contains(document.activeElement))).toBe(true);
+  await dialog.evaluate(node => {
+    const audit = { outsideFocus: [] as string[], stop: () => undefined as void };
+    const listener = (event: FocusEvent) => {
+      if (node.isConnected && !node.contains(event.target as Node)) audit.outsideFocus.push((event.target as Element).tagName);
+    };
+    document.addEventListener("focusin", listener);
+    audit.stop = () => document.removeEventListener("focusin", listener);
+    (window as typeof window & { cov01Focus: typeof audit }).cov01Focus = audit;
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(dialog).toBeVisible(); await expect(dialog).toHaveAttribute("aria-modal", "true");
+  await expect(page.locator("#staff-mobile-navigation")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Apri navigazione", exact: true })).toBeHidden();
+  await expect.poll(() => dialog.evaluate(node => node.contains(document.activeElement))).toBe(true);
+  await expect(page.locator("body")).toHaveCSS("overflow", "hidden");
+  await page.keyboard.press("Tab"); await expect.poll(() => dialog.evaluate(node => node.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press("Shift+Tab"); await expect.poll(() => dialog.evaluate(node => node.contains(document.activeElement))).toBe(true);
+  await expect(page).toHaveURL(start); expect(businessRequests).toEqual([]);
+  await page.screenshot({ path: info.outputPath(`cov01-${choice}-guard-desktop.png`) });
+  const outsideFocus = await page.evaluate(() => {
+    const audit = (window as typeof window & { cov01Focus: { outsideFocus: string[]; stop: () => void } }).cov01Focus;
+    audit.stop(); return audit.outsideFocus;
+  });
+  expect(outsideFocus).toEqual([]);
+  if (choice === "STAY") {
+    await dialog.getByRole("button", { name: "Resta", exact: true }).click();
+    await expect(dialog).toHaveCount(0); await expect(page).toHaveURL(start); await expect(field).toHaveValue(marker); await expect(field).toBeEnabled();
+    await expect.poll(() => page.evaluate(() => {
+      const active = document.activeElement;
+      return active instanceof HTMLElement && active !== document.body && active !== document.documentElement && active.isConnected && active.getClientRects().length > 0 && !active.closest("[inert],[hidden]");
+    })).toBe(true);
+    // The retained marker alone is insufficient: a second exit must still see DIRTY.
+    await nav(page).getByRole("link", { name: "Admin", exact: true }).click(); await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Resta", exact: true }).click(); await expect(page).toHaveURL(start); await expect(field).toHaveValue(marker);
+  } else {
+    await keep(page); await expect(page).toHaveURL(origin + "/admin");
+    await expect(page.getByRole("heading", { name: "Hub Admin", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Note", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Torna al draft PHONE", exact: true }).click(); await expect(page).toHaveURL(origin + "/dashboard/reservations/new");
+    await expect(page.getByRole("button", { name: "Continua modifica", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Note", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Continua modifica", exact: true }).click(); await expect(field).toHaveValue(marker); await expect(field).toBeEnabled();
+    await field.focus(); await expect(field).toBeFocused();
+  }
+  await expect(page.locator('[role="dialog"][aria-modal="true"]')).toHaveCount(0);
+  await expect(page.locator("[inert]")).toHaveCount(0); await expect(page.locator("body")).not.toHaveCSS("overflow", "hidden");
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page).toHaveURL(choice === "STAY" ? start : origin + "/dashboard/reservations/new"); await expect(field).toHaveValue(marker);
+  await expect(page.getByLabel("Data", { exact: true })).toHaveValue(date);
+  if (choice === "KEEP") await expect(field).toBeFocused();
+  expect(businessRequests).toEqual([]); expect(await reservationCount()).toBe(countBefore);
+  const storage = await page.evaluate(() => JSON.stringify([location.href, history.state, Object.values(localStorage), Object.values(sessionStorage)])); expect(storage).not.toContain(marker);
+  await info.attach("cov01-result", { contentType: "application/json", body: JSON.stringify({ choice, outsideFocus, businessRequests, reservationCountUnchanged: true, markerRetained: true, noResidualOverlay: true }) });
+  await page.screenshot({ path: info.outputPath(`cov01-${choice}-restored.png`) });
+});
+
 for (const kind of ["PHONE", "EDIT", "NI"] as const) test(`D03 ${kind} guarded Staff/Admin, secondary navigation and native history preserve the draft`, async ({ page }) => {
   await login(page); const row = kind === "PHONE" ? null : await create(page);
   if (kind === "PHONE") await phone(page); else await page.goto(`/dashboard/reservations/${row!.id}${kind === "EDIT" ? "/edit" : ""}`);

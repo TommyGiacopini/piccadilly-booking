@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ComponentProps, ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
-import { useStaffDraftHost, useStaffOverlay } from "@/app/_components/staff/staff-draft-host";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useStaffDraftHost, useStaffHostView, useStaffOverlay } from "@/app/_components/staff/staff-draft-host";
 
 import { BrandLogo } from "@/app/_components/ui/brand-logo";
 
@@ -191,21 +191,48 @@ export function StaffShell({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const menuReturnFocusRef = useRef<HTMLElement | null>(null);
-  function closeMenu() {
+  const controller = useStaffDraftHost(), hostView = useStaffHostView();
+  const deferredMenuFocus = useRef<{ guardId: string; pathname: string } | null>(null);
+  function acceptMenuNavigation() {
+    deferredMenuFocus.current = null;
+    setDrawerOpen(false);
+  }
+  const closeMenu = useCallback(() => {
     menuReturnFocusRef.current = null;
     setDrawerOpen(false);
+    const guard = controller.getSnapshot().guard;
+    if (guard) {
+      // The mobile trigger may disappear at the breakpoint. Keep focus owned
+      // by the guard until Stay; accepted navigation cancels this fallback.
+      deferredMenuFocus.current = { guardId: guard.id, pathname };
+      return;
+    }
     requestAnimationFrame(() => {
+      const current = controller.getSnapshot();
+      if (current.guard || current.overlay) return;
       const button = menuButtonRef.current;
       if (button?.getClientRects().length) button.focus();
       else document.getElementById("staff-main-content")?.focus();
     });
-  }
+  }, [controller, pathname]);
+  useEffect(() => {
+    const pending = deferredMenuFocus.current;
+    if (!pending) return;
+    if (pathname !== pending.pathname || (hostView.guard && hostView.guard.id !== pending.guardId)) { deferredMenuFocus.current = null; return; }
+    if (hostView.guard || hostView.overlay) return;
+    deferredMenuFocus.current = null;
+    const frame = requestAnimationFrame(() => {
+      const current = controller.getSnapshot(), target = document.getElementById("staff-main-content");
+      if (!current.guard && !current.overlay && controller.sessionVisible() && window.location.pathname === pending.pathname && target?.getClientRects().length && !target.closest("[inert],[hidden]")) target.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [controller, hostView.guard, hostView.overlay, pathname]);
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 768px)");
     function resize() { if (desktop.matches && drawerOpen) closeMenu(); }
     desktop.addEventListener("change", resize);
     return () => desktop.removeEventListener("change", resize);
-  }, [drawerOpen]);
+  }, [closeMenu, drawerOpen]);
   const menuActive = useStaffOverlay(drawerOpen, "staff-mobile-menu", drawerRef, closeMenu);
   useEffect(() => {
     if (!menuActive) return;
@@ -287,14 +314,14 @@ export function StaffShell({
             <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain">
               <Navigation
                 mobile
-                onNavigate={() => setDrawerOpen(false)}
+                onNavigate={acceptMenuNavigation}
                 pathname={pathname}
                 role={role}
               />
             </div>
             <AccountActions
               mobile
-              onNavigate={() => setDrawerOpen(false)}
+              onNavigate={acceptMenuNavigation}
               role={role}
               username={username}
             />
