@@ -93,6 +93,76 @@ describe("reservation assignment domain", () => {
     );
   });
 
+  describe("T08-SEC01 bounded array validation", () => {
+    const base = {
+      version: 3,
+      roomId: "00000000-0000-4000-8000-0000000000ff",
+      internalNotes: null,
+    };
+    const tableId = (index: number) =>
+      `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+    const sizeIssue = {
+      origin: "array",
+      code: "too_big",
+      maximum: 20,
+      inclusive: true,
+      path: ["tableIds"],
+      message: "Non è possibile assegnare più di 20 tavoli.",
+    };
+
+    it("accepts twenty distinct valid UUIDs without changing the business limit", () => {
+      expect(MAX_RESERVATION_ASSIGNMENT_TABLES).toBe(20);
+      const tableIds = Array.from({ length: 20 }, (_, index) => tableId(index + 1));
+      const result = putReservationAssignmentSchema.safeParse({ ...base, tableIds });
+
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.tableIds).toEqual(tableIds);
+    });
+
+    it("rejects twenty-one valid UUIDs with the canonical size error", () => {
+      const result = putReservationAssignmentSchema.safeParse({
+        ...base,
+        tableIds: Array.from({ length: 21 }, (_, index) => tableId(index + 1)),
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues).toEqual([sizeIssue]);
+    });
+
+    it("rejects an oversized malformed array before accumulating element errors", () => {
+      const result = putReservationAssignmentSchema.safeParse({
+        ...base,
+        tableIds: Array.from({ length: 21 }, (_, index) => `invalid-uuid-${index}`),
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toHaveLength(1);
+        expect(result.error.issues).toEqual([sizeIssue]);
+        expect(result.error.issues.some((issue) => issue.code === "invalid_format")).toBe(false);
+      }
+    });
+
+    it("still validates each UUID when the array is within the limit", () => {
+      const result = putReservationAssignmentSchema.safeParse({
+        ...base,
+        tableIds: Array.from({ length: 20 }, (_, index) => `invalid-uuid-${index}`),
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toHaveLength(20);
+        result.error.issues.forEach((issue, index) => {
+          expect(issue).toMatchObject({
+            code: "invalid_format",
+            path: ["tableIds", index],
+            message: "Identificativo non valido.",
+          });
+        });
+      }
+    });
+  });
+
   it("normalizes omitted, null and empty internal notes to the same state", () => {
     const { internalNotes: ignoredNotes, ...withoutNotes } = validPut();
     expect(ignoredNotes).toBe("Nota interna fittizia");
