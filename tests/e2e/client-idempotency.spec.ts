@@ -52,7 +52,9 @@ async function fillPublicReservation(page: Page): Promise<void> {
     page.getByLabel("Orario disponibile").locator("option[value='19:00']"),
   ).toHaveCount(1);
   await page.getByLabel("Orario disponibile").selectOption("19:00");
+  await page.locator("section[aria-labelledby=booking-section-1]").getByRole("button", { name: "Continua", exact: true }).click();
   await page.getByRole("radio", { name: "No, siamo tutti adulti", exact: true }).check();
+  await page.locator("section[aria-labelledby=booking-section-2]").getByRole("button", { name: "Continua", exact: true }).click();
   await page.getByLabel("Nome", { exact: true }).fill("E2E-UAT-Client");
   await page.getByLabel("Cognome", { exact: true }).fill("Public");
   await page.getByLabel("Telefono").fill("+39 000 000 0801");
@@ -167,10 +169,10 @@ test.describe("UAT client idempotency - public form", () => {
       .click();
     await expect(formAlert(page)).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Conferma prenotazione" }),
+      page.getByRole("button", { name: "Riprova con gli stessi dati" }),
     ).toBeEnabled();
     await page
-      .getByRole("button", { name: "Conferma prenotazione" })
+      .getByRole("button", { name: "Riprova con gli stessi dati" })
       .click();
 
     await expect(
@@ -218,7 +220,7 @@ test.describe("UAT client idempotency - public form", () => {
 
     await expect(formAlert(page)).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Conferma prenotazione" }),
+      page.getByRole("button", { name: "Riprova con gli stessi dati" }),
     ).toBeEnabled();
   });
 });

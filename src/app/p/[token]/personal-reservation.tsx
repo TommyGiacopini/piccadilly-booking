@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { PublicContactLinks } from "@/app/_components/public-contact-links";
 import { PartyCompositionFields, compositionFormState, compositionPayload, restaurantDiscretionCopy } from "@/app/prenota/party-composition-fields";
@@ -85,12 +85,20 @@ export function PersonalReservation({
   const [availability, setAvailability] = useState<AvailabilityView>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"save" | "cancel" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<{ kind: "invalid" | "generic" | "server"; message?: string } | null>(null);
+  const [notice, setNotice] = useState<"updated" | "cancelledDone" | null>(null);
+  const [loadedEndpoint, setLoadedEndpoint] = useState<string | null>(null);
+  const readGeneration = useRef(0);
+  const mutationGeneration = useRef(0);
+  const mutationBusy = useRef(false);
+  const currentEndpoint = useRef("");
+  const pendingRead = useRef<AbortController | null>(null);
   const t = copy[language];
   const editorial = contents[language === "it" ? "IT" : "EN"];
   const endpoint = `/api/public/reservations/${encodeURIComponent(token)}`;
-  const draftDate = draft?.localDate;
+  const activeResource = loadedEndpoint === endpoint;
+  const errorText = error ? error.kind === "invalid" ? t.invalid : error.kind === "server" && language === "it" ? error.message ?? t.genericError : t.genericError : null;
+  const draftDate = activeResource ? draft?.localDate : undefined;
   const draftService = draft?.serviceType;
   const draftPartySize = draft?.partySize;
 
@@ -103,62 +111,92 @@ export function PersonalReservation({
 
   useEffect(() => {
     const controller = new AbortController();
+    pendingRead.current = controller;
+    currentEndpoint.current = endpoint;
+    const generation = ++readGeneration.current;
+    const mutation = mutationGeneration.current;
+    const ownsRead = () => !controller.signal.aborted && readGeneration.current === generation &&
+      currentEndpoint.current === endpoint && mutationGeneration.current === mutation;
     void fetch(endpoint, { cache: "no-store", signal: controller.signal })
-      .then(async (response) => {
-        const body = (await response.json()) as { reservation?: ReservationView; error?: string };
+      .then(async response => {
+        const body = (await response.json()) as { reservation?: ReservationView };
         if (!response.ok || !body.reservation) throw new Error();
+        if (!ownsRead()) return;
         setReservation(body.reservation);
         setDraft(editableFromReservation(body.reservation));
         setComposition(compositionFormState(body.reservation));
+        setError(null); setNotice(null); mutationBusy.current = false; setBusy(null); setLoadedEndpoint(endpoint);
       })
-      .catch(() => { if (!controller.signal.aborted) setError(t.invalid); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [endpoint, t.invalid]);
+      .catch(() => {
+        if (!ownsRead()) return;
+        setReservation(null); setDraft(null); setError({ kind: "invalid" }); setLoadedEndpoint(endpoint);
+      })
+      .finally(() => { if (ownsRead()) setLoading(false); });
+    return () => { controller.abort(); currentEndpoint.current = ""; };
+  }, [endpoint]);
 
   useEffect(() => {
-    if (!draftDate || !draftService || !draftPartySize || !reservation) return;
+    if (!activeResource || !draftDate || !draftService || !draftPartySize || !reservation) return;
     const controller = new AbortController();
     const timeout = window.setTimeout(() => {
       void fetch(`/api/public/availability?date=${encodeURIComponent(draftDate)}&service=${draftService}&partySize=${draftPartySize}`, { cache: "no-store", signal: controller.signal })
         .then((response) => response.json())
-        .then((body: AvailabilityView) => setAvailability(body))
+        .then((body: AvailabilityView) => { if (!controller.signal.aborted) setAvailability(body); })
         .catch(() => undefined);
     }, 250);
     return () => { window.clearTimeout(timeout); controller.abort(); };
-  }, [draftDate, draftPartySize, draftService, reservation]);
+  }, [activeResource, draftDate, draftPartySize, draftService, reservation]);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!draft) return;
+    if (!draft || !activeResource || mutationBusy.current) return;
+    const resource = endpoint;
+    const payload = JSON.stringify({ ...draft, ...compositionPayload(composition) });
+    mutationBusy.current = true;
+    const attempt = ++mutationGeneration.current;
+    ++readGeneration.current; pendingRead.current?.abort();
     setBusy("save"); setError(null); setNotice(null);
     try {
-      const response = await fetch(endpoint, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, ...compositionPayload(composition) }) });
+      const response = await fetch(endpoint, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: payload });
       const body = (await response.json()) as { reservation?: ReservationView; error?: string };
-      if (!response.ok || !body.reservation) { setError(language === "it" ? body.error ?? t.genericError : t.genericError); return; }
-      setReservation(body.reservation); setDraft(editableFromReservation(body.reservation)); setComposition(compositionFormState(body.reservation)); setNotice(t.updated);
-    } catch { setError(t.genericError); } finally { setBusy(null); }
+      if (currentEndpoint.current !== resource || mutationGeneration.current !== attempt) return;
+      if (!response.ok || !body.reservation) { setError({ kind: "server", message: body.error }); return; }
+      setReservation(body.reservation); setDraft(editableFromReservation(body.reservation)); setComposition(compositionFormState(body.reservation)); setNotice("updated");
+    } catch {
+      if (currentEndpoint.current === resource && mutationGeneration.current === attempt) setError({ kind: "generic" });
+    } finally {
+      if (currentEndpoint.current === resource && mutationGeneration.current === attempt) { mutationBusy.current = false; setBusy(null); }
+    }
   }
 
   async function cancel() {
-    if (!window.confirm(t.confirmCancel)) return;
+    if (!activeResource || mutationBusy.current || !window.confirm(t.confirmCancel)) return;
+    const resource = endpoint;
+    mutationBusy.current = true;
+    const attempt = ++mutationGeneration.current;
+    ++readGeneration.current; pendingRead.current?.abort();
     setBusy("cancel"); setError(null); setNotice(null);
     try {
       const response = await fetch(endpoint, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: "{}" });
       const body = (await response.json()) as { reservation?: ReservationView; error?: string };
-      if (!response.ok || !body.reservation) { setError(language === "it" ? body.error ?? t.genericError : t.genericError); return; }
-      setReservation(body.reservation); setDraft(editableFromReservation(body.reservation)); setNotice(t.cancelledDone);
-    } catch { setError(t.genericError); } finally { setBusy(null); }
+      if (currentEndpoint.current !== resource || mutationGeneration.current !== attempt) return;
+      if (!response.ok || !body.reservation) { setError({ kind: "server", message: body.error }); return; }
+      setReservation(body.reservation); setDraft(editableFromReservation(body.reservation)); setNotice("cancelledDone");
+    } catch {
+      if (currentEndpoint.current === resource && mutationGeneration.current === attempt) setError({ kind: "generic" });
+    } finally {
+      if (currentEndpoint.current === resource && mutationGeneration.current === attempt) { mutationBusy.current = false; setBusy(null); }
+    }
   }
 
-  if (loading) return <main className="flex min-h-screen items-center justify-center bg-zinc-950 p-6 text-white">{t.loading}</main>;
-  if (!reservation || !draft) return <main className="flex min-h-screen items-center justify-center bg-zinc-950 p-6"><section className="max-w-xl rounded-3xl bg-white p-8 text-center text-zinc-950"><h1 className="text-3xl font-black whitespace-pre-line">{editorial.MANAGEMENT_PAGE_TITLE}</h1><p className="mt-4 text-zinc-600">{error ?? t.invalid}</p><p className="mt-6 whitespace-pre-line text-sm text-zinc-600">{editorial.CONTACT_PROMPT}</p><PublicContactLinks contacts={contacts} language={language} /></section></main>;
+  if (loading || !activeResource) return <main className="flex min-h-screen items-center justify-center bg-zinc-950 p-6 text-white">{t.loading}</main>;
+  if (!reservation || !draft) return <main className="flex min-h-screen items-center justify-center bg-zinc-950 p-6"><section className="max-w-xl rounded-3xl bg-white p-8 text-center text-zinc-950"><h1 className="text-3xl font-black whitespace-pre-line">{editorial.MANAGEMENT_PAGE_TITLE}</h1><p className="mt-4 text-zinc-600">{errorText ?? t.invalid}</p><p className="mt-6 whitespace-pre-line text-sm text-zinc-600">{editorial.CONTACT_PROMPT}</p><PublicContactLinks contacts={contacts} language={language} /></section></main>;
 
   const canEdit = reservation.canModify && reservation.status === "CONFIRMED";
   const availableTimes = Array.from(new Set([...(draft.arrivalTime ? [draft.arrivalTime] : []), ...(availability.slots?.filter((slot) => slot.available).map((slot) => slot.time) ?? [])])).sort();
 
   return (
-    <main className="min-h-screen bg-zinc-100 px-4 py-8 sm:px-8">
+    <main className="min-h-screen bg-zinc-100 px-4 py-8 sm:px-8" lang={language}>
       <div className="mx-auto max-w-4xl overflow-hidden rounded-[2rem] bg-white shadow-xl">
         <header className="flex flex-col gap-6 bg-zinc-950 px-7 py-9 text-white sm:flex-row sm:items-end sm:justify-between sm:px-10">
           <div><p className="text-sm font-black tracking-[0.2em] text-orange-400 uppercase">{t.eyebrow}</p><h1 className="mt-2 text-4xl font-black whitespace-pre-line">{editorial.MANAGEMENT_PAGE_TITLE}</h1><p className="mt-3 max-w-2xl whitespace-pre-line text-zinc-300">{editorial.MANAGEMENT_PAGE_INTRO}</p></div>
@@ -183,8 +221,8 @@ export function PersonalReservation({
             <label className="text-sm font-bold">{t.notes}<textarea className={inputClass} maxLength={1000} onChange={(event) => setDraft({ ...draft, notes: event.target.value || null })} rows={3} value={draft.notes ?? ""} /></label>
             <p className="text-sm text-text-secondary sm:col-span-2">{restaurantDiscretionCopy[language]}</p>
           </fieldset>
-          {error ? <p className="mt-6 rounded-2xl bg-red-50 p-4 font-bold text-red-800" role="alert">{error}</p> : null}
-          {notice ? <p className="mt-6 rounded-2xl bg-emerald-50 p-4 font-bold text-emerald-800" role="status">{notice}</p> : null}
+          {errorText ? <p className="mt-6 rounded-2xl bg-red-50 p-4 font-bold text-red-800" role="alert">{errorText}</p> : null}
+          {notice ? <p className="mt-6 rounded-2xl bg-emerald-50 p-4 font-bold text-emerald-800" role="status">{t[notice]}</p> : null}
           <div className="mt-7 rounded-2xl bg-zinc-100 p-5">
             <p className="whitespace-pre-line text-sm text-zinc-700">{editorial.CONTACT_PROMPT}</p>
             <PublicContactLinks contacts={contacts} language={language} />
