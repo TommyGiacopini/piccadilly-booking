@@ -1,34 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-
 import { PublicContactLinks } from "@/app/_components/public-contact-links";
 import { PartyCompositionFields, compositionFormState, compositionPayload, restaurantDiscretionCopy } from "@/app/prenota/party-composition-fields";
-import type {
-  PublicContacts,
-  PublicContentSet,
-} from "@/modules/configuration/domain/public-settings";
-import {
-  resolveClientSubmissionIdentity,
-  type ClientSubmissionIdentity,
-} from "@/shared/client/client-idempotency";
-
-interface AvailabilitySlot {
-  time: string;
-  available: boolean;
-  remainingCapacity: number;
-}
-
-interface AvailabilityResponse {
-  slots?: AvailabilitySlot[];
-  isOpen?: boolean;
-  error?: string;
-}
+import { availabilityQuery, bookingIssues, freezeAttempt, hasCurrentSlot, idleAvailability, initialBookingValues, ownsAttempt, reachSection, settleAvailability, type AvailabilityState, type BookingPayload, type BookingValues, type FieldIssue, type Language, type Section, type SubmissionAttempt } from "@/app/prenota/public-booking-flow";
+import type { PublicContacts, PublicContentSet } from "@/modules/configuration/domain/public-settings";
+import { resolveClientSubmissionIdentity, type ClientSubmissionIdentity } from "@/shared/client/client-idempotency";
 
 const text = {
   it: {
     eyebrow: "Prenotazione online",
-    language: "Language",
+    language: "Lingua",
     date: "Data",
     service: "Servizio",
     lunch: "Pranzo",
@@ -60,7 +42,7 @@ const text = {
   },
   en: {
     eyebrow: "Online booking",
-    language: "Lingua",
+    language: "Language",
     date: "Date",
     service: "Service",
     lunch: "Lunch",
@@ -92,298 +74,267 @@ const text = {
   },
 } as const;
 
-const inputClass =
-  "mt-2 block w-full rounded-2xl border border-zinc-300 bg-white px-4 py-3 text-base text-zinc-950 outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-100";
 
-function value(formData: FormData, name: string): string {
-  const field = formData.get(name);
-  return typeof field === "string" ? field : "";
-}
+const progressive = {
+  it: {
+    sections: ["Quando e in quanti", "Composizione ed esigenze", "Dati e conferma"],
+    next: "Continua", back: "Indietro", summary: "Riepilogo della prenotazione",
+    check: "Verifica disponibilità", empty: "Nessun orario disponibile", retry: "Riprova",
+    earlyNotes: "Scrivi una nota", errors: "Controlla i dati indicati", invalid: "Controlla questo campo.",
+    availabilityError: "Non è stato possibile verificare la disponibilità. Riprova.",
+    chooseSlot: "Scegli un orario verificato per data, servizio e coperti correnti.",
+    uncertain: "Non abbiamo ricevuto una conferma. La prenotazione potrebbe essere stata registrata. Puoi riprovare con gli stessi dati oppure contattare il ristorante.",
+    edit: "Modifica i dati", editWarning: "Una richiesta precedente potrebbe essere già stata registrata. Inviare dati modificati può creare un'altra prenotazione.",
+    originalRetry: "Riprova con gli stessi dati", pending: "I dati del tentativo sono bloccati durante l'invio.",
+  },
+  en: {
+    sections: ["When and how many", "Party and requests", "Your details and confirmation"],
+    next: "Continue", back: "Back", summary: "Booking summary",
+    check: "Check availability", empty: "No available times", retry: "Try again",
+    earlyNotes: "Write a note", errors: "Check the indicated details", invalid: "Check this field.",
+    availabilityError: "We couldn't check availability. Try again.",
+    chooseSlot: "Choose a verified time for the current date, service and total covers.",
+    uncertain: "We didn't receive confirmation. Your booking may have been recorded. You can retry with the same details or contact the restaurant.",
+    edit: "Edit details", editWarning: "A previous request may already have been recorded. Submitting changed details may create another booking.",
+    originalRetry: "Retry with the same details", pending: "The attempt details are locked while submitting.",
+  },
+} as const;
+const inputClass = "mt-2 block min-h-11 w-full min-w-0 rounded-2xl border border-zinc-300 bg-white px-4 py-3 text-base text-zinc-950 outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-100";
+const buttonClass = "inline-flex min-h-11 items-center justify-center rounded-2xl bg-zinc-950 px-5 py-3 font-bold text-white focus:outline-none focus:ring-4 focus:ring-orange-300 disabled:cursor-wait disabled:opacity-60";
 
-function checked(formData: FormData, name: string): boolean {
-  return formData.get(name) === "on";
-}
-
-export function PublicBookingForm({
-  contacts,
-  contents,
-  initialLanguage,
-}: {
-  contacts: PublicContacts;
-  contents: PublicContentSet;
-  initialLanguage: "it" | "en";
+export function PublicBookingForm({ contacts, contents, initialLanguage }: {
+  contacts: PublicContacts; contents: PublicContentSet; initialLanguage: Language;
 }) {
-  const [language, setLanguage] = useState<"it" | "en">(initialLanguage);
-  const [date, setDate] = useState("");
-  const [service, setService] = useState<"LUNCH" | "DINNER">("DINNER");
-  const [partySize, setPartySize] = useState(2);
+  const [language, setLanguage] = useState<Language>(initialLanguage);
+  const [values, setValues] = useState<BookingValues>({ ...initialBookingValues });
   const [composition, setComposition] = useState(compositionFormState());
-  const [availability, setAvailability] = useState<AvailabilityResponse>({});
-  const [availabilityPending, setAvailabilityPending] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [reached, setReached] = useState<Section>(1);
+  const [availability, setAvailability] = useState<AvailabilityState>(idleAvailability);
+  const [retry, setRetry] = useState(0);
+  const [issues, setIssues] = useState<FieldIssue[]>([]);
+  const [status, setStatus] = useState<"IDLE" | "PENDING" | "UNCERTAIN" | "EDITING" | "REJECTED">("IDLE");
+  const [failure, setFailure] = useState<string | null>(null);
   const [managementPath, setManagementPath] = useState<string | null>(null);
-  const submission = useRef<ClientSubmissionIdentity | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ target: string; id: number } | null>(null);
+  const generation = useRef(0);
+  const request = useRef<AbortController | null>(null);
+  const busy = useRef(false);
+  const mounted = useRef(true);
+  const identity = useRef<ClientSubmissionIdentity | null>(null);
+  const attempt = useRef<SubmissionAttempt | null>(null);
+  const sequence = useRef(0);
   const copy = text[language];
+  const ui = progressive[language];
   const editorial = contents[language === "it" ? "IT" : "EN"];
+  const queryKey = availabilityQuery(values);
+  const currentAvailability: AvailabilityState = !queryKey ? idleAvailability
+    : availability.key === queryKey ? availability : { status: "LOADING", key: queryKey, generation: 0, slots: [] };
+  const locked = status === "PENDING" || status === "UNCERTAIN";
 
-  function selectLanguage(nextLanguage: "it" | "en") {
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    if (!focusRequest) return;
+    const element = document.getElementById(focusRequest.target);
+    const target = focusRequest.target === "booking-composition"
+      ? element?.querySelector<HTMLElement>('input[aria-invalid="true"]') ?? element?.querySelector<HTMLElement>('input:invalid') ?? element?.querySelector<HTMLElement>('input') : element;
+    target?.focus();
+    target?.scrollIntoView({ block: "nearest" });
+  }, [focusRequest, reached]);
+  useEffect(() => {
+    if (!queryKey) return;
+    const controller = new AbortController();
+    request.current = controller;
+    const requestGeneration = ++generation.current;
+    const [date, service, partySize] = JSON.parse(queryKey) as [string, string, number];
+    const current: AvailabilityState = { status: "LOADING", key: queryKey, generation: requestGeneration, slots: [] };
+    void fetch("/api/public/availability?date=" + encodeURIComponent(date) + "&service=" + service + "&partySize=" + partySize,
+      { cache: "no-store", signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error();
+        const body: unknown = await response.json();
+        if (!controller.signal.aborted && generation.current === requestGeneration) {
+          setAvailability(settleAvailability(current, queryKey, requestGeneration, body));
+        }
+      }).catch(() => {
+        if (!controller.signal.aborted && generation.current === requestGeneration) setAvailability({ ...current, status: "ERROR" });
+      });
+    return () => controller.abort();
+  }, [queryKey, retry]);
+
+  function focus(target: string) { setFocusRequest({ target, id: ++sequence.current }); }
+  function selectLanguage(nextLanguage: Language) {
     setLanguage(nextLanguage);
     const url = new URL(window.location.href);
     url.searchParams.set("lang", nextLanguage);
     window.history.replaceState(null, "", url);
   }
-
-  useEffect(() => {
-    if (!date || !Number.isInteger(partySize) || partySize < 1) {
-      return;
+  function update<K extends keyof BookingValues>(field: K, value: BookingValues[K]) {
+    if (busy.current || status === "UNCERTAIN") return;
+    setValues(previous => {
+      const next = { ...previous, [field]: value };
+      if (["localDate", "serviceType", "partySize"].includes(field)) next.arrivalTime = "";
+      return next;
+    });
+    if (["localDate", "serviceType", "partySize"].includes(field)) {
+      request.current?.abort(); ++generation.current; setAvailability(idleAvailability);
     }
-
-    const controller = new AbortController();
-    void fetch(
-      `/api/public/availability?date=${encodeURIComponent(date)}&service=${service}&partySize=${partySize}`,
-      { cache: "no-store", signal: controller.signal },
-    )
-      .then(async (response) => {
-        const body = (await response.json()) as AvailabilityResponse;
-        if (!response.ok) {
-          throw new Error(
-            language === "it" ? body.error ?? copy.genericError : copy.genericError,
-          );
-        }
-        setAvailability(body);
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) {
-          setAvailability({
-            error: error instanceof Error ? error.message : copy.genericError,
-          });
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setAvailabilityPending(false);
+  }
+  function payload(): BookingPayload { return { ...values, ...compositionPayload(composition), language }; }
+  function targetFor(field: string) { return ["childrenCount", "gameRoomPreference"].includes(field) ? "booking-composition" : "booking-" + field; }
+  function labelFor(field: string) {
+    if (field === "localDate") return copy.date;
+    if (field === "serviceType") return copy.service;
+    if (field === "arrivalTime") return copy.slot;
+    if (field === "childrenCount" || field === "gameRoomPreference") return ui.sections[1];
+    if (field === "privacyAccepted") return copy.privacy;
+    if (field === "termsAccepted") return copy.terms;
+    const labels: Record<string, string> = { partySize: copy.partySize, customerFirstName: copy.firstName, customerLastName: copy.lastName, customerPhone: copy.phone, customerEmail: copy.email, allergies: copy.allergies, intolerances: copy.intolerances, celebration: copy.celebration, notes: copy.notes };
+    return labels[field] ?? ui.invalid;
+  }
+  function validate(through: Section): boolean {
+    const found = bookingIssues(payload(), currentAvailability, through, composition);
+    setIssues(found);
+    if (!found.length) return true;
+    setReached(previous => reachSection(previous, Math.max(...found.map(issue => issue.section)) as Section));
+    focus(targetFor(found[0].field));
+    return false;
+  }
+  function advance(from: 1 | 2) {
+    if (!validate(from)) return;
+    const next = (from + 1) as Section;
+    setReached(previous => reachSection(previous, next)); focus("booking-section-" + next);
+  }
+  function retryAvailability() {
+    request.current?.abort(); ++generation.current; setAvailability(idleAvailability);
+    setValues(previous => ({ ...previous, arrivalTime: "" })); setRetry(previous => previous + 1);
+  }
+  async function dispatch(frozen: SubmissionAttempt) {
+    let dispatched = false;
+    try {
+      dispatched = true;
+      const response = await fetch("/api/public/reservations", {
+        method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": frozen.key }, body: frozen.signature,
       });
-
-    return () => controller.abort();
-  }, [copy.genericError, date, language, partySize, service]);
-
+      const body: unknown = await response.json();
+      if (!mounted.current || !ownsAttempt(attempt.current, frozen)) return;
+      if (response.ok && body && typeof body === "object" && "managementPath" in body &&
+        typeof body.managementPath === "string" && /^\/p\/[A-Za-z0-9_-]+$/u.test(body.managementPath)) {
+        setManagementPath(body.managementPath); focus("booking-confirmation"); identity.current = null; attempt.current = null; setStatus("IDLE");
+      } else if (!response.ok && response.status < 500 && body && typeof body === "object" && "error" in body && typeof body.error === "string") {
+        setFailure(body.error); setStatus("REJECTED");
+      } else { setStatus("UNCERTAIN"); }
+    } catch {
+      if (mounted.current && ownsAttempt(attempt.current, frozen)) setStatus(dispatched ? "UNCERTAIN" : "REJECTED");
+    } finally {
+      busy.current = false;
+    }
+  }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSubmitting(true);
-    setMessage(null);
-
+    if (busy.current || status === "UNCERTAIN" || !validate(3)) return;
+    const captured = payload();
+    busy.current = true;
+    setStatus("PENDING"); setFailure(null);
     try {
-      const formData = new FormData(event.currentTarget);
-      const payload = {
-        localDate: date,
-        serviceType: service,
-        arrivalTime: value(formData, "arrivalTime"),
-        partySize,
-        ...compositionPayload(composition),
-        customerFirstName: value(formData, "customerFirstName"),
-        customerLastName: value(formData, "customerLastName"),
-        customerPhone: value(formData, "customerPhone"),
-        customerEmail: value(formData, "customerEmail"),
-        highChair: checked(formData, "highChair"),
-        stroller: checked(formData, "stroller"),
-        accessibility: checked(formData, "accessibility"),
-        celiac: checked(formData, "celiac"),
-        allergies: value(formData, "allergies"),
-        intolerances: value(formData, "intolerances"),
-        celebration: value(formData, "celebration"),
-        animals: checked(formData, "animals"),
-        notes: value(formData, "notes"),
-        language,
-        privacyAccepted: checked(formData, "privacyAccepted"),
-        termsAccepted: checked(formData, "termsAccepted"),
-      };
-      const signature = JSON.stringify(payload);
-      const identity = resolveClientSubmissionIdentity(
-        submission.current,
-        signature,
-      );
-      submission.current = identity;
-
-      const response = await fetch("/api/public/reservations", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": identity.key,
-        },
-        body: signature,
-      });
-      const body = (await response.json()) as {
-        error?: string;
-        managementPath?: string;
-      };
-
-      if (!response.ok || !body.managementPath) {
-        setMessage(
-          language === "it" ? body.error ?? copy.genericError : copy.genericError,
-        );
-        return;
-      }
-
-      setManagementPath(body.managementPath);
-      submission.current = null;
+      const signature = JSON.stringify(captured);
+      const resolved = resolveClientSubmissionIdentity(identity.current, signature);
+      identity.current = resolved;
+      const frozen = freezeAttempt(captured, resolved, ++sequence.current);
+      attempt.current = frozen;
+      await dispatch(frozen);
     } catch {
-      setMessage(copy.genericError);
-    } finally {
-      setSubmitting(false);
+      busy.current = false; setFailure(null); setStatus("REJECTED");
     }
   }
-
-  if (managementPath) {
-    return (
-      <main className="min-h-screen bg-zinc-950 px-5 py-12 text-white sm:px-8">
-        <section className="mx-auto max-w-2xl rounded-[2rem] bg-white p-8 text-zinc-950 shadow-2xl sm:p-12">
-          <div className="mb-8 h-2 w-20 rounded-full bg-orange-500" />
-          <p className="text-sm font-black tracking-[0.2em] text-orange-600 uppercase">
-            Piccadilly
-          </p>
-          <h1 className="mt-3 text-4xl font-black whitespace-pre-line">{editorial.CONFIRMATION_MESSAGE}</h1>
-          <p className="mt-5 leading-7 text-zinc-600">{copy.keepLink}</p>
-          <a
-            className="mt-8 inline-flex rounded-2xl bg-orange-500 px-6 py-4 font-black text-white transition hover:bg-orange-600 focus:ring-4 focus:ring-orange-200 focus:outline-none"
-            href={`${managementPath}?lang=${language}`}
-            rel="noreferrer"
-          >
-            {copy.link}
-          </a>
-          <div className="mt-8 border-t border-zinc-200 pt-6">
-            <p className="whitespace-pre-line text-sm text-zinc-600">{editorial.CONTACT_PROMPT}</p>
-            <PublicContactLinks contacts={contacts} language={language} />
-          </div>
-        </section>
-      </main>
-    );
+  function retryOriginal() {
+    if (busy.current || !attempt.current) return;
+    busy.current = true; setStatus("PENDING"); setFailure(null); void dispatch(attempt.current);
   }
-
-  const availableSlots =
-    availability.slots?.filter((slot) => slot.available) ?? [];
-
-  return (
-    <main className="min-h-screen bg-zinc-100 px-4 py-6 sm:px-8 sm:py-10">
-      <div className="mx-auto max-w-6xl overflow-hidden rounded-[2rem] bg-white shadow-[0_25px_90px_rgba(0,0,0,0.12)]">
-        <header className="grid gap-8 bg-zinc-950 px-7 py-10 text-white sm:px-12 lg:grid-cols-[1fr_auto] lg:items-end">
-          <div>
-            <p className="text-sm font-black tracking-[0.2em] text-orange-400 uppercase">
-              {copy.eyebrow}
-            </p>
-            <h1 className="mt-3 max-w-3xl text-4xl font-black tracking-tight sm:text-5xl">
-              {editorial.BOOKING_PAGE_TITLE}
-            </h1>
-            <p className="mt-5 max-w-2xl text-lg leading-8 text-zinc-300">
-              {editorial.BOOKING_PAGE_INTRO}
-            </p>
-          </div>
-          <div className="flex rounded-2xl border border-zinc-700 p-1" aria-label={copy.language}>
-            {(["it", "en"] as const).map((option) => (
-              <button
-                aria-pressed={language === option}
-                className={`rounded-xl px-4 py-2 text-sm font-black ${language === option ? "bg-orange-500 text-white" : "text-zinc-300"}`}
-                key={option}
-                onClick={() => selectLanguage(option)}
-                type="button"
-              >
-                {option.toUpperCase()}
-              </button>
-            ))}
-          </div>
-        </header>
-
-        <form className="p-7 sm:p-12" onSubmit={submit}>
-          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
-            <label className="text-sm font-bold text-zinc-800">
-              {copy.date}
-              <input className={inputClass} name="localDate" onChange={(event) => { setAvailabilityPending(Boolean(event.target.value)); setDate(event.target.value); }} required type="date" value={date} />
-            </label>
-            <label className="text-sm font-bold text-zinc-800">
-              {copy.service}
-              <select className={inputClass} onChange={(event) => { setAvailabilityPending(Boolean(date)); setService(event.target.value as "LUNCH" | "DINNER"); }} value={service}>
-                <option value="LUNCH">{copy.lunch}</option>
-                <option value="DINNER">{copy.dinner}</option>
-              </select>
-            </label>
-            <label className="text-sm font-bold text-zinc-800">
-              {copy.partySize}
-              <input className={inputClass} min="1" onChange={(event) => { setAvailabilityPending(Boolean(date)); setPartySize(Number(event.target.value)); }} required step="1" type="number" value={partySize} />
-            </label>
-            <div className="min-w-0 md:col-span-2 lg:col-span-4"><PartyCompositionFields language={language} onChange={setComposition} partySize={partySize} state={composition} /></div>
-            <label className="text-sm font-bold text-zinc-800">
-              {copy.slot}
-              <select className={inputClass} disabled={availableSlots.length === 0} name="arrivalTime" required>
-                <option value="">—</option>
-                {availableSlots.map((slot) => <option key={slot.time} value={slot.time}>{slot.time}</option>)}
-              </select>
-            </label>
-            <label className="text-sm font-bold text-zinc-800">
-              {copy.firstName}
-              <input className={inputClass} maxLength={80} name="customerFirstName" required />
-            </label>
-            <label className="text-sm font-bold text-zinc-800">
-              {copy.lastName}
-              <input className={inputClass} maxLength={80} name="customerLastName" required />
-            </label>
-            <label className="text-sm font-bold text-zinc-800">
-              {copy.phone}
-              <input className={inputClass} maxLength={40} name="customerPhone" required type="tel" />
-            </label>
-            <label className="text-sm font-bold text-zinc-800 md:col-span-2">
-              {copy.email}
-              <input className={inputClass} maxLength={254} name="customerEmail" type="email" />
-            </label>
-          </div>
-
-          <section className="mt-8 rounded-3xl bg-zinc-100 p-6 sm:p-8">
-            <h2 className="text-xl font-black">{copy.needs}</h2>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {(["highChair", "stroller", "accessibility", "celiac", "animals"] as const).map((name) => (
-                <label className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 text-sm font-bold" key={name}>
-                  <input className="size-4 accent-orange-500" name={name} type="checkbox" />
-                  {copy[name]}
-                </label>
-              ))}
-            </div>
-            <div className="mt-5 grid gap-5 md:grid-cols-2">
-              <label className="text-sm font-bold">{copy.allergies}<textarea className={inputClass} maxLength={300} name="allergies" rows={3} /></label>
-              <label className="text-sm font-bold">{copy.intolerances}<textarea className={inputClass} maxLength={300} name="intolerances" rows={3} /></label>
-              <label className="text-sm font-bold">{copy.celebration}<input className={inputClass} maxLength={200} name="celebration" /></label>
-              <label className="text-sm font-bold">{copy.notes}<textarea className={inputClass} maxLength={1000} name="notes" rows={3} /></label>
-            </div>
-          </section>
-
-          <p className="mt-7 rounded-2xl border border-orange-200 bg-orange-50 p-5 text-sm leading-6 text-orange-950">
-            {restaurantDiscretionCopy[language]}
-          </p>
-          <div className="mt-6 space-y-3">
-            <label className="flex items-start gap-3 text-sm font-bold"><input className="mt-1 size-4 accent-orange-500" name="privacyAccepted" required type="checkbox" />{copy.privacy}</label>
-            <label className="flex items-start gap-3 text-sm font-bold"><input className="mt-1 size-4 accent-orange-500" name="termsAccepted" required type="checkbox" />{copy.terms}</label>
-          </div>
-
-          {date && availableSlots.length === 0 ? (
-            <div className="mt-5 rounded-2xl bg-orange-50 p-5 text-orange-900" role="status">
-              <p className="font-bold whitespace-pre-line">{availabilityPending ? copy.loading : availability.error ?? editorial.UNAVAILABLE_MESSAGE}</p>
-              {!availabilityPending ? (
-                <>
-                  <p className="mt-3 whitespace-pre-line text-sm">{editorial.CONTACT_PROMPT}</p>
-                  <PublicContactLinks contacts={contacts} language={language} />
-                </>
-              ) : null}
-            </div>
-          ) : null}
-          {message ? <p className="mt-5 rounded-2xl bg-red-50 p-4 text-sm font-bold text-red-800" role="alert">{message}</p> : null}
-
-          <section className="mt-7 rounded-2xl bg-zinc-100 p-5">
-            <p className="whitespace-pre-line text-sm text-zinc-700">{editorial.CONTACT_PROMPT}</p>
-            <PublicContactLinks contacts={contacts} language={language} />
-          </section>
-
-          <button className="mt-8 rounded-2xl bg-zinc-950 px-7 py-4 font-black text-white transition hover:bg-orange-600 focus:ring-4 focus:ring-orange-200 focus:outline-none disabled:cursor-wait disabled:opacity-60" disabled={submitting || availableSlots.length === 0} type="submit">
-            {submitting ? copy.submitting : copy.submit}
-          </button>
-        </form>
-      </div>
-    </main>
+  function fieldError(field: string) {
+    return issues.some(issue => issue.field === field)
+      ? <p className="mt-2 text-sm font-semibold text-red-800" id={"error-" + field}>{field === "arrivalTime" ? ui.chooseSlot : ui.invalid}</p> : null;
+  }
+  function attributes(field: string) {
+    return { id: "booking-" + field, "aria-invalid": issues.some(issue => issue.field === field) || undefined,
+      "aria-describedby": issues.some(issue => issue.field === field) ? "error-" + field : undefined };
+  }
+  function textField(field: "customerFirstName" | "customerLastName" | "customerPhone" | "customerEmail" | "celebration", label: string, maxLength: number, type = "text", required = false) {
+    const autoComplete = { customerFirstName: "given-name", customerLastName: "family-name", customerPhone: "tel", customerEmail: "email", celebration: "off" }[field];
+    return <div className="min-w-0"><label className="block text-sm font-bold" htmlFor={"booking-" + field}>{label}</label><input {...attributes(field)} autoComplete={autoComplete} className={inputClass} maxLength={maxLength} name={field} onChange={event => update(field, event.target.value)} required={required} type={type} value={values[field]} />{fieldError(field)}</div>;
+  }
+  function area(field: "allergies" | "intolerances" | "notes", label: string, maxLength: number) {
+    return <div className="min-w-0"><label className="block text-sm font-bold" htmlFor={"booking-" + field}>{label}</label><textarea {...attributes(field)} className={inputClass} maxLength={maxLength} name={field} onChange={event => update(field, event.target.value)} rows={3} value={values[field]} />{fieldError(field)}</div>;
+  }
+  if (managementPath) return (
+    <main className="min-h-screen bg-zinc-950 px-5 py-12" lang={language}><section className="mx-auto max-w-2xl rounded-3xl bg-white p-6 sm:p-12">
+      <h1 className="whitespace-pre-line text-3xl font-black" id="booking-confirmation" tabIndex={-1}>{editorial.CONFIRMATION_MESSAGE}</h1><p className="mt-5">{copy.keepLink}</p>
+      <a className={buttonClass + " mt-6"} href={managementPath + "?lang=" + language} rel="noreferrer">{copy.link}</a>
+      <p className="mt-6 whitespace-pre-line">{editorial.CONTACT_PROMPT}</p><PublicContactLinks contacts={contacts} language={language} />
+    </section></main>
   );
+  return <main className="min-h-screen bg-zinc-100 px-3 py-6 sm:px-8" lang={language}>
+    <div className="mx-auto max-w-4xl overflow-hidden rounded-3xl bg-white shadow-xl">
+      <header className="bg-zinc-950 p-6 text-white sm:p-10">
+        <p className="text-sm font-black uppercase tracking-widest text-orange-400">{copy.eyebrow}</p>
+        <h1 className="mt-3 break-words text-3xl font-black sm:text-4xl">{editorial.BOOKING_PAGE_TITLE}</h1>
+        <p className="mt-4 whitespace-pre-line text-zinc-300">{editorial.BOOKING_PAGE_INTRO}</p>
+        <div className="mt-5 flex gap-2" role="group" aria-label={copy.language}>{(["it", "en"] as const).map(option =>
+          <button aria-pressed={language === option} className="min-h-11 rounded-xl border border-zinc-500 px-4 py-2 font-bold aria-pressed:bg-orange-700" key={option} onClick={() => selectLanguage(option)} type="button">{option.toUpperCase()}</button>)}</div>
+      </header>
+      <form aria-busy={status === "PENDING"} className="space-y-7 p-4 sm:p-8" noValidate onSubmit={submit}>
+        {issues.length > 0 ? <div className="rounded-2xl border-2 border-red-700 p-4" id="booking-errors" role="alert" tabIndex={-1}>
+          <h2 className="font-bold">{ui.errors}</h2><ul className="mt-2 list-inside list-disc">{issues.map(issue =>
+            <li key={issue.field}><a className="underline" href={"#" + targetFor(issue.field)} onClick={event => { event.preventDefault(); setReached(previous => reachSection(previous, issue.section)); focus(targetFor(issue.field)); }}>{labelFor(issue.field)}</a></li>)}</ul>
+        </div> : null}
+        <fieldset className="min-w-0 space-y-6" disabled={locked}>
+          <section aria-labelledby="booking-section-1" className="space-y-5">
+            <h2 className="text-xl font-black outline-none focus:ring-4 focus:ring-orange-200" id="booking-section-1" tabIndex={-1}>1. {ui.sections[0]}</h2>
+            <div className="grid min-w-0 gap-5 sm:grid-cols-2">
+              <div className="min-w-0"><label className="text-sm font-bold" htmlFor="booking-localDate">{copy.date}</label><input {...attributes("localDate")} className={inputClass} name="localDate" onChange={event => update("localDate", event.target.value)} required type="date" value={values.localDate} />{fieldError("localDate")}</div>
+              <div className="min-w-0"><label className="text-sm font-bold" htmlFor="booking-serviceType">{copy.service}</label><select {...attributes("serviceType")} className={inputClass} onChange={event => update("serviceType", event.target.value as "LUNCH" | "DINNER")} value={values.serviceType}><option value="LUNCH">{copy.lunch}</option><option value="DINNER">{copy.dinner}</option></select></div>
+              <div className="min-w-0"><label className="text-sm font-bold" htmlFor="booking-partySize">{copy.partySize}</label><input {...attributes("partySize")} className={inputClass} min={1} onChange={event => update("partySize", Number(event.target.value))} required step={1} type="number" value={values.partySize || ""} />{fieldError("partySize")}</div>
+              <div className="min-w-0"><label className="text-sm font-bold" htmlFor="booking-arrivalTime">{copy.slot}</label><select {...attributes("arrivalTime")} className={inputClass} disabled={currentAvailability.status !== "READY" || locked} name="arrivalTime" onChange={event => update("arrivalTime", event.target.value)} required value={values.arrivalTime}><option value="">—</option>{currentAvailability.slots.map(time => <option key={time} value={time}>{time}</option>)}</select>{fieldError("arrivalTime")}</div>
+            </div>
+            <div aria-live="polite" aria-atomic="true" className="rounded-2xl bg-zinc-100 p-4" data-availability-state={currentAvailability.status}>
+              {currentAvailability.status === "IDLE" ? ui.check : currentAvailability.status === "LOADING" ? copy.loading
+                : currentAvailability.status === "EMPTY" ? <><p className="font-bold">{ui.empty}</p><p className="whitespace-pre-line">{editorial.UNAVAILABLE_MESSAGE}</p></>
+                : currentAvailability.status === "ERROR" ? ui.availabilityError : ui.chooseSlot}
+            </div>
+            {currentAvailability.status === "ERROR" ? <button className={buttonClass} onClick={retryAvailability} type="button">{ui.retry}</button> : null}
+            <div className="flex flex-wrap gap-3"><button className={buttonClass} disabled={currentAvailability.status === "LOADING"} onClick={() => advance(1)} type="button">{ui.next}</button>
+              {reached === 1 ? <button className="min-h-11 rounded-xl px-3 font-bold underline" onClick={() => { setReached(2); focus("booking-notes"); }} type="button">{ui.earlyNotes}</button> : null}</div>
+          </section>
+          {reached >= 2 ? <section aria-labelledby="booking-section-2" className="space-y-5 border-t border-zinc-300 pt-6">
+            <h2 className="text-xl font-black outline-none focus:ring-4 focus:ring-orange-200" id="booking-section-2" tabIndex={-1}>2. {ui.sections[1]}</h2>
+            <div aria-describedby={issues.some(issue => issue.section === 2 && ["childrenCount", "gameRoomPreference"].includes(issue.field)) ? "composition-errors" : undefined} id="booking-composition">
+              <PartyCompositionFields language={language} onChange={next => { if (!busy.current && status !== "UNCERTAIN") setComposition(next); }} partySize={values.partySize} state={composition} />
+              <div id="composition-errors">{fieldError("childrenCount")}{fieldError("gameRoomPreference")}</div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">{(["highChair", "stroller", "accessibility", "celiac", "animals"] as const).map(field =>
+              <label className="flex min-h-11 items-center gap-3 rounded-2xl bg-zinc-100 p-4 font-bold" key={field}><input checked={values[field]} name={field} onChange={event => update(field, event.target.checked)} type="checkbox" />{copy[field]}</label>)}</div>
+            <div className="grid min-w-0 gap-5 sm:grid-cols-2">{area("allergies", copy.allergies, 300)}{area("intolerances", copy.intolerances, 300)}{textField("celebration", copy.celebration, 200)}</div>
+            {area("notes", copy.notes, 1000)}
+            <p className="text-sm text-zinc-700">{restaurantDiscretionCopy[language]}</p>
+            <div className="flex flex-wrap gap-3"><button className={buttonClass} onClick={() => focus("booking-section-1")} type="button">{ui.back}</button><button className={buttonClass} disabled={currentAvailability.status === "LOADING"} onClick={() => advance(2)} type="button">{ui.next}</button></div>
+          </section> : null}
+          {reached >= 3 ? <section aria-labelledby="booking-section-3" className="space-y-5 border-t border-zinc-300 pt-6">
+            <h2 className="text-xl font-black outline-none focus:ring-4 focus:ring-orange-200" id="booking-section-3" tabIndex={-1}>3. {ui.sections[2]}</h2>
+            <div className="grid min-w-0 gap-5 sm:grid-cols-2">{textField("customerFirstName", copy.firstName, 80, "text", true)}{textField("customerLastName", copy.lastName, 80, "text", true)}{textField("customerPhone", copy.phone, 40, "tel", true)}{textField("customerEmail", copy.email, 254, "email")}</div>
+            <section aria-label={ui.summary} className="rounded-2xl bg-zinc-100 p-4"><h3 className="font-black">{ui.summary}</h3><p className="mt-2 break-words">{values.localDate} · {values.serviceType === "LUNCH" ? copy.lunch : copy.dinner} · {values.arrivalTime || "—"}</p><p>{copy.partySize}: {values.partySize}</p><p>{language === "it" ? "Bambini" : "Children"}: {compositionPayload(composition).childrenCount ?? "—"}</p>{composition.mode === "children" ? <p>{language === "it" ? "Richiesta giochi non garantita" : "Games room request is not guaranteed"}: {composition.games === "yes" ? language === "it" ? "Sì" : "Yes" : "No"}</p> : null}</section>
+            {(["privacyAccepted", "termsAccepted"] as const).map(field => <div key={field}><label className="block text-sm font-bold"><span className="flex min-h-11 items-start gap-3"><input {...attributes(field)} checked={values[field]} className="mt-1" name={field} onChange={event => update(field, event.target.checked)} required type="checkbox" />{field === "privacyAccepted" ? copy.privacy : copy.terms}</span></label>{fieldError(field)}</div>)}
+            <button className={buttonClass} onClick={() => focus("booking-section-2")} type="button">{ui.back}</button>
+            <button className={buttonClass + " ml-2"} disabled={!hasCurrentSlot(currentAvailability, values) || locked} type="submit">{status === "PENDING" ? copy.submitting : copy.submit}</button>
+          </section> : null}
+        </fieldset>
+        {status === "PENDING" ? <p role="status">{ui.pending}</p> : null}
+        {status === "UNCERTAIN" || status === "EDITING" ? <div className="space-y-4 rounded-2xl border-2 border-orange-600 p-4" role="alert"><p>{ui.uncertain}</p>
+          {status === "EDITING" ? <p className="font-bold">{ui.editWarning}</p> : null}
+          <div className="flex flex-wrap gap-3"><button className={buttonClass} onClick={retryOriginal} type="button">{ui.originalRetry}</button>
+            {status === "UNCERTAIN" ? <button className={buttonClass} onClick={() => { setStatus("EDITING"); focus("booking-section-3"); }} type="button">{ui.edit}</button> : null}</div>
+        </div> : null}
+        {status === "REJECTED" ? <p className="rounded-2xl bg-red-50 p-4 font-bold text-red-800" role="alert">{language === "it" ? failure ?? copy.genericError : copy.genericError}</p> : null}
+        <section className="rounded-2xl bg-zinc-100 p-4"><p className="whitespace-pre-line">{editorial.CONTACT_PROMPT}</p><PublicContactLinks contacts={contacts} language={language} /></section>
+      </form>
+    </div>
+  </main>;
 }

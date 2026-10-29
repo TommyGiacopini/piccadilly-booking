@@ -901,3 +901,7 @@ T06-B CLOSED e merged su main a178d32ee61de68846f2f66a8e35b85454c890e7 (tree abc
 T06-A CLOSED; T06-SEC CLOSED WITH RESERVATIONS; T06-B/C CLOSED e merged. T06-D conclude il percorso UX T06 con navigazione Staff/Admin, hub /admin e breadcrumb sulle funzionalità esistenti. Scope13 (11M/2A),437 file attesi e424 protetti. Nessun nuovo endpoint, migrazione, permesso, dipendenza o comportamento gestionale.
 
 Implementazione locale autorizzata; matrice D01 navigazione, D02 ruoli, D03 draft lifecycle, D04 responsive/accessibilità, D05 regressioni. Sono richiesti targeted/full Vitest e Playwright (workers1/retries0), Prisma generate/validate, lint, strict typecheck, build, hash/freeze, PostgreSQL temporaneo con guard prima del seed e pacchetto portabile esterno. Work Final QG indipendente rimane richiesto. Pubblicazione Git, deploy, DB persistente, Render e T07 non autorizzati.
+
+## T08 — Public progressive UI, 23 ottobre 2026
+T06 CLOSED; T07 CLOSED per equivalenza funzionale Foundation A, nessun nuovo backend richiesto. T08 implementazione locale autorizzata su12 path, con tre sezioni, conservazione valori, disponibilità fenced, retry idempotente ed OBS01 management minimo.
+Gate U01–U03/E01–E05/R01, full Vitest/Playwright workers1 retries0, Prisma/lint/typecheck/build, freeze e429 hash protetti. Test mutativi solo su PostgreSQL temporaneo verificato prima di seed/migration. Serve Work Final QG separato. T07_COV01/COV02, T09–T11, STG-01/02, M13 e provider/deploy restano esclusi; nessuna riconciliazione generale post-T06.

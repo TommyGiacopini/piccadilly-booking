@@ -18,17 +18,13 @@ async function login(page: Page) {
   await expect(page).toHaveURL(/\/dashboard/u);
 }
 
-async function fillPublic(page: Page, suffix: string) {
+async function fillPublic(page: Page) {
   await page.goto("/prenota");
   await page.getByLabel("Data", { exact: true }).fill(day);
   await page.getByLabel(totalLabel).fill("6");
   await expect(page.getByLabel("Orario disponibile").locator("option[value='19:00']")).toHaveCount(1);
   await page.getByLabel("Orario disponibile").selectOption("19:00");
-  await page.getByLabel("Nome", { exact: true }).fill(e2eReservationFirstName);
-  await page.getByLabel("Cognome", { exact: true }).fill(`Foundation ${suffix} ${e2eRunId}`);
-  await page.getByLabel("Telefono", { exact: true }).fill("+390000009515");
-  await page.getByLabel(/Accetto l.informativa privacy/u).check();
-  await page.getByLabel(/Accetto le condizioni di prenotazione/u).check();
+  await page.locator("section[aria-labelledby=booking-section-1]").getByRole("button", { name: "Continua", exact: true }).click();
   await expect(page.locator('select[name="roomCode"]')).toHaveCount(0);
 }
 
@@ -38,7 +34,16 @@ async function stored(suffix: string) {
   return result.rows[0];
 }
 
-async function submitPublic(page: Page) {
+async function submitPublic(page: Page, suffix: string) {
+  await expect(page.getByLabel("Orario disponibile").locator("option[value='19:00']")).toHaveCount(1);
+  await page.getByLabel("Orario disponibile").selectOption("19:00");
+  await page.locator("section[aria-labelledby=booking-section-2]").getByRole("button", { name: "Continua", exact: true }).click();
+  await page.getByLabel("Nome", { exact: true }).fill(e2eReservationFirstName);
+  await page.getByLabel("Cognome", { exact: true }).fill(`Foundation ${suffix} ${e2eRunId}`);
+  await page.getByLabel("Telefono", { exact: true }).fill("+390000009515");
+  await page.getByLabel(/Accetto l.informativa privacy/u).check();
+  await page.getByLabel(/Accetto le condizioni di prenotazione/u).check();
+
   const response = page.waitForResponse((candidate) => candidate.request().method() === "POST" && new URL(candidate.url()).pathname === "/api/public/reservations");
   await page.getByRole("button", { name: "Conferma prenotazione", exact: true }).click();
   expect((await response).status()).toBe(201);
@@ -52,7 +57,7 @@ test.describe("Foundation A party composition", () => {
     { suffix: "games-no", count: 2, games: false },
   ]) {
     test(`Public ${scenario.suffix} persists explicit composition without a physical room`, async ({ page }) => {
-      await fillPublic(page, scenario.suffix);
+      await fillPublic(page);
       if (scenario.count === 0) {
         await page.getByRole("radio", { name: "No, siamo tutti adulti", exact: true }).check();
         await expect(page.getByRole("group", { name: gamesLabel, exact: true })).toHaveCount(0);
@@ -67,7 +72,7 @@ test.describe("Foundation A party composition", () => {
         await page.getByLabel("Allergie (facoltative)", { exact: true }).fill('"'.repeat(300));
         await page.getByLabel("Intolleranze (facoltative)", { exact: true }).fill("\\".repeat(300));
       }
-      await submitPublic(page);
+      await submitPublic(page, scenario.suffix);
       expect(await stored(scenario.suffix)).toMatchObject({ party_size: 6, children_count: scenario.count, game_room_preference: scenario.games, arrived_at: null });
       const row = await stored(scenario.suffix);
       if (scenario.suffix === "games-no") {
@@ -93,7 +98,7 @@ test.describe("Foundation A party composition", () => {
   }
 
   test("invalid count blocks submission, switching clears hidden state, and reflow/keyboard remain usable", async ({ page }, testInfo) => {
-    await fillPublic(page, "switch");
+    await fillPublic(page);
     await page.getByRole("radio", { name: "Sì, ci sono bambini", exact: true }).check();
     const count = page.getByLabel("Quanti bambini ci sono?", { exact: true });
     await count.fill("7");
@@ -102,7 +107,7 @@ test.describe("Foundation A party composition", () => {
     await expect(page.getByRole("alert").filter({ hasText: "Il numero di bambini" })).toBeVisible();
     let requests = 0;
     page.on("request", (request) => { if (request.method() === "POST" && new URL(request.url()).pathname === "/api/public/reservations") requests += 1; });
-    await page.getByRole("button", { name: "Conferma prenotazione", exact: true }).click();
+    await page.locator("section[aria-labelledby=booking-section-2]").getByRole("button", { name: "Continua", exact: true }).click();
     expect(requests).toBe(0);
     await page.getByRole("radio", { name: "No, siamo tutti adulti", exact: true }).check();
     await expect(count).toHaveCount(0);
@@ -143,15 +148,15 @@ test.describe("Foundation A party composition", () => {
     expect(await adults.evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
     const targets = await page.locator('[data-party-composition] label').evaluateAll((labels) => labels.map((label) => label.getBoundingClientRect().height));
     expect(targets.every((height) => height >= 44)).toBe(true);
-    await submitPublic(page);
+    await submitPublic(page, "switch");
     expect(requests).toBe(1);
     expect(await stored("switch")).toMatchObject({ children_count: 0, game_room_preference: null });
   });
 
   test("legacy management preserves unknown and requires a fresh declaration for a new total", async ({ page }, testInfo) => {
-    await fillPublic(page, "legacy");
+    await fillPublic(page);
     await page.getByRole("radio", { name: "No, siamo tutti adulti", exact: true }).check();
-    await submitPublic(page);
+    await submitPublic(page, "legacy");
     const row = await stored("legacy");
     const legacyText = "Preferenza storica sintetica Management — città\nSeconda riga".padEnd(1000, "P");
     const originalPreferences = legacyText;
