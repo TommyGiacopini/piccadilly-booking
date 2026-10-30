@@ -160,6 +160,23 @@ export function resolvePdfExportPeriod(request: PdfExportRequest): ExportPeriod 
   };
 }
 
+// Compute range size without allocating one entry per requested day.
+export function resolveExcelExportBounds(request: ExcelExportRequest): Omit<ExportPeriod, "dates"> {
+  let fromDate: string, toDate: string;
+  if (request.mode === "DAY") { fromDate = request.date; toDate = request.date; }
+  else if (request.mode === "MONTH") {
+    fromDate = request.month + "-01";
+    const nextMonth = new Date(fromDate + "T00:00:00.000Z");
+    nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+    toDate = shiftCalendarDate(nextMonth.toISOString().slice(0, 10), -1);
+  } else { fromDate = request.from; toDate = request.to; }
+  if (!isLocalDate(fromDate) || !isLocalDate(toDate) || fromDate > toDate) throw new Error("Invalid export calendar range.");
+  return {
+    mode: request.mode, fromDate, toDate,
+    dayCount: Math.round((Date.parse(toDate + "T00:00:00.000Z") - Date.parse(fromDate + "T00:00:00.000Z")) / 86_400_000) + 1,
+  };
+}
+
 export function resolveExcelExportPeriod(request: ExcelExportRequest): ExportPeriod {
   if (request.mode === "DAY") {
     return {

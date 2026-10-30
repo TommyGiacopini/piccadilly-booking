@@ -1,8 +1,10 @@
+import { ExportPreviewDataError, type ExportPreviewRequest, type ExportPreviewSnapshot } from "@/modules/exports/domain/export-contract";
 import { randomUUID } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  ExportSnapshotTooLargeError,
   ExportActorUnavailableError,
   ExportApplicationError,
 } from "@/modules/exports/application/export-errors";
@@ -12,6 +14,7 @@ import type {
   ExportPorts,
 } from "@/modules/exports/application/export-ports";
 import {
+  createExportPreviewService,
   createExportService,
 } from "@/modules/exports/application/export-service";
 import {
@@ -356,5 +359,57 @@ describe("M11 export orchestration and failure injection", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+describe("T09 early limits and read-only preview orchestration", () => {
+  const selection: ExportPreviewRequest = { version: 2, target: "PDF", period: { mode: "DAY", date: "2026-10-29" }, service: "DINNER", room: "ALL", order: "CREATED_ASC" };
+  const previewSnapshot: ExportPreviewSnapshot = { restaurantName: "Artificial", timezone: "Europe/Rome", reservations: [], availableLegacyRooms: [] };
+  it("rejects an oversized legacy snapshot before invoking either renderer and records the original failure", async () => {
+    const render = vi.fn(async () => Buffer.from("not-called"));
+    const audit = vi.fn(async (input: AuditWriteInput) => { void input; });
+    await expect(generatePdfExport({ actor, request: { date: "2026-10-29" }, dependencies: {
+      readSnapshot: async () => snapshot(2001), renderPdf: render, writeAudit: audit,
+    } })).rejects.toMatchObject({ code: "EXPORT_TOO_LARGE" });
+    expect(render).not.toHaveBeenCalled(); expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit.mock.calls[0]?.[0]).toMatchObject({ outcome: "FAILURE", metadata: { failureCode: "EXPORT_TOO_LARGE" } });
+  });
+  it("handles reader-level overflow as the same 413 failure before rendering", async () => {
+    const render = vi.fn(async () => Buffer.from("not-called")), audit = vi.fn(async (input: AuditWriteInput) => { void input; });
+    await expect(generatePdfExport({ actor, request: { date: "2026-10-29" }, dependencies: {
+      readSnapshot: async () => { throw new ExportSnapshotTooLargeError(); }, renderPdf: render, writeAudit: audit,
+    } })).rejects.toMatchObject({ code: "EXPORT_TOO_LARGE" });
+    expect(render).not.toHaveBeenCalled(); expect(audit).toHaveBeenCalledTimes(1);
+  });
+  it("rejects a centuries-long RANGE before read/render without enumerating days", async () => {
+    const read = vi.fn(async () => snapshot()), render = vi.fn(async () => Buffer.from("not-called")), audit = vi.fn(async (input: AuditWriteInput) => { void input; });
+    await expect(generateExcelExport({ actor, request: { mode: "RANGE", from: "1900-01-01", to: "9999-12-31" }, dependencies: {
+      readSnapshot: read, renderExcel: render, writeAudit: audit,
+    } })).rejects.toMatchObject({ code: "EXPORT_RANGE_TOO_LARGE" });
+    expect(read).not.toHaveBeenCalled(); expect(render).not.toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledTimes(1); expect(audit.mock.calls[0]?.[0]).toMatchObject({ outcome: "FAILURE", metadata: { dayCount: 2958464 } });
+  });
+  it("returns a positive empty preview through ports with no renderer or audit dependency", async () => {
+    const read = vi.fn(async () => previewSnapshot);
+    const service = createExportPreviewService({ snapshotReader: { read }, clock: { now: () => new Date("2026-10-29T12:00:00Z") } });
+    const result = await service.readPreview({ actor, selection });
+    expect(result).toMatchObject({ contractVersion: 2, source: "POSTGRESQL", readAt: "2026-10-29T12:00:00.000Z", summary: { reservationCount: 0 } });
+    expect(read).toHaveBeenCalledWith({ actor, selection, maximumReservations: 2000 });
+  });
+  it.each([
+    [new ExportActorUnavailableError(), "FORBIDDEN"],
+    [new ExportSnapshotTooLargeError(), "EXPORT_TOO_LARGE"],
+    [new ExportPreviewDataError(), "EXPORT_DATA_INCONSISTENT"],
+    [new Error("PRIVATE_DATABASE_CONTENT"), "EXPORT_PREVIEW_FAILED"],
+  ] as const)("maps preview failures without exposing data %#", async (failure, code) => {
+    const service = createExportPreviewService({ snapshotReader: { read: async () => { throw failure; } }, clock: { now: () => new Date() } });
+    try { await service.readPreview({ actor, selection }); throw new Error("Expected failure"); }
+    catch (error) { expect(error).toMatchObject({ code }); expect(String(error)).not.toContain("PRIVATE_DATABASE_CONTENT"); }
+  });
+  it("rejects adapter overflow even when a non-database reader ignores the cap", async () => {
+    const service = createExportPreviewService({
+      snapshotReader: { read: async () => ({ ...previewSnapshot, reservations: new Array(2001).fill(null) }) }, clock: { now: () => new Date() },
+    });
+    await expect(service.readPreview({ actor, selection })).rejects.toMatchObject({ code: "EXPORT_TOO_LARGE" });
   });
 });

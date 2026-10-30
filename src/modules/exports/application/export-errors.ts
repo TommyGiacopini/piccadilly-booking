@@ -3,7 +3,10 @@ export type ExportApplicationErrorCode =
   | "EXPORT_RANGE_TOO_LARGE"
   | "EXPORT_TOO_LARGE"
   | "EXPORT_GENERATION_FAILED"
-  | "EXPORT_AUDIT_FAILED";
+  | "EXPORT_AUDIT_FAILED"
+  | "EXPORT_PREVIEW_FAILED"
+  | "EXPORT_DATA_INCONSISTENT"
+  | "EXPORT_REQUEST_TOO_LARGE";
 
 export class ExportApplicationError extends Error {
   constructor(
@@ -22,6 +25,10 @@ export class ExportActorUnavailableError extends Error {
   }
 }
 
+export class ExportSnapshotTooLargeError extends Error {
+  constructor() { super("Export exceeds the record limit."); this.name = "ExportSnapshotTooLargeError"; }
+}
+
 export function exportErrorStatus(code: ExportApplicationErrorCode): number {
   switch (code) {
     case "FORBIDDEN":
@@ -29,9 +36,13 @@ export function exportErrorStatus(code: ExportApplicationErrorCode): number {
     case "EXPORT_RANGE_TOO_LARGE":
       return 422;
     case "EXPORT_TOO_LARGE":
+    case "EXPORT_REQUEST_TOO_LARGE":
       return 413;
+    case "EXPORT_DATA_INCONSISTENT":
+      return 422;
     case "EXPORT_GENERATION_FAILED":
     case "EXPORT_AUDIT_FAILED":
+    case "EXPORT_PREVIEW_FAILED":
       return 500;
   }
 }

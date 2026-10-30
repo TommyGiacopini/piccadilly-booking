@@ -239,7 +239,7 @@ test.describe.serial("M11 export PDF ed Excel", () => {
     });
 
     await page.goto(`/dashboard?date=${exportDate}`);
-    const panelButtons = page.getByTestId("export-panel").locator("button");
+    const panelButtons = page.getByTestId("legacy-export-downloads").locator("button");
     const pdfButton = panelButtons.nth(0);
     const dayButton = panelButtons.nth(1);
 
@@ -333,7 +333,7 @@ test.describe.serial("M11 export PDF ed Excel", () => {
       ]) {
         await page.setViewportSize(viewport);
         await expect(page.getByTestId("export-panel")).toBeVisible();
-        const overflow = await page.getByTestId("export-panel").evaluate((panel) => {
+        const overflow = await page.getByTestId("legacy-export-downloads").evaluate((panel) => {
           const panelRectangle = panel.getBoundingClientRect();
           const overflowingElements = [panel, ...panel.querySelectorAll<HTMLElement>("*")]
             .filter((element) => {
@@ -351,7 +351,7 @@ test.describe.serial("M11 export PDF ed Excel", () => {
 
           return {
             overflowingElements,
-            panelRight: panelRectangle.right,
+            panelRight: panel.closest('[data-testid="export-panel"]')!.getBoundingClientRect().right,
             viewportWidth: window.innerWidth,
           };
         });

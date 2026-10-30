@@ -1,3 +1,5 @@
+import { buildExportPreview, ExportPreviewDataError, type ExportPreviewRequest } from "@/modules/exports/domain/export-contract";
+import { ExportSnapshotTooLargeError } from "@/modules/exports/application/export-errors";
 import { randomUUID } from "node:crypto";
 
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -12,6 +14,7 @@ import { resolveExcelExportPeriod } from "@/modules/exports/domain/export-domain
 import { createInfrastructureExportService } from "@/modules/exports/infrastructure/export-composition";
 import {
   ExportActorUnavailableError,
+  readExportPreviewWithClient,
   readExportSnapshot,
   readExportSnapshotWithClient,
 } from "@/modules/exports/infrastructure/export-repository";
@@ -566,5 +569,106 @@ describe("M11 PostgreSQL export snapshot", () => {
       getAuditEventDetail(auditViewer, "ADMINISTRATIVE", decoyAudit.id),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(await businessFingerprint()).toBe(before);
+  });
+});
+
+describe.sequential("T09 PostgreSQL preview read model", () => {
+  const actor = { id: staffId, restaurantId };
+  const selection: ExportPreviewRequest = { version: 2, target: "PDF", period: { mode: "DAY", date: localDate }, service: "DINNER", room: "ALL", order: "CREATED_ASC" };
+  it("uses a positive SQL select without NI, phone or email and keeps only authorized confirmed records", async () => {
+    const client = new PrismaClient({ adapter: new PrismaPg({ connectionString: resolveDatabaseUrl(process.env.DATABASE_URL) }), log: [{ emit: "event", level: "query" }] });
+    const queries: string[] = []; client.$on("query", event => queries.push(event.query));
+    const before = await businessFingerprint(), auditBefore = await prisma.auditEvent.count({ where: { restaurantId } });
+    try {
+      const snapshot = await readExportPreviewWithClient(client, { actor, selection, maximumReservations: 2000 });
+      const dto = buildExportPreview({ selection, snapshot, readAt: new Date() });
+      expect(snapshot.reservations.map(row => row.id)).toContain(assignedReservationId);
+      expect(snapshot.reservations.map(row => row.id)).not.toContain(cancelledReservationId);
+      expect(snapshot.reservations.map(row => row.id)).not.toContain(otherReservationId);
+      expect(snapshot.reservations.find(row => row.id === clearedReservationId)?.assignment).toBeNull();
+      expect(dto.groups[1].rows.find(row => row.customerLastName === "Assegnata")).toMatchObject({ tableNames: ["Tavolo grandfathered"], childrenCount: null, adultsCount: null, legacyChildren: true });
+      expect(JSON.stringify(dto)).toContain("Nota esportabile");
+      expect(queries.some(query => /private_notes|internal_notes|customer_phone|customer_email/u.test(query))).toBe(false);
+      expect(queries.some(query => /LIMIT/u.test(query))).toBe(true);
+      expect(queries.length).toBeLessThanOrEqual(12);
+      expect(await businessFingerprint()).toBe(before);
+      expect(await prisma.auditEvent.count({ where: { restaurantId } })).toBe(auditBefore);
+    } finally { await client.$disconnect(); }
+  });
+  it("filters day, service and actual room without interpreting a room preference", async () => {
+    const room = await readExportPreviewWithClient(prisma, { actor, selection: { ...selection, room: "SALA_1" }, maximumReservations: 2000 });
+    expect(room.reservations.map(row => row.id)).toEqual([assignedReservationId]);
+    expect(room.reservations[0].preferredRoom).toBe("Sala 2");
+    const unassigned = await readExportPreviewWithClient(prisma, { actor, selection: { ...selection, room: "UNASSIGNED" }, maximumReservations: 2000 });
+    expect(unassigned.reservations.map(row => row.id)).toContain(clearedReservationId);
+    expect(unassigned.reservations.map(row => row.id)).not.toContain(assignedReservationId);
+    const lunch = await readExportPreviewWithClient(prisma, { actor, selection: { ...selection, service: "LUNCH" }, maximumReservations: 2000 });
+    expect(lunch.reservations).toEqual([]);
+    const otherDate = await readExportPreviewWithClient(prisma, { actor, selection: { ...selection, period: { mode: "DAY", date: "2026-08-25" } }, maximumReservations: 2000 });
+    expect(otherDate.reservations).toEqual([]);
+  });
+  it("keeps legacy options independent of the current room filter and preserves room-only and authoritative composition", async () => {
+    const legacyId = randomUUID(), roomOnlyId = randomUUID();
+    await prisma.reservation.createMany({ data: [
+      { ...reservationData({ id: legacyId, lastName: "Legacy Galleria" }), childrenCount: 1, gameRoomPreference: true },
+      { ...reservationData({ id: roomOnlyId, lastName: "Room only adults" }), childrenCount: 0, gameRoomPreference: null },
+    ] });
+    await prisma.reservationAssignment.createMany({ data: [
+      { restaurantId, reservationId: legacyId, roomId: roomIds.get("galleria")!, assignedByUserId: staffId, updatedByUserId: staffId },
+      { restaurantId, reservationId: roomOnlyId, roomId: roomIds.get("sala-2")!, assignedByUserId: staffId, updatedByUserId: staffId },
+    ] });
+    try {
+      const single = await readExportPreviewWithClient(prisma, { actor, selection: { ...selection, room: "SALA_1" }, maximumReservations: 2000 });
+      expect(single.availableLegacyRooms).toContain("GALLERIA"); expect(single.reservations).toHaveLength(1);
+      const legacySelection = { ...selection, room: "GALLERIA" as const };
+      const legacy = buildExportPreview({ selection: legacySelection, snapshot: await readExportPreviewWithClient(prisma, { actor, selection: legacySelection, maximumReservations: 2000 }), readAt: new Date() });
+      expect(legacy.groups[0]).toMatchObject({ key: "GALLERIA", legacy: true, summary: { reservationCount: 1 } });
+      expect(legacy.groups[0].rows[0]).toMatchObject({ childrenCount: 1, adultsCount: 1, gameRoomPreference: true, assignmentState: "ROOM_ONLY" });
+      const roomSelection = { ...selection, room: "SALA_2" as const };
+      const adults = buildExportPreview({ selection: roomSelection, snapshot: await readExportPreviewWithClient(prisma, { actor, selection: roomSelection, maximumReservations: 2000 }), readAt: new Date() });
+      expect(adults.groups[0].rows[0]).toMatchObject({ childrenCount: 0, adultsCount: 2, gameRoomPreference: null, assignmentState: "ROOM_ONLY" });
+    } finally {
+      await prisma.reservationAssignment.deleteMany({ where: { reservationId: { in: [legacyId, roomOnlyId] } } });
+      await prisma.reservation.deleteMany({ where: { id: { in: [legacyId, roomOnlyId] } } });
+    }
+  });
+  it("rejects cap+1 rows after the selection filters and leaves business data unchanged", async () => {
+    const before = await businessFingerprint();
+    await expect(readExportPreviewWithClient(prisma, { actor, selection, maximumReservations: 1 })).rejects.toBeInstanceOf(ExportSnapshotTooLargeError);
+    await expect(readExportPreviewWithClient(prisma, { actor, selection: { ...selection, room: "SALA_1" }, maximumReservations: 1 })).resolves.toMatchObject({ reservations: [{ id: assignedReservationId }] });
+    expect(await businessFingerprint()).toBe(before);
+  });
+  it("keeps a RepeatableRead preview coherent, while a subsequent read sees the concurrent update", async () => {
+    const current = await prisma.reservation.findUniqueOrThrow({ where: { id: concurrentReservationId }, select: { notes: true } });
+    const other = new PrismaClient({ adapter: new PrismaPg({ connectionString: resolveDatabaseUrl(process.env.DATABASE_URL) }) });
+    try {
+      const snapshot = await readExportPreviewWithClient(prisma, { actor, selection, maximumReservations: 2000 }, {
+        afterContextRead: async () => { await other.reservation.update({ where: { id: concurrentReservationId }, data: { notes: "T09_AFTER_SNAPSHOT" } }); },
+      });
+      expect(snapshot.reservations.find(row => row.id === concurrentReservationId)?.notes).toBe(current.notes);
+      const next = await readExportPreviewWithClient(prisma, { actor, selection, maximumReservations: 2000 });
+      expect(next.reservations.find(row => row.id === concurrentReservationId)?.notes).toBe("T09_AFTER_SNAPSHOT");
+    } finally {
+      await other.$disconnect();
+      await prisma.reservation.update({ where: { id: concurrentReservationId }, data: { notes: current.notes } });
+    }
+  });
+  it("rejects disabled, password-change and tenant-mismatched actors", async () => {
+    for (const denied of [disabledStaffId, mustChangeStaffId, otherStaffId]) await expect(
+      readExportPreviewWithClient(prisma, { actor: { id: denied, restaurantId }, selection, maximumReservations: 2000 }),
+    ).rejects.toBeInstanceOf(ExportActorUnavailableError);
+  });
+  it("fails closed for an actual noncanonical room instead of moving it to UNASSIGNED", async () => {
+    const roomId = randomUUID(), id = randomUUID();
+    await prisma.room.create({ data: { id: roomId, restaurantId, code: "t09-noncanonical", name: "Artificial unknown" } });
+    await prisma.reservation.create({ data: reservationData({ id, lastName: "Invalid assignment" }) });
+    await prisma.reservationAssignment.create({ data: { restaurantId, reservationId: id, roomId, assignedByUserId: staffId, updatedByUserId: staffId } });
+    try {
+      const snapshot = await readExportPreviewWithClient(prisma, { actor, selection, maximumReservations: 2000 });
+      expect(() => buildExportPreview({ selection, snapshot, readAt: new Date() })).toThrow(ExportPreviewDataError);
+    } finally {
+      await prisma.reservationAssignment.deleteMany({ where: { reservationId: id } });
+      await prisma.reservation.delete({ where: { id } }); await prisma.room.delete({ where: { id: roomId } });
+    }
   });
 });
