@@ -905,3 +905,11 @@ Implementazione locale autorizzata; matrice D01 navigazione, D02 ruoli, D03 draf
 ## T08 — Public progressive UI, 23 ottobre 2026
 T06 CLOSED; T07 CLOSED per equivalenza funzionale Foundation A, nessun nuovo backend richiesto. T08 implementazione locale autorizzata su12 path, con tre sezioni, conservazione valori, disponibilità fenced, retry idempotente ed OBS01 management minimo.
 Gate U01–U03/E01–E05/R01, full Vitest/Playwright workers1 retries0, Prisma/lint/typecheck/build, freeze e429 hash protetti. Test mutativi solo su PostgreSQL temporaneo verificato prima di seed/migration. Serve Work Final QG separato. T07_COV01/COV02, T09–T11, STG-01/02, M13 e provider/deploy restano esclusi; nessuna riconciliazione generale post-T06.
+
+## T09 — Export redesign foundation, selection & preview
+
+Implementazione locale autorizzata dal Controller sul main110e454d3fc5361bfdeaca65a490e23c87f63894, tree8768395a4962e39ab2a8f076b072a651e833212e, schema16. Scope23 (17M/6A),447 file finali attesi,424 baseline protetti. Contratto D01–D10: selezione giorno/servizio, gruppi sala, composizione e preview HTML protetta, mantenendo i download M11.
+
+Gate previsti: domain/service, PostgreSQL e Route Handler reali, browser/privacy, full Vitest/Playwright workers1 retries0, Prisma/lint/typecheck/build, integrità dipendenze/scope/freeze e portable evidence. Automatici mutativi solo su PostgreSQL temporaneo positivamente identificato prima di seed/migration. La tranche non è CLOSED: serve Work3 Final QG indipendente e nessuna pubblicazione deriva dall'autorizzazione locale.
+
+T10 e T11 non avviate: renderer, formato documenti e download V2 rimangono esclusi. M13/Render sospesa, nessuna configurazione Tailscale o preparazione deploy. Nessun uso mutativo del database di lavoro.

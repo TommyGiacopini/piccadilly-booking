@@ -5,7 +5,8 @@ import {
   exportErrorStatus,
 } from "@/modules/exports/application/export-errors";
 import type { GeneratedExport } from "@/modules/exports/application/export-service";
-import { createInfrastructureExportService } from "@/modules/exports/infrastructure/export-composition";
+import { createInfrastructureExportService, createInfrastructurePreviewService } from "@/modules/exports/infrastructure/export-composition";
+import { readDraftRequestSession, draftSessionBindingError, DRAFT_SESSION_BINDING_HEADER } from "@/server/auth/draft-session-context";
 import {
   getRequestUser,
   passwordChangeRequiredResponse,
@@ -21,6 +22,59 @@ const noStoreHeaders = {
 } as const;
 
 export const exportService = createInfrastructureExportService();
+export const previewService = createInfrastructurePreviewService();
+export function previewJson(body: unknown, status = 200): NextResponse {
+  return NextResponse.json(body, { status, headers: { ...noStoreHeaders, "Cache-Control": "private, no-store, max-age=0" } });
+}
+export function previewErrorResponse(error: unknown): Response {
+  if (error instanceof ExportApplicationError) return previewJson({ code: error.code, error: error.publicMessage }, exportErrorStatus(error.code));
+  return previewJson({ code: "EXPORT_PREVIEW_FAILED", error: "Non è stato possibile leggere l'anteprima." }, 500);
+}
+export async function requirePreviewUser(request: Request): Promise<
+  { user: AuthenticatedUser; response: null } | { user: null; response: Response }
+> {
+  const session = await readDraftRequestSession(request);
+  if (!session) return { user: null, response: previewJson({ code: "UNAUTHENTICATED", error: "Unauthorized" }, 401) };
+  const { user, sessionBinding } = session;
+  const passwordGuard = passwordChangeRequiredResponse(user);
+  if (passwordGuard) {
+    const headers = new Headers(passwordGuard.headers);
+    for (const [key, value] of Object.entries(noStoreHeaders)) headers.set(key, value);
+    headers.set("Cache-Control", "private, no-store, max-age=0");
+    return { user: null, response: new Response(passwordGuard.body, { status: passwordGuard.status, headers }) };
+  }
+  if ((user.role !== "STAFF" && user.role !== "ADMIN") || !isSameOriginRequest(request, resolveAuthConfig().trustProxy)) {
+    return { user: null, response: previewJson({ code: "FORBIDDEN", error: "Forbidden" }, 403) };
+  }
+  // The existing helper permits headerless legacy requests; this new boundary does not.
+  if (!request.headers.has(DRAFT_SESSION_BINDING_HEADER)) return {
+    user: null, response: previewJson({ code: "DRAFT_SESSION_BINDING_INVALID", error: "Contesto della sessione non valido." }, 400),
+  };
+  const bindingError = draftSessionBindingError(request, sessionBinding);
+  if (bindingError) return { user: null, response: previewJson({ code: bindingError.code, error: "Contesto della sessione non valido." }, bindingError.status) };
+  return { user, response: null };
+}
+export async function readPreviewJson(request: Request): Promise<unknown> {
+  const media = request.headers.get("content-type")?.split(";").map(part => part.trim().toLowerCase()) ?? [];
+  const encoding = request.headers.get("content-encoding")?.trim().toLowerCase();
+  if (media[0] !== "application/json" || media.slice(1).some(part => part && part !== "charset=utf-8")
+    || encoding && encoding !== "identity") throw new TypeError("INVALID_PREVIEW_JSON");
+  const length = request.headers.get("content-length");
+  const tooLarge = () => new ExportApplicationError("EXPORT_REQUEST_TOO_LARGE", "La richiesta supera il limite consentito.");
+  if (length && /^\d+$/u.test(length) && Number(length) > 2048) throw tooLarge();
+  if (!request.body) throw new TypeError("INVALID_PREVIEW_JSON");
+  const reader = request.body.getReader(), bytes = new Uint8Array(2048);
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (size + value.byteLength > bytes.byteLength) { void reader.cancel().catch(() => undefined); throw tooLarge(); }
+      bytes.set(value, size); size += value.byteLength;
+    }
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size)));
+  } finally { reader.releaseLock(); }
+}
 
 export function exportJson(body: unknown, status: number): NextResponse {
   return NextResponse.json(body, { status, headers: noStoreHeaders });

@@ -521,3 +521,11 @@ Le riserve D01 headerless storico, BFCache senza attivazione reale certificata, 
 ## T08 — Decisioni Controller congelate, 23 ottobre 2026
 Alternativa A approvata: progressione locale nella stessa pagina con tre sezioni; copy IT/EN del mandato, sette chiavi M9 invariate. Note sempre accessibili anche anticipatamente, senza bypass della disponibilità o dei consensi. Management B approvato: sola correzione OBS01 e fencing delle letture, con layout e contratti PATCH/DELETE preservati.
 Tentativo incerto conservato integralmente per retry; avviso prima di edit esplicito, nessun invio automatico con chiave nuova. T07 chiuso per equivalenza; T07_COV01/T07_COV02 restano limiti di copertura separati, esclusi da questa implementazione. Scope T08:12 path,8 modificati/4 aggiunti,441 record finali e429 baseline protetti. Autorizzazione locale senza staging/commit/push/PR/merge/deploy o database persistente.
+
+## T09 — Ratifica Controller D01–D10 (29 ottobre 2026)
+
+Il contratto finale approva preview immediatamente operativa e download M11 separati (D01); data iniziale Agenda e servizio esplicito (D02); gruppi per sala effettiva con sort interno, superando la proposta globale iniziale (D03); Galleria/Terrazzo come filtri legacy pertinenti senza riclassificazione (D04). Letture fresche distinte, timestamp e nessuna promessa di snapshot temporale condiviso (D05).
+
+Nuovo POST preview V2 strict soltanto DAY/LUNCH/DINNER, senza modificare le route PDF/Excel M11 (D06). Auth request-scoped, proof fresca, binding obbligatorio, Origin e privacy positive, nessuna modifica ad auth core/root host (D07). Body2048 byte reali, bounds prima dell'enumerazione, cap+1 e controllo pre-render, soglie2.000/20.000/25MiB/31giorni invariate (D08). Preview senza eventi di generazione file, audit download preservato (D09). Composizione autorevole, unknown distinto da0, NC autorizzate e NI/telefono/email fuori dalla preview (D10).
+
+Scope locale ratificato23 path,17M/6A/0D,447 file previsti e424 baseline protetti. Nessuna pubblicazione Git o deploy. Il dettaglio dei documenti futuri rimane distinto: PDF portrait B/N e campo penna in T10; Agenda Excel è direzione progettuale T11,24 campi storici/Wvuota preservati e campi aggiuntivi solo con successiva ratifica. Nessun nuovo rischio viene accettato per produzione e nessuna advisory è dichiarata risolta da T09.

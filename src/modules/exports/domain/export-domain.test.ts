@@ -6,6 +6,7 @@ import {
   EXCEL_EXPORT_HEADERS,
 } from "@/modules/exports/infrastructure/exceljs-export-renderer";
 import {
+  resolveExcelExportBounds,
   EXPORT_SECTION_DEFINITIONS,
   buildExportDays,
   compareExportTables,
@@ -269,5 +270,20 @@ describe("M11 spreadsheet safety and deterministic names", () => {
       "dayCount",
       "failureCode",
     ]);
+  });
+});
+
+describe("T09 calendar bounds before enumeration", () => {
+  it.each([
+    [{ mode: "DAY", date: "2026-10-29" }, 1],
+    [{ mode: "MONTH", month: "2024-02" }, 29],
+    [{ mode: "RANGE", from: "2026-03-28", to: "2026-03-30" }, 3],
+    [{ mode: "RANGE", from: "2026-10-01", to: "2026-10-31" }, 31],
+    [{ mode: "RANGE", from: "2026-10-01", to: "2026-11-01" }, 32],
+    [{ mode: "RANGE", from: "1900-01-01", to: "9999-12-31" }, 2958464],
+  ] as const)("computes calendar day count without a dates array %#", (request, count) => {
+    const bounds = resolveExcelExportBounds(request);
+    expect(bounds.dayCount).toBe(count);
+    expect(bounds).not.toHaveProperty("dates");
   });
 });

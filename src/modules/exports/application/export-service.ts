@@ -8,6 +8,7 @@ import {
   exportSuccessAuditMetadata,
   pdfExportFilename,
   resolveExcelExportPeriod,
+  resolveExcelExportBounds,
   resolvePdfExportPeriod,
   type ExcelExportRequest,
   type ExportFailureCode,
@@ -19,11 +20,17 @@ import {
 import {
   ExportActorUnavailableError,
   ExportApplicationError,
+  ExportSnapshotTooLargeError,
 } from "@/modules/exports/application/export-errors";
 import type {
   ExportActorReference,
   ExportPorts,
+  ExportPreviewPorts,
 } from "@/modules/exports/application/export-ports";
+import {
+  buildExportPreview, ExportPreviewDataError, exportPreviewResponseSchema, previewReservationLimit,
+  type ExportPreviewRequest, type ExportPreviewDto,
+} from "@/modules/exports/domain/export-contract";
 
 export interface GeneratedExport {
   buffer: Buffer;
@@ -108,11 +115,17 @@ async function executeExport(
     snapshot = await ports.snapshotReader.read({
       actor: input.actor,
       period: input.period,
+      maximumReservations: input.maximumReservations,
     });
+    if (snapshot.reservationCount > input.maximumReservations) throw new ExportSnapshotTooLargeError();
     phase = "RENDER";
     buffer = await input.render(snapshot);
   } catch (error) {
     if (error instanceof ExportActorUnavailableError) throw actorForbidden();
+    if (error instanceof ExportSnapshotTooLargeError) {
+      await failureAudit(ports, { actor: input.actor, format: input.format, period: input.period, correlationId, failureCode: "EXPORT_TOO_LARGE" });
+      throw new ExportApplicationError("EXPORT_TOO_LARGE", "L'esportazione supera i limiti tecnici consentiti.");
+    }
     console.error("Export generation failed.", {
       format: input.format,
       phase,
@@ -197,13 +210,13 @@ export function createExportService(ports: ExportPorts): ExportService {
     },
 
     async generateExcelExport(input) {
-      const period = resolveExcelExportPeriod(input.request);
-      if (period.dayCount > EXPORT_MAX_RANGE_DAYS) {
+      const bounds = resolveExcelExportBounds(input.request);
+      if (bounds.dayCount > EXPORT_MAX_RANGE_DAYS) {
         const correlationId = ports.correlationIds.generate();
         await failureAudit(ports, {
           actor: input.actor,
           format: "EXCEL",
-          period,
+          period: { ...bounds, dates: [] },
           correlationId,
           failureCode: "EXPORT_RANGE_TOO_LARGE",
         });
@@ -212,6 +225,7 @@ export function createExportService(ports: ExportPorts): ExportService {
           "L'intervallo può includere al massimo 31 giorni.",
         );
       }
+      const period = resolveExcelExportPeriod(input.request);
       return executeExport(ports, {
         actor: input.actor,
         format: "EXCEL",
@@ -222,6 +236,26 @@ export function createExportService(ports: ExportPorts): ExportService {
         maximumReservations: EXCEL_MAX_RESERVATIONS,
         render: (snapshot) => ports.excelRenderer.render(snapshot),
       });
+    },
+  };
+}
+
+export function createExportPreviewService(ports: ExportPreviewPorts) {
+  return {
+    async readPreview(input: { actor: ExportActorReference; selection: ExportPreviewRequest }): Promise<ExportPreviewDto> {
+      try {
+        const maximumReservations = previewReservationLimit(input.selection.target);
+        const snapshot = await ports.snapshotReader.read({ actor: input.actor, selection: input.selection, maximumReservations });
+        if (snapshot.reservations.length > maximumReservations) throw new ExportSnapshotTooLargeError();
+        const dto = exportPreviewResponseSchema.parse(buildExportPreview({ selection: input.selection, snapshot, readAt: ports.clock.now() }));
+        if (Buffer.byteLength(JSON.stringify(dto), "utf8") > EXPORT_MAX_BUFFER_BYTES) throw new ExportSnapshotTooLargeError();
+        return dto;
+      } catch (error) {
+        if (error instanceof ExportActorUnavailableError) throw actorForbidden();
+        if (error instanceof ExportSnapshotTooLargeError) throw new ExportApplicationError("EXPORT_TOO_LARGE", "La selezione supera i limiti tecnici consentiti.");
+        if (error instanceof ExportPreviewDataError) throw new ExportApplicationError("EXPORT_DATA_INCONSISTENT", "I dati della selezione non sono coerenti. Contatta un amministratore.");
+        throw new ExportApplicationError("EXPORT_PREVIEW_FAILED", "Non è stato possibile leggere l'anteprima.");
+      }
     },
   };
 }

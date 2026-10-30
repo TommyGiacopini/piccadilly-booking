@@ -1,8 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ExportPreview } from "@/app/dashboard/export-preview";
+import { StaffSensitiveRegion, useStaffDraftHost, useStaffHostView } from "@/app/_components/staff/staff-draft-host";
+import { sameDraftSession, type StaffDraftIdentity } from "@/modules/dashboard/domain/staff-draft-state";
+import { EXPORT_PREVIEW_ROOMS, exportPreviewRequestSchema, exportPreviewResponseSchema, type ExportPreviewRequest, type ExportPreviewDto } from "@/modules/exports/domain/export-contract";
 
-type ExportAction = "PDF" | "DAY" | "MONTH" | "RANGE";
+type ExportAction = "PDF" | "DAY" | "MONTH" | "RANGE" | "PREVIEW";
+interface PreviewStamp { identity: StaffDraftIdentity; epoch: number; lease: number; route: string }
+const currentRoute = () => window.location.pathname + window.location.search;
 
 function responseFilename(response: Response, fallback: string): string {
   const disposition = response.headers.get("content-disposition");
@@ -27,6 +33,92 @@ export function ExportPanel({ dashboardDate }: { dashboardDate: string }) {
   const [loading, setLoading] = useState<ExportAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const requestInFlight = useRef(false);
+const controller = useStaffDraftHost(), host = useStaffHostView();
+  const [form, setForm] = useState({ date: dashboardDate, service: "", room: "ALL" as ExportPreviewRequest["room"], order: "CREATED_ASC" as ExportPreviewRequest["order"], target: "PDF" as ExportPreviewRequest["target"] });
+  const [preview, setPreview] = useState<{ data: ExportPreviewDto; stamp: PreviewStamp; generation: number } | null>(null);
+  const [previewStatus, setPreviewStatus] = useState("IDLE");
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [invalidFields, setInvalidFields] = useState<string[]>([]);
+  const errorSummary = useRef<HTMLDivElement>(null);
+  const generation = useRef(0);
+  const activePreview = useRef<{ id: number; route: string; abort: AbortController; stamp?: PreviewStamp } | null>(null);
+  const cancelPreview = useCallback(() => {
+    ++generation.current;
+    const active = activePreview.current;
+    active?.abort.abort(); activePreview.current = null;
+    if (active) { requestInFlight.current = false; setLoading(value => value === "PREVIEW" ? null : value); }
+    setPreview(null); setPreviewError(null); setPreviewStatus("STALE");
+  }, []);
+  const stampMatches = useCallback((stamp: PreviewStamp) => {
+    const view = controller.getSnapshot().drafts;
+    return controller.sessionVisible() && stamp.route === currentRoute()
+      && view.authEpoch === stamp.epoch && view.leaseEpoch === stamp.lease
+      && view.identity !== null && sameDraftSession(stamp.identity, view.identity);
+  }, [controller]);
+  useLayoutEffect(() => {
+    const active = activePreview.current;
+    // The proof's own quarantine is expected before a dataset lease exists.
+    if (active?.stamp && !stampMatches(active.stamp) || preview && !stampMatches(preview.stamp)) cancelPreview();
+  }, [cancelPreview, stampMatches, preview, host.revision]);
+  useEffect(() => () => {
+    ++generation.current; activePreview.current?.abort.abort(); activePreview.current = null;
+  }, []);
+  useLayoutEffect(() => { if (previewError) errorSummary.current?.focus(); }, [previewError]);
+  function change<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    cancelPreview(); setInvalidFields([]); setForm(previous => ({ ...previous, [key]: value }));
+  }
+  async function loadPreview() {
+    if (requestInFlight.current) return;
+    const parsed = exportPreviewRequestSchema.safeParse({
+      version: 2, target: form.target, period: { mode: "DAY", date: form.date },
+      service: form.service, room: form.room, order: form.order,
+    });
+    if (!parsed.success) {
+      setInvalidFields(parsed.error.issues.map(issue => String(issue.path[0] === "period" ? "date" : issue.path[0])));
+      setPreviewError("Verifica la data e scegli esplicitamente Pranzo o Cena."); return;
+    }
+    cancelPreview(); setInvalidFields([]);
+    requestInFlight.current = true; setLoading("PREVIEW"); setPreviewStatus("CHECKING_SESSION");
+    const intent = { id: generation.current, route: currentRoute(), abort: new AbortController(), stamp: undefined as PreviewStamp | undefined };
+    activePreview.current = intent;
+    const ownsIntent = () => activePreview.current === intent && generation.current === intent.id && currentRoute() === intent.route;
+    try {
+      const identity = await controller.verifySession();
+      if (!ownsIntent()) return;
+      if (!identity || !controller.sessionVisible() || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u.test(identity.sessionBinding)) throw new Error("Verifica della sessione non disponibile. Nessuna anteprima caricata; riprova.");
+      const state = controller.getSnapshot().drafts;
+      intent.stamp = { identity, epoch: state.authEpoch, lease: state.leaseEpoch, route: intent.route };
+      if (!stampMatches(intent.stamp)) return;
+      setPreviewStatus("LOADING");
+      const response = await fetch("/api/staff/exports/preview", {
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: intent.abort.signal,
+        headers: { "Content-Type": "application/json", "X-Piccadilly-Draft-Session-Binding": identity.sessionBinding },
+        body: JSON.stringify(parsed.data),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+      if (response.status === 401 || response.status === 403) {
+        controller.quarantine(); cancelPreview(); setPreviewError("Sessione non confermata. I dati precedenti sono stati scartati; verifica l'accesso e riprova."); return;
+      }
+      if (!response.ok) {
+        const code = body && typeof body === "object" && "code" in body ? body.code : null;
+        throw new Error(code === "EXPORT_TOO_LARGE" ? "La selezione supera i limiti tecnici consentiti."
+          : code === "EXPORT_DATA_INCONSISTENT" ? "I dati non sono coerenti. Contatta un amministratore."
+          : "Non è stato possibile leggere l'anteprima. Riprova.");
+      }
+      const result = exportPreviewResponseSchema.safeParse(body);
+      if (!result.success || JSON.stringify(result.data.selection) !== JSON.stringify(parsed.data)) throw new Error("Risposta di anteprima non valida. Riprova.");
+      setPreview({ data: result.data, stamp: intent.stamp, generation: intent.id });
+      setPreviewStatus(result.data.summary.reservationCount ? "READY" : "EMPTY");
+    } catch (failure) {
+      if (ownsIntent() && (!intent.stamp || stampMatches(intent.stamp))) {
+        setPreviewStatus("ERROR");
+        setPreviewError(failure instanceof Error && failure.name !== "AbortError" ? failure.message : "Anteprima interrotta. Riprova.");
+      }
+    } finally {
+      if (activePreview.current === intent) { activePreview.current = null; requestInFlight.current = false; setLoading(null); }
+    }
+  }
 
   async function download(
     action: ExportAction,
@@ -88,6 +180,53 @@ export function ExportPanel({ dashboardDate }: { dashboardDate: string }) {
       <h2 className="mt-1 text-xl font-black text-zinc-950" id="export-panel-title">
         PDF ed Excel
       </h2>
+<section aria-labelledby="export-preview-title" className="mt-5 min-w-0 rounded-xl border border-orange-200 p-4" data-testid="export-preview-area" data-preview-state={previewStatus}>
+        <h3 className="text-lg font-black" id="export-preview-title">Anteprima operativa</h3>
+        <p className="mt-2 text-sm text-zinc-600">Anteprima dei dati operativi, non dell’impaginazione dei file. I download M11 sottostanti usano il contratto storico e non applicano questi filtri o questo ordinamento.</p>
+        <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="min-w-0 text-sm font-bold" htmlFor="preview-date">Data anteprima
+            <input id="preview-date" type="date" className={inputClass} value={form.date} aria-invalid={invalidFields.includes("date")} onChange={event => change("date", event.target.value)} />
+          </label>
+          <label className="min-w-0 text-sm font-bold" htmlFor="preview-service">Pranzo o cena per l’anteprima
+            <select id="preview-service" className={inputClass} value={form.service} aria-invalid={invalidFields.includes("service")} onChange={event => change("service", event.target.value)}>
+              <option value="">Scegli Pranzo o Cena</option><option value="LUNCH">Pranzo</option><option value="DINNER">Cena</option>
+            </select>
+          </label>
+          <label className="min-w-0 text-sm font-bold" htmlFor="preview-room">Sala effettiva
+            <select id="preview-room" className={inputClass} value={form.room} onChange={event => change("room", event.target.value as typeof form.room)}>
+              <option value="ALL">TUTTO</option>
+              {EXPORT_PREVIEW_ROOMS.filter(room => !room.legacy).map(room => <option key={room.key} value={room.key}>{room.label}</option>)}
+              {EXPORT_PREVIEW_ROOMS.filter(room => room.legacy && (form.room === room.key || preview?.data.availableLegacyRooms.some(item => item.key === room.key))).map(room => <option key={room.key} value={room.key}>{room.label}</option>)}
+            </select>
+          </label>
+          <label className="min-w-0 text-sm font-bold" htmlFor="preview-order">Ordina dentro ogni sala
+            <select id="preview-order" className={inputClass} value={form.order} onChange={event => change("order", event.target.value as typeof form.order)}>
+              <option value="CREATED_ASC">Creazione crescente</option><option value="NAME_ASC">Cognome/nome A–Z</option><option value="ARRIVAL_ASC">Ora di arrivo</option>
+            </select>
+          </label>
+          <label className="min-w-0 text-sm font-bold" htmlFor="preview-target">Soglia della selezione
+            <select id="preview-target" className={inputClass} value={form.target} onChange={event => change("target", event.target.value as typeof form.target)}>
+              <option value="PDF">PDF — massimo 2.000 prenotazioni</option><option value="EXCEL">Excel — massimo 20.000 prenotazioni</option>
+            </select>
+          </label>
+        </div>
+        {form.date !== dashboardDate && <p className="mt-3 text-sm">La data Agenda è {dashboardDate}. <button type="button" className="min-h-11 rounded-lg px-3 font-bold underline focus:ring-4 focus:ring-orange-200" onClick={() => change("date", dashboardDate)}>Usa data Agenda</button></p>}
+        <p className="mt-3 text-sm">Solo giorno e servizio scelti. Ricerca e altri filtri Agenda non restringono questa selezione. I documenti PDF/Excel V2 non sono ancora disponibili.</p>
+        <button type="button" className={buttonClass + " mt-3"} disabled={loading !== null} aria-busy={loading === "PREVIEW"} onClick={() => void loadPreview()}>
+          {loading === "PREVIEW" ? "Lettura anteprima…" : "Mostra anteprima"}
+        </button>
+        <p className="mt-2 text-sm" role="status">{previewStatus === "CHECKING_SESSION" ? "Verifica della sessione…" : previewStatus === "LOADING" ? "Lettura dei dati in corso…" : previewStatus === "STALE" ? "Selezione o autorizzazione cambiata: aggiorna l'anteprima." : ""}</p>
+        {previewError && <div ref={errorSummary} id="preview-error-summary" tabIndex={-1} role="alert" className="mt-3 rounded-xl border border-red-300 bg-red-50 p-3 text-red-900">
+          <p className="font-bold">{previewError}</p>
+          {invalidFields.includes("date") && <a className="mr-3 underline" href="#preview-date">Verifica data</a>}
+          {invalidFields.includes("service") && <a className="underline" href="#preview-service">Scegli servizio</a>}
+        </div>}
+        <StaffSensitiveRegion allowed={preview !== null && stampMatches(preview.stamp)}>
+          {preview && <ExportPreview key={preview.generation} data={preview.data} />}
+        </StaffSensitiveRegion>
+      </section>
+      <section aria-labelledby="legacy-export-title" data-testid="legacy-export-downloads" className="mt-6">
+        <h3 id="legacy-export-title" className="text-lg font-black">Download attuali M11 — giornata completa o periodo</h3>
       <p className="mt-1 text-sm text-zinc-600">
         I file includono tutte le prenotazioni confermate, indipendentemente dagli altri filtri dashboard.
       </p>
@@ -213,6 +352,7 @@ export function ExportPanel({ dashboardDate }: { dashboardDate: string }) {
           {error}
         </p>
       ) : null}
+      </section>
     </section>
   );
 }

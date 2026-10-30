@@ -471,3 +471,15 @@ ROOM conserva binding proprietario, fresh proof, pending e ACK fencing; rilegge 
 Lista con presenze NC/NI/legacy e nessun testo NI, telefono/email o payload draft. Testo NI solo dalle API Staff autorizzate/dettaglio esistenti. Stato volatile segregato, senza URL/history/storage/log; nessun binding restituito negli errori o registrato nei log. Snapshot SSR non viene mostrato a identità differente da quella verificata nel client.
 
 Blocchi legacy e no-op devono lasciare business fingerprint invariato. Audit atomico minimizzato; nessuna modifica a Public, export, outbox, Arrival, schema o session policy. Riserve BFCache (non attivazione reale certificata), T06-SEC R1–R4, WASM e Linux non vengono chiuse da questa implementazione.
+
+## T09 — Confine preview export e compatibilità M11
+
+La nuova preview è una lettura Staff/Admin autenticata e tenant-scoped, solo CONFIRMED, con password-change/Origin/trustProxy canonici. Il suo header X-Piccadilly-Draft-Session-Binding è obbligatorio: l'assenza è rifiutata prima del helper che conserva D01 per i client storici. Utente, tenant e binding provengono dalla medesima validazione della cookie; nessuna seconda autenticazione indipendente, crypto duplicata o nuova credenziale.
+
+Il payload V2 è strict, DAY e servizio esplicito; niente PII, attore/tenant o righe client nel body. Lettura dello stream massimo2048 byte, non solo Content-Length. Errori statici e no-store; nessuna eco di request, SQL, binding, token o dati cliente. Un mismatch è SERVER_REJECTED_BEFORE_EXPORT_READ, distinto dal blocco client prima della dispatch. Le revoche di sicurezza canoniche del validatore rimangono.
+
+Proiezione SQL e DTO positive: NI autonome e legacy mai selezionate; telefono/email assenti dalla preview, NC conservate soltanto nelle superfici autorizzate. Il telefono dei file completi M11 resta secondo contratto; Excel W vuota e neutralizzazione formule invariata. Nessuna PII in URL/history/storage persistente, log o analytics. Test con marker artificiali verificano query, JSON, DOM e documenti legacy.
+
+Proof fresca, intent generation e lease dati separati, abort più fencing, cancellazione su cambio sessione/route e StaffSensitiveRegion del root host preservano la barriera di visualizzazione. Nessun secondo controller, nuovo draft o fallback headerless. Non si promette cancellazione forense della RAM, recovery dopo reload o BFCache realmente certificata.
+
+Cap righe prima della mappatura/rendering e bounds prima dell'enumerazione; buffer e risposta limitati25MiB prima della consegna. Questi limiti non garantiscono un cap assoluto di memoria. Nessun rate limiter nuovo, nessuna chiusura automatica delle riserve body/proxy generali. Preview senza eventi audit di download; export M11 SUCCESS/FAILURE invariati. Restano le riserve security, WASM/npm ls, Linux, CI/accessibilità e deployment già documentate; T09 non significa SECURITY APPROVED.

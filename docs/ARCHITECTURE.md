@@ -698,3 +698,15 @@ Il contenitore del menu comprende il backdrop decorativo; chiusura da tastiera t
 ## T08 — Stato Public locale e richieste
 Un solo proprietario React locale conserva tutti i valori, progressione, errori e tentativi. public-booking-flow è un helper puro UI; nessuno store globale o uso del draft host Staff. Disponibilità IDLE/LOADING/READY/EMPTY/ERROR associata a data, servizio, coperti e generazione; abort più fencing respingono risposte obsolete. Nessun polling o capacità provvisoria.
 Payload acquisito prima del blocco dei controlli; busy lock sincrono e tentativo immutabile preservano signature, lingua e Idempotency-Key. resolveClientSubmissionIdentity resta invariato. Nessun retry automatico; dopo esito incerto il tentativo originale resta separato dagli edit espliciti. OBS01 separa identità risorsa da traduzioni, invalida letture obsolete e mutation precedenti e non promette recovery dopo reload. Tutti i writer, lock, API, auth, schema16 e dipendenze restano protetti.
+
+## T09 — Contratto positivo e preview export
+
+export-contract definisce request V2 strict, DTO wire, gruppi e comparatori puri. La nuova porta preview richiede selezione e massimo record; non dipende funzionalmente da un renderer o da un audit writer. ExportRepository esegue una transazione RepeatableRead tenant-scoped con proiezione positiva, composizione Foundation A e presenza delle aree legacy in batch. I filtri precedono take=cap+1; overflow rifiutato, mai truncation. Il percorso preview non seleziona telefono/email né NI; ID interni sono soltanto tie-breaker e non attraversano il DTO.
+
+Il servizio preview proietta gruppi e dati autorizzati, valida il wire DTO e controlla la risposta prima della consegna. La selezione è DAY + LUNCH/DINNER; MONTH/RANGE rimangono soltanto nelle route M11. Un helper calendar-based calcola bounds/dayCount prima dell'enumerazione dei range legacy; cap righe prima del rendering, stessi errori e audit. I renderer PDFKit/ExcelJS e le due route download non sono modificati.
+
+Il nuovo guard usa readDraftRequestSession una sola volta: utente e binding dalla medesima cookie validata, guard password/ruolo/Origin canonici, presenza header obbligatoria prima del helper compatibile con D01. Il reader JSON conta al massimo2048 byte dello stream anche senza Content-Length. Nessuna nuova crypto, auth policy o dipendenza.
+
+ExportPanel possiede stato locale, busy lock e generazioni. L'intento nasce prima della proof fresca, il lease dati soltanto dopo la proof: la quarantena della propria verifica non può provocare un loop di cancellazione. Le risposte sono accettate solo con identità/epoch/lease/route/selezione correnti. StaffSensitiveRegion e le API del root host sono riutilizzate senza cambiarle o creare record draft. Preview cancellata su perdita autorizzazione/route; nessun recovery da storage o promessa BFCache.
+
+HTML e futuri renderer condividono la semantica, non uno snapshot persistito. readAt indica la lettura server; una futura generazione rileggerà il database e può differire. Nessun lock business, nuova tabella, revision counter o cache persistente. T10/T11 restano mandati separati.

@@ -14,7 +14,20 @@ export interface ExportSnapshotReader {
   read(input: {
     actor: ExportActorReference;
     period: ExportPeriod;
+    maximumReservations?: number;
   }): Promise<ExportSnapshotDto>;
+}
+
+export interface ExportPreviewReader {
+  read(input: {
+    actor: ExportActorReference;
+    selection: import("@/modules/exports/domain/export-contract").ExportPreviewRequest;
+    maximumReservations: number;
+  }): Promise<import("@/modules/exports/domain/export-contract").ExportPreviewSnapshot>;
+}
+export interface ExportPreviewPorts {
+  snapshotReader: ExportPreviewReader;
+  clock: ExportClock;
 }
 
 export interface ExportAuditWriteInput {
