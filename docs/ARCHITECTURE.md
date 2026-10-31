@@ -710,3 +710,18 @@ Il nuovo guard usa readDraftRequestSession una sola volta: utente e binding dall
 ExportPanel possiede stato locale, busy lock e generazioni. L'intento nasce prima della proof fresca, il lease dati soltanto dopo la proof: la quarantena della propria verifica non può provocare un loop di cancellazione. Le risposte sono accettate solo con identità/epoch/lease/route/selezione correnti. StaffSensitiveRegion e le API del root host sono riutilizzate senza cambiarle o creare record draft. Preview cancellata su perdita autorizzazione/route; nessun recovery da storage o promessa BFCache.
 
 HTML e futuri renderer condividono la semantica, non uno snapshot persistito. readAt indica la lettura server; una futura generazione rileggerà il database e può differire. Nessun lock business, nuova tabella, revision counter o cache persistente. T10/T11 restano mandati separati.
+
+
+## T10 — PDF operativo V2 separato
+
+Endpoint Node dedicato `/api/staff/exports/pdf-v2`; schema derivato dal request T09 con target PDF. Riusa requirePreviewUser/readPreviewJson senza cambiarli: autenticazione request-scoped e binding obbligatorio, Origin e password guard, body effettivo 2048 byte. Il renderer V1 e il service M11 non sono riutilizzati per ottenere campi aggiuntivi.
+
+Porte V2 → readExportPreview → buildExportPreview canonico → proiezione positiva PdfV2Document → misurazione/segmentazione → PDFKit V2 → audit canonico → risposta. Il DTO PDF non contiene tavoli digitali, identificativi DB o contatti. Il repository/query T09 e il font loader restano byte-identici. Rendering fuori transazione, nessuna persistenza del documento.
+
+PDFKit 0.19.1 e Noto Sans locale già presenti, senza package aggiuntivi. bufferPages=false; footer Pagina N disegnato prima della pagina successiva. Misurazione con le metriche del font effettivo, spezzatura per grafemi dei token lunghi, segmentazione di tutte le celle; nessun clipping o shrink. Area Tavolo vuota per ogni segmento. La diagnostica geometrica opzionale è soltanto per test, non entra nel PDF o nei log applicativi.
+
+Cap 2000 prenotazioni con take=2001 dopo i filtri, 26214400 byte cumulativi e finali. Il limite buffer non è un limite heap/RSS: snapshot, font, cross-reference, chunk, concatenazione e copia HTTP concorrono al picco RAM. Le misure locali non certificano capacità produttiva o concorrenza del server.
+
+ExportPanel mantiene intento PDF separato dalla preview, busy lock sincrono, abort e controlli di route/identità/epoch/lease dopo le attese. La proof iniziale determina il binding inviato; una proof finale conferma lo stesso proprietario prima del Blob download, anche dopo cookie switch senza focus. La quarantena della propria proof non è scambiata per un dataset autorizzato. Nessun nuovo store/root host o persistenza browser.
+
+Il renderer verifica la copertura dei caratteri sul font già caricato da PDFKit 0.19.1, tramite un adattatore locale con guard di compatibilità e cache per code point. Caratteri non rappresentabili producono errore esplicito sanitizzato, senza sostituzioni o PDF parziale; nessuna dipendenza o font aggiuntivo. Il controllo reale PDF.js comprende anche intersezioni delle bounding box dei testi.

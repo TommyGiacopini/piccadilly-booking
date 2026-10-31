@@ -5,8 +5,9 @@ import { ExportPreview } from "@/app/dashboard/export-preview";
 import { StaffSensitiveRegion, useStaffDraftHost, useStaffHostView } from "@/app/_components/staff/staff-draft-host";
 import { sameDraftSession, type StaffDraftIdentity } from "@/modules/dashboard/domain/staff-draft-state";
 import { EXPORT_PREVIEW_ROOMS, exportPreviewRequestSchema, exportPreviewResponseSchema, type ExportPreviewRequest, type ExportPreviewDto } from "@/modules/exports/domain/export-contract";
+import { pdfV2RequestSchema, pdfV2Filename } from "@/modules/exports/domain/pdf-v2-domain";
 
-type ExportAction = "PDF" | "DAY" | "MONTH" | "RANGE" | "PREVIEW";
+type ExportAction = "PDF" | "DAY" | "MONTH" | "RANGE" | "PREVIEW" | "PDF_V2";
 interface PreviewStamp { identity: StaffDraftIdentity; epoch: number; lease: number; route: string }
 const currentRoute = () => window.location.pathname + window.location.search;
 
@@ -42,6 +43,13 @@ const controller = useStaffDraftHost(), host = useStaffHostView();
   const errorSummary = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
   const activePreview = useRef<{ id: number; route: string; abort: AbortController; stamp?: PreviewStamp } | null>(null);
+  const activePdf = useRef<{ route: string; abort: AbortController; stamp?: PreviewStamp } | null>(null);
+  const cancelPdf = useCallback(() => {
+    const active = activePdf.current;
+    if (!active) return;
+    active.abort.abort(); activePdf.current = null;
+    requestInFlight.current = false; setLoading(value => value === "PDF_V2" ? null : value);
+  }, []);
   const cancelPreview = useCallback(() => {
     ++generation.current;
     const active = activePreview.current;
@@ -60,12 +68,94 @@ const controller = useStaffDraftHost(), host = useStaffHostView();
     // The proof's own quarantine is expected before a dataset lease exists.
     if (active?.stamp && !stampMatches(active.stamp) || preview && !stampMatches(preview.stamp)) cancelPreview();
   }, [cancelPreview, stampMatches, preview, host.revision]);
+  useLayoutEffect(() => {
+    const active = activePdf.current;
+    if (active?.stamp && !stampMatches(active.stamp)) cancelPdf();
+  }, [cancelPdf, stampMatches, host.revision]);
   useEffect(() => () => {
     ++generation.current; activePreview.current?.abort.abort(); activePreview.current = null;
+    activePdf.current?.abort.abort(); activePdf.current = null;
   }, []);
+  useEffect(() => {
+    const invalidate = () => cancelPdf();
+    window.addEventListener("pagehide", invalidate);
+    return () => window.removeEventListener("pagehide", invalidate);
+  }, [cancelPdf]);
   useLayoutEffect(() => { if (previewError) errorSummary.current?.focus(); }, [previewError]);
   function change<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    cancelPdf();
     cancelPreview(); setInvalidFields([]); setForm(previous => ({ ...previous, [key]: value }));
+  }
+
+  async function downloadPdfV2() {
+    if (requestInFlight.current) return;
+    const parsed = pdfV2RequestSchema.safeParse({
+      version: 2, target: form.target, period: { mode: "DAY", date: form.date },
+      service: form.service, room: form.room, order: form.order,
+    });
+    if (!parsed.success) {
+      setPreviewError("Verifica la data, scegli Pranzo o Cena e seleziona il profilo PDF.");
+      setInvalidFields(parsed.error.issues.map(issue => String(issue.path[0] === "period" ? "date" : issue.path[0])));
+      return;
+    }
+    requestInFlight.current = true; setLoading("PDF_V2"); setPreviewError(null);
+    const intent = { route: currentRoute(), abort: new AbortController(), stamp: undefined as PreviewStamp | undefined };
+    activePdf.current = intent;
+    const ownsIntent = () => activePdf.current === intent && currentRoute() === intent.route;
+    try {
+      const identity = await controller.verifySession();
+      if (!ownsIntent()) return;
+      if (!identity || !controller.sessionVisible() || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u.test(identity.sessionBinding)) throw new Error("Verifica della sessione non disponibile. Nessun PDF scaricato; riprova.");
+      const state = controller.getSnapshot().drafts;
+      intent.stamp = { identity, epoch: state.authEpoch, lease: state.leaseEpoch, route: intent.route };
+      if (!stampMatches(intent.stamp)) return;
+      const response = await fetch("/api/staff/exports/pdf-v2", {
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: intent.abort.signal,
+        headers: { "Content-Type": "application/json", "X-Piccadilly-Draft-Session-Binding": identity.sessionBinding },
+        body: JSON.stringify(parsed.data),
+      });
+      if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+      if (response.status === 401 || response.status === 403) {
+        controller.quarantine(); cancelPdf();
+        setPreviewError("Sessione non confermata. Nessun PDF scaricato; verifica l'accesso e riprova."); return;
+      }
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { code?: string } | null;
+        if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+        throw new Error(body?.code === "EXPORT_TOO_LARGE" ? "La selezione supera i limiti tecnici consentiti."
+          : body?.code === "EXPORT_DATA_INCONSISTENT" ? "I dati non sono coerenti. Contatta un amministratore."
+          : "Non è stato possibile generare il PDF. Riprova.");
+      }
+      if (response.headers.get("content-type")?.split(";", 1)[0] !== "application/pdf") throw new Error("Risposta PDF non valida. Riprova.");
+      const blob = await response.blob();
+      if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+      if (blob.size > 26_214_400 || blob.size < 5 || await blob.slice(0, 5).text() !== "%PDF-") throw new Error("Risposta PDF non valida. Riprova.");
+      if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+      // A cookie can switch without a browser focus event while generation is pending.
+      // Suspend our own dataset lease during this proof, retaining the original owner.
+      intent.stamp = undefined;
+      const confirmed = await controller.verifySession();
+      if (!ownsIntent()) return;
+      if (!confirmed || !sameDraftSession(identity, confirmed) || !controller.sessionVisible()) {
+        controller.quarantine(); throw new Error("Sessione cambiata. Nessun PDF scaricato; verifica l'accesso e riprova.");
+      }
+      const finalState = controller.getSnapshot().drafts;
+      intent.stamp = { identity: confirmed, epoch: finalState.authEpoch, lease: finalState.leaseEpoch, route: intent.route };
+      if (!stampMatches(intent.stamp)) return;
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+        const anchor = document.createElement("a"); anchor.href = objectUrl;
+        anchor.download = pdfV2Filename(parsed.data); anchor.hidden = true;
+        document.body.append(anchor); anchor.click(); anchor.remove();
+      } finally { URL.revokeObjectURL(objectUrl); }
+    } catch (failure) {
+      if (ownsIntent() && (!intent.stamp || stampMatches(intent.stamp))) {
+        setPreviewError(failure instanceof Error && failure.name !== "AbortError" ? failure.message : "Download interrotto. Riprova.");
+      }
+    } finally {
+      if (activePdf.current === intent) { activePdf.current = null; requestInFlight.current = false; setLoading(null); }
+    }
   }
   async function loadPreview() {
     if (requestInFlight.current) return;
@@ -211,10 +301,16 @@ const controller = useStaffDraftHost(), host = useStaffHostView();
           </label>
         </div>
         {form.date !== dashboardDate && <p className="mt-3 text-sm">La data Agenda è {dashboardDate}. <button type="button" className="min-h-11 rounded-lg px-3 font-bold underline focus:ring-4 focus:ring-orange-200" onClick={() => change("date", dashboardDate)}>Usa data Agenda</button></p>}
-        <p className="mt-3 text-sm">Solo giorno e servizio scelti. Ricerca e altri filtri Agenda non restringono questa selezione. I documenti PDF/Excel V2 non sono ancora disponibili.</p>
+        <p className="mt-3 text-sm">Solo giorno e servizio scelti. Ricerca e altri filtri Agenda non restringono questa selezione. Excel V2 non è ancora disponibile.</p>
+        <p className="mt-2 text-sm">Il PDF operativo applica la selezione corrente e rilegge i dati al momento della generazione. Può contenere modifiche successive all’anteprima. La colonna Tavolo resta libera per la scrittura a penna.</p>
         <button type="button" className={buttonClass + " mt-3"} disabled={loading !== null} aria-busy={loading === "PREVIEW"} onClick={() => void loadPreview()}>
           {loading === "PREVIEW" ? "Lettura anteprima…" : "Mostra anteprima"}
         </button>
+        <button type="button" className={buttonClass + " mt-3 sm:ml-3"} disabled={loading !== null || form.target !== "PDF"} aria-busy={loading === "PDF_V2"} onClick={() => void downloadPdfV2()}>
+          {loading === "PDF_V2" ? "Generazione PDF operativo…" : "Scarica PDF operativo"}
+        </button>
+        {form.target !== "PDF" && <p className="mt-2 text-sm">Seleziona il profilo PDF per scaricare il PDF operativo.</p>}
+        {loading === "PDF_V2" && <p className="mt-2 text-sm" role="status">Verifica della sessione e generazione del PDF in corso…</p>}
         <p className="mt-2 text-sm" role="status">{previewStatus === "CHECKING_SESSION" ? "Verifica della sessione…" : previewStatus === "LOADING" ? "Lettura dei dati in corso…" : previewStatus === "STALE" ? "Selezione o autorizzazione cambiata: aggiorna l'anteprima." : ""}</p>
         {previewError && <div ref={errorSummary} id="preview-error-summary" tabIndex={-1} role="alert" className="mt-3 rounded-xl border border-red-300 bg-red-50 p-3 text-red-900">
           <p className="font-bold">{previewError}</p>
