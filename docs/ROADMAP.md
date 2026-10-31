@@ -913,3 +913,14 @@ Implementazione locale autorizzata dal Controller sul main110e454d3fc5361bfdeaca
 Gate previsti: domain/service, PostgreSQL e Route Handler reali, browser/privacy, full Vitest/Playwright workers1 retries0, Prisma/lint/typecheck/build, integrità dipendenze/scope/freeze e portable evidence. Automatici mutativi solo su PostgreSQL temporaneo positivamente identificato prima di seed/migration. La tranche non è CLOSED: serve Work3 Final QG indipendente e nessuna pubblicazione deriva dall'autorizzazione locale.
 
 T10 e T11 non avviate: renderer, formato documenti e download V2 rimangono esclusi. M13/Render sospesa, nessuna configurazione Tailscale o preparazione deploy. Nessun uso mutativo del database di lavoro.
+
+
+## T10 — PDF operativo V2, implementazione locale autorizzata
+
+T09 CLOSED mediante PR34 e verifica baseline main2242cef809f41529906b7a03ab81db7305c4691b. T10 design ratificato con modifica C03: nessun tavolo digitale nel PDF; colonna Tavolo bianca per annotazioni manuali. Il precedente checkpoint T09 non CLOSED resta storico.
+
+Perimetro esatto20 path (7M/13A/0D),460 file previsti,440 baseline protetti,16 migration. Endpoint dedicato, layout A4 portrait multipagina, composizione autorevole, privacy positiva, lettura indipendente, binding obbligatorio e audit canonico. M11/T09 protetti; nessuna implementazione T11.
+
+Gate U/S/PG/H/L/P/B/R: contratti e dominio, service/audit, PostgreSQL isolato, API request-scoped e cookie A/B, geometria del PDF reale tramite PDF.js, rasterizzazione e verifica visiva, browser e regressioni complete. Playwright workers1/retries0; Prisma generate/validate, strict typecheck, ESLint e production build. Evidenze esterne con log sanitizzati, exit code, freeze/patch/manifest, privacy/audit e misure memoria.
+
+Tutti i test mutativi devono usare DB temporanei positivamente identificati prima di migration/seed/runner. Nessun test automatico sul DB persistente. Checkpoint locale pronto non significa approvazione autonoma: serve WORK3 Final QG. T10 non CLOSED, M13/Render/Tailscale sospesi, pubblicazione Git/merge/deploy vietati. Riserve T09-EVID01/TIME01/COV01/COV02/EVID02, PR34-FMT01, advisory, WASM/npm ls, BFCache/Linux/CI/accessibilità, D01 legacy, retention/backup/restore/runtime preservate.

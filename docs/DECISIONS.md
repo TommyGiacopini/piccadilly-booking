@@ -529,3 +529,14 @@ Il contratto finale approva preview immediatamente operativa e download M11 sepa
 Nuovo POST preview V2 strict soltanto DAY/LUNCH/DINNER, senza modificare le route PDF/Excel M11 (D06). Auth request-scoped, proof fresca, binding obbligatorio, Origin e privacy positive, nessuna modifica ad auth core/root host (D07). Body2048 byte reali, bounds prima dell'enumerazione, cap+1 e controllo pre-render, soglie2.000/20.000/25MiB/31giorni invariate (D08). Preview senza eventi di generazione file, audit download preservato (D09). Composizione autorevole, unknown distinto da0, NC autorizzate e NI/telefono/email fuori dalla preview (D10).
 
 Scope locale ratificato23 path,17M/6A/0D,447 file previsti e424 baseline protetti. Nessuna pubblicazione Git o deploy. Il dettaglio dei documenti futuri rimane distinto: PDF portrait B/N e campo penna in T10; Agenda Excel è direzione progettuale T11,24 campi storici/Wvuota preservati e campi aggiuntivi solo con successiva ratifica. Nessun nuovo rischio viene accettato per produzione e nessuna advisory è dichiarata risolta da T09.
+
+
+## T10 — Final design freeze Controller CLASSIC, 30 ottobre 2026
+
+T10-C01 endpoint PDF V2 dedicato; C02 telefono strutturato escluso; C03 Tavolo sempre completamente vuota e scrivibile (supera la proposta Codex B); C04 A4 portrait B/N e margini 12 mm; C05 gruppi T09; C06 metadata audit canonici; C07 solo Pagina N; C08 italiano; C09 profilo PDF richiesto; C10 NC autorizzate integrali; C11 scope 20 path verificato.
+
+Scope: 7 Modified, 13 Added, 0 Deleted; 460 file finali previsti e 440 baseline protetti. Baseline main2242cef809f41529906b7a03ab81db7305c4691b, tree4ba31d2a507786ef270a500b02e292f5c463e939, freeze4ebf3d4a76f753516e48d4d4e1285cfe5a0c33b907cafbb7d1911fcaae31d790, schema16. C03 è realizzabile nello scope eliminando i riferimenti digitali dalla proiezione PDF e lasciando il reader T09 invariato.
+
+Nuovo worktree/branch isolato, lockfile install e PostgreSQL temporaneo autorizzati; nessuna modifica alle copie storiche, al DB persistente, a schema/migration, package/lock, auth core, root host, writer, planner/outbox, runner, infrastruttura o renderer M11. Audit PDF_EXPORT_REQUESTED con allow-list attuale: non aggiunge versione/filtri ai metadata.
+
+WORK3 Final QG è indipendente e necessario. T10 non CLOSED. Nessuno staging Git, commit, push, PR, merge o deploy autorizzato. T11 non avviata; M13 sospesa. Riferimento ADR 012.

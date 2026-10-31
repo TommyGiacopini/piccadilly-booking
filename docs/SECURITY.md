@@ -483,3 +483,16 @@ Proiezione SQL e DTO positive: NI autonome e legacy mai selezionate; telefono/em
 Proof fresca, intent generation e lease dati separati, abort più fencing, cancellazione su cambio sessione/route e StaffSensitiveRegion del root host preservano la barriera di visualizzazione. Nessun secondo controller, nuovo draft o fallback headerless. Non si promette cancellazione forense della RAM, recovery dopo reload o BFCache realmente certificata.
 
 Cap righe prima della mappatura/rendering e bounds prima dell'enumerazione; buffer e risposta limitati25MiB prima della consegna. Questi limiti non garantiscono un cap assoluto di memoria. Nessun rate limiter nuovo, nessuna chiusura automatica delle riserve body/proxy generali. Preview senza eventi audit di download; export M11 SUCCESS/FAILURE invariati. Restano le riserve security, WASM/npm ls, Linux, CI/accessibilità e deployment già documentate; T09 non significa SECURITY APPROVED.
+
+
+## T10 — Confine PDF operativo V2
+
+Nuovo POST `/api/staff/exports/pdf-v2` riservato Staff/Admin, obbligatoriamente bound senza fallback headerless. Riutilizza i helper T09 invariati: attore e binding dalla medesima validazione cookie, Origin/trustProxy e password-change guard. Il payload strict comprende solo versione/target PDF/giorno/servizio/sala/ordine; body massimo2048 byte effettivi anche chunked o senza Content-Length attendibile.
+
+Reader SQL positivo T09 invariato, tenant-scoped, CONFIRMED, RepeatableRead e cap+1 dopo i filtri. Non seleziona NI autonome/legacy né telefono/email strutturati. Il modello PDF proietta esplicitamente e rimuove anche tutti i riferimenti digitali ai tavoli per C03; non nasconde dati riservati soltanto nel rendering. NC autorizzate integre, senza redazione euristica; contatti liberamente digitati nelle NC possono essere presenti.
+
+Metadata PDF statici, nessun link automatico, allegato o identificativo tecnico cliente. Errori statici e no-store/nosniff su tutte le risposte gestite, nessun dato riservato nei log. Audit canonico EXPORT con SUCCESS prima della consegna, un tentativo FAILURE sui fallimenti autorizzati e nessun audit download per dinieghi o payload invalidi. Nessuna nuova allow-list audit o persistenza del file.
+
+Client: selezione congelata per intento, busy lock, proof fresca e binding originale, abort e fencing dopo ogni attesa. Una proof finale deve confermare lo stesso proprietario prima del Blob download; una sessione diversa scarta il file. Object URL revocato. Non si garantiscono cancellazione forense della RAM, revoca del documento già scaricato o interruzione retroattiva di una request già autorizzata.
+
+Cap righe2000 e buffer25MiB non certificano heap/RSS, rate, proxy o concorrenza produttiva. PDFKit non conserva tutte le pagine, ma font, snapshot, output e copie HTTP occupano altra memoria. Solo dati sintetici e PostgreSQL temporanei nei gate. Tutte le riserve T09 e storiche restano aperte; nessuna SECURITY APPROVED o approvazione staging/produzione deriva da T10.

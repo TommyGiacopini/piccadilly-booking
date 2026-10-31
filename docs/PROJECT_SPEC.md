@@ -993,3 +993,18 @@ Data iniziale uguale all'Agenda, poi indipendente; servizio Pranzo/Cena scelto e
 Solo CONFIRMED, tenant e giorno/servizio richiesti. Assignment assente/cleared è non assegnato; room-only e riferimenti attivi grandfathered restano validi. Nessuna riclassificazione di codici sconosciuti: la preview fallisce senza dataset parziale. Coperti totali, childrenCount e gameRoomPreference sono autorevoli; unknown non diventa zero, legacy children senza numero resta esplicito e i totali composizione noti sono dichiarati parziali. NC/esigenze sono ammesse nel contesto Staff; NI autonome/legacy, telefono ed email sono esclusi dalla query/proiezione preview. La policy T06-A continua a escludere tutte le NI dai file M11, con W vuota.
 
 POST /api/staff/exports/preview accetta soltanto V2 strict DAY con servizio, sala e ordine espliciti; binding della sessione obbligatorio e nessun fallback headerless. Le letture sono fresche, con timestamp e avviso: richieste separate non promettono identità temporale. La sola preview non genera audit di download, non modifica business o outbox e non introduce persistenza. PDF/Excel M11, periodi, formati, filename, privacy e audit restano canonici; i cap vengono anticipati senza cambiarne le soglie.
+
+
+## T10 — PDF operativo V2 (Controller CLASSIC, 30 ottobre 2026)
+
+T09 è CLOSED sulla baseline main `2242cef809f41529906b7a03ab81db7305c4691b`. T10 è autorizzata esclusivamente per implementazione locale e Quality Gate indipendente WORK3. I checkpoint storici precedenti restano evidenze del loro momento; non autorizzano pubblicazione o deploy.
+
+Il nuovo pulsante Scarica PDF operativo usa la selezione T09 con profilo PDF, giorno, servizio esplicito, sala effettiva e ordinamento interno canonico. POST `/api/staff/exports/pdf-v2` effettua una lettura fresca server-side indipendente dalla preview. Entrambi condividono filtri, gruppi e tie-breaker, senza garantire lo stesso snapshot temporale. Il browser invia soltanto la selezione strict V2.
+
+A4 portrait, margini 12 mm, nero su bianco, sette colonne: Nome e cognome, Coperti, Sala, Tavolo, Arrivo, Note/richieste, Prenotata il. Corpo obiettivo 10,5 pt, coperti 14 pt, righe almeno 20 mm e area penna almeno 18 × 12 mm. C03 definitiva: Tavolo interamente vuota; nessun tavolo digitale nel DTO PDF o nelle celle. La sala effettiva rimane visibile. Database, preview e PDF/Excel legacy conservano i riferimenti digitali.
+
+Righe misurate prima del disegno, altezza dinamica, continuazioni esplicite con riferimento locale di riga, sezione e intestazioni ripetute, footer Pagina N. Nessun limite fisso di pagine, troncamento o riduzione automatica dei caratteri. Sezioni vuote secondo T09, non secondo le sei sezioni sempre presenti del PDF M11.
+
+partySize, childrenCount e gameRoomPreference restano autorevoli: TA per zero bambini noto, adulti/bambini numerici quando noti, ? per composizione sconosciuta. Il flag storico bambini senza conteggio resta esplicito; richieste Giochi e preferenza storica non costituiscono assegnazione. Totali di composizione parziali quando esistono unknown. NC autorizzate conservate senza redazione automatica. NI autonome/legacy e contatti strutturati esclusi dalla query V2; una NC può contenere un contatto digitato liberamente.
+
+M11 PDF DAY ed Excel DAY/MONTH/RANGE restano invariati, inclusi privacy T06-A, telefono legacy, W vuota, formule sicure, filename, audit e limiti. Excel V2/T11 non autorizzata.
