@@ -496,3 +496,13 @@ Metadata PDF statici, nessun link automatico, allegato o identificativo tecnico 
 Client: selezione congelata per intento, busy lock, proof fresca e binding originale, abort e fencing dopo ogni attesa. Una proof finale deve confermare lo stesso proprietario prima del Blob download; una sessione diversa scarta il file. Object URL revocato. Non si garantiscono cancellazione forense della RAM, revoca del documento già scaricato o interruzione retroattiva di una request già autorizzata.
 
 Cap righe2000 e buffer25MiB non certificano heap/RSS, rate, proxy o concorrenza produttiva. PDFKit non conserva tutte le pagine, ma font, snapshot, output e copie HTTP occupano altra memoria. Solo dati sintetici e PostgreSQL temporanei nei gate. Tutte le riserve T09 e storiche restano aperte; nessuna SECURITY APPROVED o approvazione staging/produzione deriva da T10.
+
+## T11 — Operational Excel V2, ratifica Controller CLASSIC
+
+Excel V2 seleziona soltanto la proiezione positiva T09, che non carica NI autonome/legacy né telefono/email strutturati. Il DTO dedicato elimina anche i riferimenti ai tavoli. NC autorizzate non redatte: contatti liberamente digitati possono restare. Nessun identificativo, binding, hash o PII aggiuntiva in metadata/fogli nascosti.
+
+Auth Staff/Admin request-scoped, Origin e password guard, binding originale canonico obbligatorio senza fallback headerless, body2048 byte effettivi, schema strict, tenant server-side, no-store e errori statici. Browser: busy lock, intent/route fencing, abort, session proof iniziale/finale, cookie switch protection, response MIME/magic e dimensione cumulativa, Object URL revocato. Preview/download sono letture indipendenti. Nessun fallback automatico M11.
+
+Ogni testo cella passa dal sanitizer storico invariato e policy dedicata: UTF16/XML validi, limiti32767 unità dopo prefisso formula e253 LF, escape letterali _xHHHH_ e CR senza perdita. Nessuna formula, hyperlink, rich text, macro, relazione esterna o foglio riservato nascosto. Reiezione esplicita del documento se non rappresentabile. Verifiche reali su ZIP/XML/shared strings richieste.
+
+Audit canonico EXCEL/DAY/fromDate/toDate/dayCount1/reservationCount; SUCCESS prima della consegna, FAILURE singolo senza loop. Nessun nuovo campo audit e nessuna scrittura business. Cap20.000 dopo filtri/cap+1 e25MiB cumulativi output; RAM non limitata a25MiB. Test mutativi soltanto su PostgreSQL temporaneo positivamente verificato prima di migration/seed/runner. Tutte le riserve storiche restano aperte; nessuna certificazione SECURITY APPROVED o PRODUCTION READY.

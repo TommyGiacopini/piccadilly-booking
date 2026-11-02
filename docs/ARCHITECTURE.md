@@ -725,3 +725,11 @@ Cap 2000 prenotazioni con take=2001 dopo i filtri, 26214400 byte cumulativi e fi
 ExportPanel mantiene intento PDF separato dalla preview, busy lock sincrono, abort e controlli di route/identità/epoch/lease dopo le attese. La proof iniziale determina il binding inviato; una proof finale conferma lo stesso proprietario prima del Blob download, anche dopo cookie switch senza focus. La quarantena della propria proof non è scambiata per un dataset autorizzato. Nessun nuovo store/root host o persistenza browser.
 
 Il renderer verifica la copertura dei caratteri sul font già caricato da PDFKit 0.19.1, tramite un adattatore locale con guard di compatibilità e cache per code point. Caratteri non rappresentabili producono errore esplicito sanitizzato, senza sostituzioni o PDF parziale; nessuna dipendenza o font aggiuntivo. Il controllo reale PDF.js comprende anche intersezioni delle bounding box dei testi.
+
+## T11 — Operational Excel V2, ratifica Controller CLASSIC
+
+POST /api/staff/exports/excel-v2 → helper auth/binding/body T09 invariati → servizio/porte Excel V2 → readExportPreview → buildExportPreview → documento positivo Excel dedicato → cell policy → ExcelJS streaming interno → cap buffer → audit SUCCESS → download. Non utilizza il DTO PDF, il servizio preview JSON o il renderer M11.
+
+Writer in memoria con sink cumulativo limitato, nessuno stream HTTP anticipato e nessun file temporaneo. useSharedStrings=true, useStyles=true; row commit progressivo e cleanup sink/archiver su errore. La shared-string table mantiene tutte le stringhe distinte e il dataset rimane in memoria: nessuna promessa di memoria costante. Node/ExcelJS, serializzazione ZIP, Buffer.concat e copia HTTP possono aumentare il picco oltre il buffer finale.
+
+Conversione N deterministica Intl con timezone del ristorante, componenti wall-clock racchiuse in Date.UTC per ExcelJS; nessuna consultazione del fuso implicito host e nessun riordinamento wall-clock. Endpoint/composizione/pannello aggiuntivi preservano T09/T10/M11. Nessuna dipendenza, tabella o migration nuova. ADR013.

@@ -540,3 +540,11 @@ Scope: 7 Modified, 13 Added, 0 Deleted; 460 file finali previsti e 440 baseline 
 Nuovo worktree/branch isolato, lockfile install e PostgreSQL temporaneo autorizzati; nessuna modifica alle copie storiche, al DB persistente, a schema/migration, package/lock, auth core, root host, writer, planner/outbox, runner, infrastruttura o renderer M11. Audit PDF_EXPORT_REQUESTED con allow-list attuale: non aggiunge versione/filtri ai metadata.
 
 WORK3 Final QG è indipendente e necessario. T10 non CLOSED. Nessuno staging Git, commit, push, PR, merge o deploy autorizzato. T11 non avviata; M13 sospesa. Riferimento ADR 012.
+
+## T11 — Operational Excel V2, ratifica Controller CLASSIC
+
+C01 endpoint dedicato; C02 singolo Agenda; C03 DAY soltanto; C04 quattordici colonne con preferenza storica; C05 nessun telefono strutturato; C06 nessun riferimento digitale ai tavoli; C07 conteggi numerici nullable con composizione esplicita; C08 righe continue filtrabili; C09 creazione locale ristorante e testi lossless; C10 audit canonico; C11 cap20.000/25MiB e streaming interno; C12 esatti20 path.
+
+Le modifiche Controller sostituiscono Tavoli digitali con Preferenza sala (storica) e UTC visibile con wall-clock del ristorante. Nessuna nuova query; preferredRoom T09 già disponibile. Il limite audit senza distinzione V1/V2 o filtri è accettato: nessuna nuova metadata. Il limite della visualizzazione nativa Excel non autorizza alterazione del valore. Sanitizer M11 preservato; nuova policy dedicata ed errori espliciti per dati non rappresentabili. ADR013.
+
+Baseline main bfaf612a4a0a73c0a6fd8dc5960c48bda8576cd6, tree422546a81cc4fbc2c94aeac3c2e652dc1393fc9b, freeze e735f6e30f7012abf3c67f08ef0fc441f8132565f7cc90fd63849bf8d828ce30,460 file/16 migration. Scope7M/13A/0D,473 finali,453 protetti. Solo implementazione locale, WORK3 indipendente obbligatorio.
