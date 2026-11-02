@@ -932,3 +932,18 @@ T09 CLOSED PR34 e T10 CLOSED PR35 merged, baseline bfaf612a4a0a73c0a6fd8dc5960c4
 Gate U/S/PG/H/X/B/R: file XLSX reali, analisi indipendente ZIP/XML namespace-aware, privacy/shared strings/escape, DST e tipi, audit, streaming/limiti/errori, browser fencing, full Vitest/Playwright workers1 retries0, Prisma/typecheck/lint/build. Ogni receipt registra comando, cwd, runtime effettivo, tempi, exit code, candidato prima/dopo e DB temporaneo quando pertinente; failure conservate.
 
 T11 non CLOSED: WORK3 Final QG richiesto. Nessuna pubblicazione Git, merge, deploy, ambiente UAT permanente o milestone successiva. M13 ON_HOLD, Render/Tailscale non autorizzati. Riserve T09/T10 e precedenti preservate; nuova suite non le chiude.
+
+
+## M13 P0 — Local Readiness, decisione Controller CLASSIC del 2 novembre 2026
+
+Baseline canonica `6330536bfa9341b1586f563e9cc92fe60ae799a2`, tree `92e98e0396ec01538e9feed4aab690f04a808911`, freeze raw inclusi binari `15229572daf69b2baab81c4e2f4311dfc9d0917b1fdadb8448fdf315230fa9da`:473 file e16 migration. PR18 e PR22 sono merged; i riferimenti precedenti a riconciliazioni non integrate e inventari13/14/15 sono checkpoint storici, superati soltanto per il contratto corrente qui descritto.
+
+Decisioni vincolanti: **M13-P0-C01** soluzione A rafforzata; **C02** readiness strict fail-closed; **C03** E2E aggiornati ai contratti correnti; **C04** scenari browser condivisi; **C05** scope esatto14 path (11M/3A/0D),476 file finali e462 baseline protetti; **C06** Node24.14.1 runtime di riferimento senza cambio pin; **C07** WORK3 Final QG indipendente obbligatorio.
+
+Implementazione autorizzata esclusivamente locale. Nessun risultato storico viene ricertificato. Nuove esecuzioni, failure, runtime effettivo e limiti sono nelle evidenze esterne del candidato. Se il binario24.14.1 non è disponibile, i gate su altra versione Node24 sono preliminari e `NODE_PIN_PASS=false`; la riserva continua in Runtime Readiness P1. M13 non è CLOSED e nessuno staging/produzione è dichiarato pronto.
+
+**M13 FASE C ON_HOLD; Render, Tailscale, deploy, pubblicazione Git, M14/M15 e Asporti non autorizzati.** SEC01, BFCache/root host, Unicode/font PDF, renderer Excel, CI, retention e backup/restore conservano riserve e mandati separati. Il fake-data scan attuale non copre esaustivamente NI autonome/legacy: finding aperto per P1, nessuna estensione del relativo codice in P0.
+
+Ordine Controller preservato: P0 STG01/STG02 local remediation → P1 Security/Runtime/CI/BFCache readiness → P2 PDF/Excel operational qualification → P2 M13 Local Final QG → P3 retention/backup/restore planning. Nessuna fase remota segue automaticamente un PASS locale.
+
+STG-01/02 sono candidati alla chiusura dopo gate locali documentati e revisione WORK3; nessuna auto-chiusura. Perimetro protetto: schema/migration1–16, package/lock, Blueprint, runner, auth core, root host, componenti Public/Staff e T09/T10/T11.

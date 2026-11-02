@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
-import { readdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { constants } from "node:fs";
+import { lstat, open, readdir } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import pg from "pg";
 
 import { validateStagingWorkerEnvironment } from "./staging-config.mjs";
 import {
-  EXPECTED_STAGING_MIGRATION_COUNT,
+  EXPECTED_STAGING_MIGRATION_NAMES,
+  inspectMigrationLedger,
   migrationSetIsReady,
   propagateWorkerSignal,
   waitForStagingSchemaReady,
@@ -30,22 +33,47 @@ function signalExitCode(signal) {
   return signal === "SIGINT" ? 130 : 143;
 }
 
-async function readExpectedMigrationNames() {
-  const entries = await readdir(migrationsDirectory, { withFileTypes: true });
+export async function readExpectedMigrationNames(directory = migrationsDirectory) {
+  const root = await lstat(directory);
+  if (!root.isDirectory() || root.isSymbolicLink()) throw new Error("Invalid migration directory.");
+  const entries = await readdir(directory, { withFileTypes: true });
+  if (entries.some((entry) => entry.isSymbolicLink() ||
+    (!entry.isDirectory() && !(entry.name === "migration_lock.toml" && entry.isFile())))) {
+    throw new Error("Invalid migration inventory entry.");
+  }
   const names = entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
 
-  if (names.length !== EXPECTED_STAGING_MIGRATION_COUNT) {
-    throw new Error("The versioned migration inventory is not the expected size.");
+  if (!migrationSetIsReady(names, EXPECTED_STAGING_MIGRATION_NAMES)) {
+    throw new Error("The versioned migration inventory is not the approved set.");
+  }
+  for (const name of names) {
+    const folder = await lstat(join(directory, name));
+    const sqlPath = join(directory, name, "migration.sql");
+    const before = await lstat(sqlPath);
+    if (!folder.isDirectory() || folder.isSymbolicLink() || !before.isFile() || before.isSymbolicLink()) {
+      throw new Error("Migration SQL must be a regular file.");
+    }
+    const file = await open(sqlPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const opened = await file.stat();
+      const after = await lstat(sqlPath);
+      if (!opened.isFile() || after.isSymbolicLink() || opened.ino !== before.ino ||
+        opened.dev !== before.dev || after.ino !== opened.ino || after.dev !== opened.dev ||
+        !(await file.readFile("utf8")).trim()) throw new Error("Migration SQL is invalid or empty.");
+    } finally { await file.close(); }
   }
   return names;
 }
 
-async function main() {
-  validateStagingWorkerEnvironment(process.env);
-  const expectedMigrations = await readExpectedMigrationNames();
+export async function runStagingWorker(options = {}) {
+  const environment = options.environment ?? process.env;
+  const processHost = options.processHost ?? process;
+  const createClient = options.createClient ?? ((config) => new Client(config));
+  const spawnProcess = options.spawnProcess ?? spawn;
+  validateStagingWorkerEnvironment(environment);
   const controller = new AbortController();
   let receivedSignal;
   let workerChild;
@@ -56,32 +84,33 @@ async function main() {
   };
   const onSigint = () => stop("SIGINT");
   const onSigterm = () => stop("SIGTERM");
-  process.once("SIGINT", onSigint);
-  process.once("SIGTERM", onSigterm);
+  processHost.once("SIGINT", onSigint);
+  processHost.once("SIGTERM", onSigterm);
 
   try {
+    const expectedMigrations = await (options.readInventory ?? readExpectedMigrationNames)();
     console.info("Waiting for the staging database schema.");
     await waitForStagingSchemaReady({
+      ...options.waitOptions,
       signal: controller.signal,
       checkReady: async (signal) => {
-        const client = new Client({
-          connectionString: process.env.DATABASE_URL,
+        const client = createClient({
+          connectionString: environment.DATABASE_URL,
           connectionTimeoutMillis: 2_000,
           query_timeout: 2_000,
         });
         const abort = () => {
-          void client.end();
+          void client.end().catch(() => undefined);
         };
         signal.addEventListener("abort", abort, { once: true });
         try {
           await client.connect();
           const result = await client.query(
-            'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
+            'SELECT migration_name, finished_at, rolled_back_at, logs FROM "_prisma_migrations"',
           );
-          return migrationSetIsReady(
-            result.rows.map((row) => row.migration_name),
-            expectedMigrations,
-          );
+          const readiness = inspectMigrationLedger(result.rows, expectedMigrations);
+          if (!readiness.ready) console.info("Staging schema is not ready: " + readiness.anomalies.join(",") + ".");
+          return readiness.ready;
         } finally {
           signal.removeEventListener("abort", abort);
           await client.end().catch(() => undefined);
@@ -92,14 +121,14 @@ async function main() {
     if (controller.signal.aborted) return signalExitCode(receivedSignal);
     console.info("Staging database schema is ready. Starting notification worker.");
 
-    workerChild = spawn(
+    workerChild = spawnProcess(
       process.execPath,
       [
         workerCliPath,
         "--conditions=react-server",
         workerEntryPath,
       ],
-      { env: process.env, stdio: "inherit" },
+      { env: environment, stdio: "inherit" },
     );
 
     return await new Promise((resolve, reject) => {
@@ -114,12 +143,12 @@ async function main() {
     }
     throw error;
   } finally {
-    process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGTERM", onSigterm);
+    processHost.removeListener("SIGINT", onSigint);
+    processHost.removeListener("SIGTERM", onSigterm);
   }
 }
 
-main()
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) runStagingWorker()
   .then((exitCode) => {
     process.exitCode = exitCode;
   })

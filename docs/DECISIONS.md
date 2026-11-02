@@ -548,3 +548,18 @@ C01 endpoint dedicato; C02 singolo Agenda; C03 DAY soltanto; C04 quattordici col
 Le modifiche Controller sostituiscono Tavoli digitali con Preferenza sala (storica) e UTC visibile con wall-clock del ristorante. Nessuna nuova query; preferredRoom T09 già disponibile. Il limite audit senza distinzione V1/V2 o filtri è accettato: nessuna nuova metadata. Il limite della visualizzazione nativa Excel non autorizza alterazione del valore. Sanitizer M11 preservato; nuova policy dedicata ed errori espliciti per dati non rappresentabili. ADR013.
 
 Baseline main bfaf612a4a0a73c0a6fd8dc5960c48bda8576cd6, tree422546a81cc4fbc2c94aeac3c2e652dc1393fc9b, freeze e735f6e30f7012abf3c67f08ef0fc441f8132565f7cc90fd63849bf8d828ce30,460 file/16 migration. Scope7M/13A/0D,473 finali,453 protetti. Solo implementazione locale, WORK3 indipendente obbligatorio.
+
+
+## M13 P0 — Local Readiness, decisione Controller CLASSIC del 2 novembre 2026
+
+Baseline canonica `6330536bfa9341b1586f563e9cc92fe60ae799a2`, tree `92e98e0396ec01538e9feed4aab690f04a808911`, freeze raw inclusi binari `15229572daf69b2baab81c4e2f4311dfc9d0917b1fdadb8448fdf315230fa9da`:473 file e16 migration. PR18 e PR22 sono merged; i riferimenti precedenti a riconciliazioni non integrate e inventari13/14/15 sono checkpoint storici, superati soltanto per il contratto corrente qui descritto.
+
+Decisioni vincolanti: **M13-P0-C01** soluzione A rafforzata; **C02** readiness strict fail-closed; **C03** E2E aggiornati ai contratti correnti; **C04** scenari browser condivisi; **C05** scope esatto14 path (11M/3A/0D),476 file finali e462 baseline protetti; **C06** Node24.14.1 runtime di riferimento senza cambio pin; **C07** WORK3 Final QG indipendente obbligatorio.
+
+Implementazione autorizzata esclusivamente locale. Nessun risultato storico viene ricertificato. Nuove esecuzioni, failure, runtime effettivo e limiti sono nelle evidenze esterne del candidato. Se il binario24.14.1 non è disponibile, i gate su altra versione Node24 sono preliminari e `NODE_PIN_PASS=false`; la riserva continua in Runtime Readiness P1. M13 non è CLOSED e nessuno staging/produzione è dichiarato pronto.
+
+**M13 FASE C ON_HOLD; Render, Tailscale, deploy, pubblicazione Git, M14/M15 e Asporti non autorizzati.** SEC01, BFCache/root host, Unicode/font PDF, renderer Excel, CI, retention e backup/restore conservano riserve e mandati separati. Il fake-data scan attuale non copre esaustivamente NI autonome/legacy: finding aperto per P1, nessuna estensione del relativo codice in P0.
+
+C01/C02 mantengono il vincolo esplicito16 più un inventario nominale approvato: nessuna accettazione automatica di inventari ridotti coincidenti tra filesystem e DB. Le righe rolled back sono anomalie bloccanti anche se esiste una successiva riga riuscita. Richiedono diagnosi e nuovo intervento autorizzato, mai resolve automatico.
+
+C03/C04 preservano create browser singoli201, replay200, conflitto409, management corrente, PHONE unknown, assignment completo e smoke M11; aggiungono V2 con binding originale obbligatorio. La versione Public non è esposta dal DTO: la verifica della versione usa una lettura Staff autenticata, senza estendere l'API pubblica. Modifica management con uno slot diverso, ottenuto da disponibilità corrente.

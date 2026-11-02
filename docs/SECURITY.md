@@ -506,3 +506,20 @@ Auth Staff/Admin request-scoped, Origin e password guard, binding originale cano
 Ogni testo cella passa dal sanitizer storico invariato e policy dedicata: UTF16/XML validi, limiti32767 unità dopo prefisso formula e253 LF, escape letterali _xHHHH_ e CR senza perdita. Nessuna formula, hyperlink, rich text, macro, relazione esterna o foglio riservato nascosto. Reiezione esplicita del documento se non rappresentabile. Verifiche reali su ZIP/XML/shared strings richieste.
 
 Audit canonico EXCEL/DAY/fromDate/toDate/dayCount1/reservationCount; SUCCESS prima della consegna, FAILURE singolo senza loop. Nessun nuovo campo audit e nessuna scrittura business. Cap20.000 dopo filtri/cap+1 e25MiB cumulativi output; RAM non limitata a25MiB. Test mutativi soltanto su PostgreSQL temporaneo positivamente verificato prima di migration/seed/runner. Tutte le riserve storiche restano aperte; nessuna certificazione SECURITY APPROVED o PRODUCTION READY.
+
+
+## M13 P0 — Local Readiness, decisione Controller CLASSIC del 2 novembre 2026
+
+Baseline canonica `6330536bfa9341b1586f563e9cc92fe60ae799a2`, tree `92e98e0396ec01538e9feed4aab690f04a808911`, freeze raw inclusi binari `15229572daf69b2baab81c4e2f4311dfc9d0917b1fdadb8448fdf315230fa9da`:473 file e16 migration. PR18 e PR22 sono merged; i riferimenti precedenti a riconciliazioni non integrate e inventari13/14/15 sono checkpoint storici, superati soltanto per il contratto corrente qui descritto.
+
+Decisioni vincolanti: **M13-P0-C01** soluzione A rafforzata; **C02** readiness strict fail-closed; **C03** E2E aggiornati ai contratti correnti; **C04** scenari browser condivisi; **C05** scope esatto14 path (11M/3A/0D),476 file finali e462 baseline protetti; **C06** Node24.14.1 runtime di riferimento senza cambio pin; **C07** WORK3 Final QG indipendente obbligatorio.
+
+Implementazione autorizzata esclusivamente locale. Nessun risultato storico viene ricertificato. Nuove esecuzioni, failure, runtime effettivo e limiti sono nelle evidenze esterne del candidato. Se il binario24.14.1 non è disponibile, i gate su altra versione Node24 sono preliminari e `NODE_PIN_PASS=false`; la riserva continua in Runtime Readiness P1. M13 non è CLOSED e nessuno staging/produzione è dichiarato pronto.
+
+**M13 FASE C ON_HOLD; Render, Tailscale, deploy, pubblicazione Git, M14/M15 e Asporti non autorizzati.** SEC01, BFCache/root host, Unicode/font PDF, renderer Excel, CI, retention e backup/restore conservano riserve e mandati separati. Il fake-data scan attuale non copre esaustivamente NI autonome/legacy: finding aperto per P1, nessuna estensione del relativo codice in P0.
+
+Readiness non filtra via SQL le righe anomale e non scrive migration. File/link inattesi falliscono prima della connessione. I test di startup usano fake client/child; la prova PG legge il ledger del solo database temporaneo e crea una tabella TEMP per i negativi, senza corrompere il ledger canonico.
+
+Gli scenari condivisi non ricevono credenziali: login e configurazione restano nei caller autorizzati. Nuovi payload senza roomCode/children/NI; i DTO pubblici legacy restano compatibili e non espongono NI, assignment, ID o versione. V2 richiede binding originale; testano400 per assente/invalido e403 per mismatch/Origin. M11 resta separato. Nessuna nuova accettazione delle advisory SEC01.
+
+Ogni test mutativo richiede verifica positiva di container/immagine/mount/porta loopback/utenza/current_database prima di migration, seed e runner. Cleanup certificabile solo in quiescenza dimostrata: nessun worker concorrente o altro produttore di righe durante PRE/POST. I test locali controllati non certificano automaticamente un futuro cleanup remoto concorrente.
