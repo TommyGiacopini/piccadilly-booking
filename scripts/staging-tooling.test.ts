@@ -479,12 +479,12 @@ describe
         fixtureIds.decoyAuditId = decoyAudit.id;
 
         const preReservation = await client.reservation.create({
-          data: fakeReservationData({
+          data: { ...fakeReservationData({
             restaurantId: STAGING_DEMO_RESTAURANT_ID,
             userId: admin.id,
             firstName: "M13-NONRUN-FIRST",
             lastName: "M13-NONRUN-LAST",
-          }),
+          }), childrenCount: 1, gameRoomPreference: false, privateNotes: "M13 synthetic PRE private note" },
         });
         fixtureIds.preReservationId = preReservation.id;
         const preAudit = await client.auditEvent.create({
@@ -506,13 +506,27 @@ describe
           runId,
         );
 
+        // No worker is started in this isolated fixture. A PRE change must abort,
+        // never be silently accepted or erased by cleanup.
+        await client.reservation.update({ where: { id: preReservation.id }, data: { childrenCount: 0, gameRoomPreference: null, privateNotes: "M13 synthetic changed NI" } });
+        await expect(cleanupStagingRun({
+          database: pool as unknown as StagingDatabase, runId, confirmation: runId, preBaseline,
+        })).rejects.toThrow("PRE/POST invariant");
+        expect(await client.reservation.findUniqueOrThrow({ where: { id: preReservation.id } })).toMatchObject({
+          childrenCount: 0, gameRoomPreference: null, privateNotes: "M13 synthetic changed NI",
+        });
+        await client.reservation.update({ where: { id: preReservation.id }, data: {
+          childrenCount: preReservation.childrenCount, gameRoomPreference: preReservation.gameRoomPreference,
+          privateNotes: preReservation.privateNotes, updatedAt: preReservation.updatedAt,
+        } });
+
         const runReservation = await client.reservation.create({
-          data: fakeReservationData({
+          data: { ...fakeReservationData({
             restaurantId: STAGING_DEMO_RESTAURANT_ID,
             userId: admin.id,
             firstName: `${prefix}FIRST`,
             lastName: `${prefix}LAST`,
-          }),
+          }), childrenCount: 2, gameRoomPreference: true, privateNotes: "M13 synthetic run private note" },
         });
         fixtureIds.runReservationId = runReservation.id;
         const assignment = await client.reservationAssignment.create({
@@ -687,6 +701,7 @@ describe
         expect(result.runRowsAfter).toBe(0);
         expect(result.beforeFingerprint).toBe(preBaseline.fingerprint);
         expect(result.afterFingerprint).toBe(preBaseline.fingerprint);
+        expect(await client.reservation.findUniqueOrThrow({ where: { id: preReservation.id } })).toEqual(preReservation);
         for (const deleted of Object.values(result.deleted)) expect(deleted).toBe(1);
         expect(
           await client.reservation.count({

@@ -214,3 +214,24 @@ Il database staging non viene promosso. Produzione sarà ricreata su account del
 ristorante con database, segreti, dominio, provider e backup nuovi. M14 e M15 non
 sono avviate da questo runbook. ADR 004 resta la decisione autorevole sulla
 separazione degli ambienti.
+
+
+## M13 P0 — Local Readiness, decisione Controller CLASSIC del 2 novembre 2026
+
+Baseline canonica `6330536bfa9341b1586f563e9cc92fe60ae799a2`, tree `92e98e0396ec01538e9feed4aab690f04a808911`, freeze raw inclusi binari `15229572daf69b2baab81c4e2f4311dfc9d0917b1fdadb8448fdf315230fa9da`:473 file e16 migration. PR18 e PR22 sono merged; i riferimenti precedenti a riconciliazioni non integrate e inventari13/14/15 sono checkpoint storici, superati soltanto per il contratto corrente qui descritto.
+
+Decisioni vincolanti: **M13-P0-C01** soluzione A rafforzata; **C02** readiness strict fail-closed; **C03** E2E aggiornati ai contratti correnti; **C04** scenari browser condivisi; **C05** scope esatto14 path (11M/3A/0D),476 file finali e462 baseline protetti; **C06** Node24.14.1 runtime di riferimento senza cambio pin; **C07** WORK3 Final QG indipendente obbligatorio.
+
+Implementazione autorizzata esclusivamente locale. Nessun risultato storico viene ricertificato. Nuove esecuzioni, failure, runtime effettivo e limiti sono nelle evidenze esterne del candidato. Se il binario24.14.1 non è disponibile, i gate su altra versione Node24 sono preliminari e `NODE_PIN_PASS=false`; la riserva continua in Runtime Readiness P1. M13 non è CLOSED e nessuno staging/produzione è dichiarato pronto.
+
+**M13 FASE C ON_HOLD; Render, Tailscale, deploy, pubblicazione Git, M14/M15 e Asporti non autorizzati.** SEC01, BFCache/root host, Unicode/font PDF, renderer Excel, CI, retention e backup/restore conservano riserve e mandati separati. Il fake-data scan attuale non copre esaustivamente NI autonome/legacy: finding aperto per P1, nessuna estensione del relativo codice in P0.
+
+### Contratto operativo corrente P0
+
+Il worker verifica esattamente16 nomi versionati e tutti i relativi SQL regolari non vuoti. Il ledger completo deve avere esattamente una riga valida per ciascuno: finished_at presente, rolled_back_at nullo e nessun log di fallimento. Missing, unexpected, duplicate, incomplete, failed o rolled-back impediscono READY e quindi l'avvio. Il wrapper non applica né risolve migration. Restano2s/120s, abort e SIGINT/SIGTERM; dopo READY un solo CLI M12/PR21.
+
+La suite remota preserva Basic, banner, noindex, robots, health, cookie Secure/HttpOnly/SameSite, viewport390/820/1440, Admin e Origin. Public passa dalle tre sezioni T08, dichiara composizione, non sceglie sala fisica; PHONE ammette Non specificato e conserva opt-out/consenso/NC/esigenze. Assignment richiede disponibilità positivamente true e tavolo attivo. M11 PDF/Excel preservati; aggiunti smoke V2 con binding, MIME/filename/header/magic ed errori. Le asserzioni condivise sono eseguite localmente mediante `tests/e2e/m13-local-readiness.spec.ts` sotto il runner canonico: non sono un'esecuzione della suite remota.
+
+Il run E2E principale e il run dedicato di acceptance notifiche restano distinti. verify-run richiede una sola PHONE con confirmation abilitata, non il run Public+PHONE opt-out. Provider esclusivamente simulati. Nessun nuovo endpoint o failure switch.
+
+PRE/POST e cleanup richiedono assenza di worker concorrenti e altri writer nel periodo osservato. La regressione PG verifica anche composizione e NI sintetiche non nulle e rifiuta una modifica delle righe PRE; dopo cleanup conserva l'intera riga preesistente. Non dichiarare uno scan fake-data esaustivo né un cleanup remoto certificato dai soli test locali. Autorizzazione Render/accesso/costo/provisioning e validazione semantica restano gate futuri separati; nessun prezzo storico è un prezzo corrente.

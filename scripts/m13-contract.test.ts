@@ -172,6 +172,19 @@ describe("M13 dependency and runtime contract", () => {
   });
 });
 
+describe("M13 P0 schema16 inventory contract", () => {
+  it("pins exactly the sixteen versioned names without changing migration files", () => {
+    const names = readdirSync(join(repositoryRoot, "prisma/migrations"), { withFileTypes: true })
+      .filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
+    const startup = read("scripts/staging-worker-startup.mjs");
+    const pinned = [...startup.matchAll(/"(\d{14}_[a-z0-9_]+)"/gu)].map(match => match[1]);
+    expect(names).toHaveLength(16);
+    expect(pinned).toEqual(names);
+    expect(startup).toContain("EXPECTED_STAGING_MIGRATION_COUNT = 16");
+    expect(read("scripts/start-staging-worker.mjs")).toContain('SELECT migration_name, finished_at, rolled_back_at, logs FROM');
+  });
+});
+
 describe("M13 provider and filesystem kill gates", () => {
   it("keeps the notification infrastructure limited to simulated adapters and no network", () => {
     const directory = join(
@@ -195,6 +208,8 @@ describe("M13 provider and filesystem kill gates", () => {
       read("src/modules/exports/infrastructure/font-loader.ts"),
       read("src/modules/exports/infrastructure/pdfkit-export-renderer.ts"),
       read("src/modules/exports/infrastructure/exceljs-export-renderer.ts"),
+      read("src/modules/exports/infrastructure/pdfkit-v2-export-renderer.ts"),
+      read("src/modules/exports/infrastructure/exceljs-v2-export-renderer.ts"),
     ].join("\n");
     expect(sources).not.toMatch(/[A-Za-z]:\\/);
     expect(sources).not.toMatch(/(?:writeFile|mkdtemp|tmpdir)\s*\(/);
@@ -205,6 +220,8 @@ describe("M13 provider and filesystem kill gates", () => {
 describe("M13 staging Playwright static contract", () => {
   const config = read("playwright.staging.config.ts");
   const suite = read("tests/staging/staging.spec.ts");
+  const scenarios = read("tests/staging/m13-booking-scenarios.ts");
+  const browser = suite + "\n" + scenarios;
 
   it("uses one Chromium worker, no local web server and failure evidence only", () => {
     expect(config).toContain('testDir: "./tests/staging"');
@@ -237,24 +254,30 @@ describe("M13 staging Playwright static contract", () => {
     }
     expect(suite).not.toContain("DATABASE_URL");
     expect(suite).not.toMatch(/from\s+["']pg["']|PrismaClient/);
+    expect(scenarios).not.toMatch(/DATABASE_URL|process\.env|PrismaClient|from\s+["']pg["']/);
+    expect(suite).toContain("await publicBookingAndManagement(");
+    expect(suite).toContain("await phoneBooking(");
+    const local = read("tests/e2e/m13-local-readiness.spec.ts");
+    expect(local).toContain("await publicBookingAndManagement(");
+    expect(local).toContain("await phoneBooking(");
   });
 
   it("requires the public and Staff creates to use one real browser form submit", () => {
-    expect(suite).toContain('page.goto("/prenota?lang=it")');
-    expect(suite).toMatch(
+    expect(browser).toContain('page.goto("/prenota?lang=it")');
+    expect(browser).toMatch(
       /page\s*\.getByRole\("button",\s*\{ name: "Conferma prenotazione" \}\)/u,
     );
-    expect(suite).toContain("publicCreatePostCount");
-    expect(suite).toContain("expect(publicCreatePostCount).toBe(1)");
-    expect(suite).toContain(
+    expect(browser).toContain("publicCreatePostCount");
+    expect(browser).toContain("expect(publicCreatePostCount).toBe(1)");
+    expect(browser).toContain(
       'page.goto(`/dashboard/reservations/new?date=${localDate}`)',
     );
-    expect(suite).toMatch(
+    expect(browser).toMatch(
       /page\s*\.getByRole\("button",\s*\{ name: "Salva prenotazione telefonica" \}\)/u,
     );
-    expect(suite).toContain("phoneCreatePostCount");
-    expect(suite).toContain("expect(phoneCreatePostCount).toBe(1)");
-    expect(suite).not.toMatch(
+    expect(browser).toContain("phoneCreatePostCount");
+    expect(browser).toContain("expect(phoneCreatePostCount).toBe(1)");
+    expect(browser).not.toMatch(
       /page\.request\.post\(["']\/api\/(?:public|staff)\/reservations["']/u,
     );
   });

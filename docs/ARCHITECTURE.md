@@ -733,3 +733,18 @@ POST /api/staff/exports/excel-v2 → helper auth/binding/body T09 invariati → 
 Writer in memoria con sink cumulativo limitato, nessuno stream HTTP anticipato e nessun file temporaneo. useSharedStrings=true, useStyles=true; row commit progressivo e cleanup sink/archiver su errore. La shared-string table mantiene tutte le stringhe distinte e il dataset rimane in memoria: nessuna promessa di memoria costante. Node/ExcelJS, serializzazione ZIP, Buffer.concat e copia HTTP possono aumentare il picco oltre il buffer finale.
 
 Conversione N deterministica Intl con timezone del ristorante, componenti wall-clock racchiuse in Date.UTC per ExcelJS; nessuna consultazione del fuso implicito host e nessun riordinamento wall-clock. Endpoint/composizione/pannello aggiuntivi preservano T09/T10/M11. Nessuna dipendenza, tabella o migration nuova. ADR013.
+
+
+## M13 P0 — Local Readiness, decisione Controller CLASSIC del 2 novembre 2026
+
+Baseline canonica `6330536bfa9341b1586f563e9cc92fe60ae799a2`, tree `92e98e0396ec01538e9feed4aab690f04a808911`, freeze raw inclusi binari `15229572daf69b2baab81c4e2f4311dfc9d0917b1fdadb8448fdf315230fa9da`:473 file e16 migration. PR18 e PR22 sono merged; i riferimenti precedenti a riconciliazioni non integrate e inventari13/14/15 sono checkpoint storici, superati soltanto per il contratto corrente qui descritto.
+
+Decisioni vincolanti: **M13-P0-C01** soluzione A rafforzata; **C02** readiness strict fail-closed; **C03** E2E aggiornati ai contratti correnti; **C04** scenari browser condivisi; **C05** scope esatto14 path (11M/3A/0D),476 file finali e462 baseline protetti; **C06** Node24.14.1 runtime di riferimento senza cambio pin; **C07** WORK3 Final QG indipendente obbligatorio.
+
+Implementazione autorizzata esclusivamente locale. Nessun risultato storico viene ricertificato. Nuove esecuzioni, failure, runtime effettivo e limiti sono nelle evidenze esterne del candidato. Se il binario24.14.1 non è disponibile, i gate su altra versione Node24 sono preliminari e `NODE_PIN_PASS=false`; la riserva continua in Runtime Readiness P1. M13 non è CLOSED e nessuno staging/produzione è dichiarato pronto.
+
+**M13 FASE C ON_HOLD; Render, Tailscale, deploy, pubblicazione Git, M14/M15 e Asporti non autorizzati.** SEC01, BFCache/root host, Unicode/font PDF, renderer Excel, CI, retention e backup/restore conservano riserve e mandati separati. Il fake-data scan attuale non copre esaustivamente NI autonome/legacy: finding aperto per P1, nessuna estensione del relativo codice in P0.
+
+STG-01: wrapper e helper verificano16 nomi approvati, directory e SQL regolari non vuoti senza seguire symlink/junction inattesi. Leggono l'intero ledger e distinguono missing/unexpected/duplicate/incomplete/failed/rolled-back; qualsiasi anomalia impedisce READY. Nessuna modifica del ledger. Polling2s/deadline120s, abort, segnali, exit code e CLI corrente sono preservati; un solo spawn segue READY. Il backoff runtime PR21 resta separato, senza nuovo loop.
+
+STG-02: `tests/staging/m13-booking-scenarios.ts` contiene solo operazioni browser/API autorizzate, senza DB, segreti o bypass. Suite remota e nuova spec locale riusano questi scenari. La spec locale usa fixture e tenant del runner E2E canonico; il resolver remoto resta HTTPS onrender.com con Basic. Runner/config, applicazione e root host invariati.
