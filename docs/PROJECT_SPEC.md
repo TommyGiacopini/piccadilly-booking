@@ -1008,3 +1008,13 @@ Righe misurate prima del disegno, altezza dinamica, continuazioni esplicite con 
 partySize, childrenCount e gameRoomPreference restano autorevoli: TA per zero bambini noto, adulti/bambini numerici quando noti, ? per composizione sconosciuta. Il flag storico bambini senza conteggio resta esplicito; richieste Giochi e preferenza storica non costituiscono assegnazione. Totali di composizione parziali quando esistono unknown. NC autorizzate conservate senza redazione automatica. NI autonome/legacy e contatti strutturati esclusi dalla query V2; una NC può contenere un contatto digitato liberamente.
 
 M11 PDF DAY ed Excel DAY/MONTH/RANGE restano invariati, inclusi privacy T06-A, telefono legacy, W vuota, formule sicure, filename, audit e limiti. Excel V2/T11 non autorizzata.
+
+## T11 — Operational Excel V2, ratifica Controller CLASSIC
+
+T09 e T10 sono CLOSED (PR34 e PR35 merged); i checkpoint precedenti restano storici. T11 aggiunge Excel operativo V2, DAY con servizio Pranzo/Cena esplicito, sala e ordinamento T09, senza sostituire M11 DAY/MONTH/RANGE o PDF V2.
+
+Un solo foglio visibile Agenda: righe1–6 contesto/lettura/totali, riga7 intestazioni, righe8+ prenotazioni; freeze7 righe/2 colonne e filtro A7:Nultima soltanto con dati. Nessuna prenotazione artificiale per dataset vuoto. Colonne: Ordine, Sala effettiva, Arrivo, Cognome, Nome, Coperti, Adulti, Bambini, Composizione, Giochi, Preferenza sala (storica), Esigenze/richieste, Note cliente NC, Prenotata il.
+
+K conserva preferredRoom; nessun riferimento digitale ai tavoli, nessuna duplicazione della preferenza in L. NC integrali possono contenere contatti/tavoli liberamente digitati. Nessun telefono/email strutturato o NI. Numeri adulti/bambini nullable: TA/DECLARED/UNKNOWN, legacy bambini espliciti senza conteggi inventati. Ordine conserva la sequenza T09. Totali server della selezione, invarianti rispetto ai filtri Excel e dichiarati come tali.
+
+N è una data Excel del wall-clock del ristorante, formato dd/mm/yyyy hh:mm, timezone indicata nel contesto; istanti distinti nell'ora autunnale ripetuta possono coincidere. Lettura propria indipendente dalla preview. Testi completi senza trim/troncamento/shrink: oltre l'altezza nativa della riga si consultano nell'editor della cella. Valori non rappresentabili causano errore esplicito.

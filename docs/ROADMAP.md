@@ -924,3 +924,11 @@ Perimetro esatto20 path (7M/13A/0D),460 file previsti,440 baseline protetti,16 m
 Gate U/S/PG/H/L/P/B/R: contratti e dominio, service/audit, PostgreSQL isolato, API request-scoped e cookie A/B, geometria del PDF reale tramite PDF.js, rasterizzazione e verifica visiva, browser e regressioni complete. Playwright workers1/retries0; Prisma generate/validate, strict typecheck, ESLint e production build. Evidenze esterne con log sanitizzati, exit code, freeze/patch/manifest, privacy/audit e misure memoria.
 
 Tutti i test mutativi devono usare DB temporanei positivamente identificati prima di migration/seed/runner. Nessun test automatico sul DB persistente. Checkpoint locale pronto non significa approvazione autonoma: serve WORK3 Final QG. T10 non CLOSED, M13/Render/Tailscale sospesi, pubblicazione Git/merge/deploy vietati. Riserve T09-EVID01/TIME01/COV01/COV02/EVID02, PR34-FMT01, advisory, WASM/npm ls, BFCache/Linux/CI/accessibilità, D01 legacy, retention/backup/restore/runtime preservate.
+
+## T11 — Operational Excel V2, ratifica Controller CLASSIC
+
+T09 CLOSED PR34 e T10 CLOSED PR35 merged, baseline bfaf612a4a0a73c0a6fd8dc5960c48bda8576cd6. T11 implementazione locale autorizzata con C01–C12 ratificate e modifiche K preferenza storica / N ora locale. I checkpoint precedenti non costituiscono lo stato corrente delle tranche chiuse.
+
+Gate U/S/PG/H/X/B/R: file XLSX reali, analisi indipendente ZIP/XML namespace-aware, privacy/shared strings/escape, DST e tipi, audit, streaming/limiti/errori, browser fencing, full Vitest/Playwright workers1 retries0, Prisma/typecheck/lint/build. Ogni receipt registra comando, cwd, runtime effettivo, tempi, exit code, candidato prima/dopo e DB temporaneo quando pertinente; failure conservate.
+
+T11 non CLOSED: WORK3 Final QG richiesto. Nessuna pubblicazione Git, merge, deploy, ambiente UAT permanente o milestone successiva. M13 ON_HOLD, Render/Tailscale non autorizzati. Riserve T09/T10 e precedenti preservate; nuova suite non le chiude.

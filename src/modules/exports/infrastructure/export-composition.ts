@@ -14,6 +14,9 @@ import { renderPdfExport } from "@/modules/exports/infrastructure/pdfkit-export-
 import { createPdfV2Service } from "@/modules/exports/application/pdf-v2-service";
 import type { PdfV2Ports } from "@/modules/exports/application/pdf-v2-ports";
 import { renderPdfV2 } from "@/modules/exports/infrastructure/pdfkit-v2-export-renderer";
+import { createExcelV2Service } from "@/modules/exports/application/excel-v2-service";
+import type { ExcelV2Ports } from "@/modules/exports/application/excel-v2-ports";
+import { renderExcelV2 } from "@/modules/exports/infrastructure/exceljs-v2-export-renderer";
 
 const infrastructurePorts: ExportPorts = {
   snapshotReader: { read: readExportSnapshot },
@@ -43,3 +46,12 @@ export function createInfrastructurePdfV2Service(overrides: Partial<PdfV2Ports> 
 }
 
 export const pdfV2Service = createInfrastructurePdfV2Service();
+
+export function createInfrastructureExcelV2Service(overrides: Partial<ExcelV2Ports> = {}) {
+  return createExcelV2Service({
+    snapshotReader: { read: readExportPreview }, renderer: { render: renderExcelV2 },
+    auditWriter: { write: writeExportAudit }, clock: { now: () => new Date() },
+    correlationIds: { generate: randomUUID }, ...overrides,
+  });
+}
+export const excelV2Service = createInfrastructureExcelV2Service();

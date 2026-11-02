@@ -7,7 +7,9 @@ import { sameDraftSession, type StaffDraftIdentity } from "@/modules/dashboard/d
 import { EXPORT_PREVIEW_ROOMS, exportPreviewRequestSchema, exportPreviewResponseSchema, type ExportPreviewRequest, type ExportPreviewDto } from "@/modules/exports/domain/export-contract";
 import { pdfV2RequestSchema, pdfV2Filename } from "@/modules/exports/domain/pdf-v2-domain";
 
-type ExportAction = "PDF" | "DAY" | "MONTH" | "RANGE" | "PREVIEW" | "PDF_V2";
+import { excelV2RequestSchema, excelV2Filename, EXCEL_V2_MIME } from "@/modules/exports/domain/excel-v2-domain";
+
+type ExportAction = "PDF" | "DAY" | "MONTH" | "RANGE" | "PREVIEW" | "PDF_V2" | "EXCEL_V2";
 interface PreviewStamp { identity: StaffDraftIdentity; epoch: number; lease: number; route: string }
 const currentRoute = () => window.location.pathname + window.location.search;
 
@@ -50,6 +52,13 @@ const controller = useStaffDraftHost(), host = useStaffHostView();
     active.abort.abort(); activePdf.current = null;
     requestInFlight.current = false; setLoading(value => value === "PDF_V2" ? null : value);
   }, []);
+  const activeExcel = useRef<{ route: string; abort: AbortController; stamp?: PreviewStamp } | null>(null);
+  const cancelExcel = useCallback(() => {
+    const active = activeExcel.current;
+    if (!active) return;
+    active.abort.abort(); activeExcel.current = null;
+    requestInFlight.current = false; setLoading(value => value === "EXCEL_V2" ? null : value);
+  }, []);
   const cancelPreview = useCallback(() => {
     ++generation.current;
     const active = activePreview.current;
@@ -72,18 +81,23 @@ const controller = useStaffDraftHost(), host = useStaffHostView();
     const active = activePdf.current;
     if (active?.stamp && !stampMatches(active.stamp)) cancelPdf();
   }, [cancelPdf, stampMatches, host.revision]);
+  useLayoutEffect(() => {
+    const active = activeExcel.current;
+    if (active?.stamp && !stampMatches(active.stamp)) cancelExcel();
+  }, [cancelExcel, stampMatches, host.revision]);
   useEffect(() => () => {
     ++generation.current; activePreview.current?.abort.abort(); activePreview.current = null;
     activePdf.current?.abort.abort(); activePdf.current = null;
+    activeExcel.current?.abort.abort(); activeExcel.current = null;
   }, []);
   useEffect(() => {
-    const invalidate = () => cancelPdf();
+    const invalidate = () => { cancelPdf(); cancelExcel(); };
     window.addEventListener("pagehide", invalidate);
     return () => window.removeEventListener("pagehide", invalidate);
-  }, [cancelPdf]);
+  }, [cancelPdf, cancelExcel]);
   useLayoutEffect(() => { if (previewError) errorSummary.current?.focus(); }, [previewError]);
   function change<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
-    cancelPdf();
+    cancelPdf(); cancelExcel();
     cancelPreview(); setInvalidFields([]); setForm(previous => ({ ...previous, [key]: value }));
   }
 
@@ -155,6 +169,89 @@ const controller = useStaffDraftHost(), host = useStaffHostView();
       }
     } finally {
       if (activePdf.current === intent) { activePdf.current = null; requestInFlight.current = false; setLoading(null); }
+    }
+  }
+  async function downloadExcelV2() {
+    if (requestInFlight.current) return;
+    const parsed = excelV2RequestSchema.safeParse({
+      version: 2, target: form.target, period: { mode: "DAY", date: form.date },
+      service: form.service, room: form.room, order: form.order,
+    });
+    if (!parsed.success) {
+      setPreviewError("Verifica la data, scegli Pranzo o Cena e seleziona il profilo Excel.");
+      setInvalidFields(parsed.error.issues.map(issue => String(issue.path[0] === "period" ? "date" : issue.path[0])));
+      return;
+    }
+    requestInFlight.current = true; setLoading("EXCEL_V2"); setPreviewError(null);
+    const intent = { route: currentRoute(), abort: new AbortController(), stamp: undefined as PreviewStamp | undefined };
+    activeExcel.current = intent;
+    const ownsIntent = () => activeExcel.current === intent && currentRoute() === intent.route;
+    try {
+      const identity = await controller.verifySession();
+      if (!ownsIntent()) return;
+      if (!identity || !controller.sessionVisible() || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u.test(identity.sessionBinding)) throw new Error("Verifica della sessione non disponibile. Nessun Excel scaricato; riprova.");
+      const state = controller.getSnapshot().drafts;
+      intent.stamp = { identity, epoch: state.authEpoch, lease: state.leaseEpoch, route: intent.route };
+      if (!stampMatches(intent.stamp)) return;
+      const response = await fetch("/api/staff/exports/excel-v2", {
+        method: "POST", credentials: "same-origin", cache: "no-store", signal: intent.abort.signal,
+        headers: { "Content-Type": "application/json", "X-Piccadilly-Draft-Session-Binding": identity.sessionBinding },
+        body: JSON.stringify(parsed.data),
+      });
+      if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+      if (response.status === 401 || response.status === 403) {
+        controller.quarantine(); cancelExcel();
+        setPreviewError("Sessione non confermata. Nessun Excel scaricato; verifica l'accesso e riprova."); return;
+      }
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { code?: string } | null;
+        if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+        throw new Error(body?.code === "EXPORT_TOO_LARGE" ? "La selezione supera i limiti tecnici consentiti."
+          : body?.code === "EXPORT_DATA_INCONSISTENT" ? "I dati non sono coerenti. Contatta un amministratore."
+          : "Non è stato possibile generare l’Excel. Riprova.");
+      }
+      if (response.headers.get("content-type")?.split(";", 1)[0] !== EXCEL_V2_MIME) throw new Error("Risposta Excel non valida. Riprova.");
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Risposta Excel non valida. Riprova.");
+      const chunks: Uint8Array<ArrayBuffer>[] = []; let length = 0;
+      try {
+        while (true) {
+          const part = await reader.read();
+          if (!ownsIntent() || !stampMatches(intent.stamp)) { await reader.cancel(); return; }
+          if (part.done) break;
+          length += part.value.byteLength;
+          if (length > 26_214_400) { await reader.cancel(); throw new Error("Risposta Excel non valida. Riprova."); }
+          chunks.push(new Uint8Array(part.value));
+        }
+      } finally { reader.releaseLock(); }
+      const blob = new Blob(chunks, { type: EXCEL_V2_MIME });
+      if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+      if (blob.size < 4 || await blob.slice(0, 4).text() !== "PK\u0003\u0004") throw new Error("Risposta Excel non valida. Riprova.");
+      if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+      // A cookie can switch without a browser focus event while generation is pending.
+      // Suspend our own dataset lease during this proof, retaining the original owner.
+      intent.stamp = undefined;
+      const confirmed = await controller.verifySession();
+      if (!ownsIntent()) return;
+      if (!confirmed || !sameDraftSession(identity, confirmed) || !controller.sessionVisible()) {
+        controller.quarantine(); throw new Error("Sessione cambiata. Nessun Excel scaricato; verifica l'accesso e riprova.");
+      }
+      const finalState = controller.getSnapshot().drafts;
+      intent.stamp = { identity: confirmed, epoch: finalState.authEpoch, lease: finalState.leaseEpoch, route: intent.route };
+      if (!stampMatches(intent.stamp)) return;
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        if (!ownsIntent() || !stampMatches(intent.stamp)) return;
+        const anchor = document.createElement("a"); anchor.href = objectUrl;
+        anchor.download = excelV2Filename(parsed.data); anchor.hidden = true;
+        document.body.append(anchor); anchor.click(); anchor.remove();
+      } finally { URL.revokeObjectURL(objectUrl); }
+    } catch (failure) {
+      if (ownsIntent() && (!intent.stamp || stampMatches(intent.stamp))) {
+        setPreviewError(failure instanceof Error && failure.name !== "AbortError" ? failure.message : "Download interrotto. Riprova.");
+      }
+    } finally {
+      if (activeExcel.current === intent) { activeExcel.current = null; requestInFlight.current = false; setLoading(null); }
     }
   }
   async function loadPreview() {
@@ -301,7 +398,7 @@ const controller = useStaffDraftHost(), host = useStaffHostView();
           </label>
         </div>
         {form.date !== dashboardDate && <p className="mt-3 text-sm">La data Agenda è {dashboardDate}. <button type="button" className="min-h-11 rounded-lg px-3 font-bold underline focus:ring-4 focus:ring-orange-200" onClick={() => change("date", dashboardDate)}>Usa data Agenda</button></p>}
-        <p className="mt-3 text-sm">Solo giorno e servizio scelti. Ricerca e altri filtri Agenda non restringono questa selezione. Excel V2 non è ancora disponibile.</p>
+        <p className="mt-3 text-sm">Solo giorno e servizio scelti. Ricerca e altri filtri Agenda non restringono questa selezione. Excel operativo V2 disponibile con profilo Excel.</p>
         <p className="mt-2 text-sm">Il PDF operativo applica la selezione corrente e rilegge i dati al momento della generazione. Può contenere modifiche successive all’anteprima. La colonna Tavolo resta libera per la scrittura a penna.</p>
         <button type="button" className={buttonClass + " mt-3"} disabled={loading !== null} aria-busy={loading === "PREVIEW"} onClick={() => void loadPreview()}>
           {loading === "PREVIEW" ? "Lettura anteprima…" : "Mostra anteprima"}
@@ -317,6 +414,8 @@ const controller = useStaffDraftHost(), host = useStaffHostView();
           {invalidFields.includes("date") && <a className="mr-3 underline" href="#preview-date">Verifica data</a>}
           {invalidFields.includes("service") && <a className="underline" href="#preview-service">Scegli servizio</a>}
         </div>}
+        <button className={`${buttonClass} mt-3`} type="button" data-testid="excel-v2-download" disabled={loading !== null || form.target !== "EXCEL"} onClick={downloadExcelV2}>{loading === "EXCEL_V2" ? "Generazione Excel operativo…" : "Scarica Excel operativo"}</button>
+        <p className="mt-2 text-sm">Excel operativo V2: solo il giorno, servizio, sala e ordinamento selezionati, con profilo Excel. Preview e file sono letture indipendenti e possono differire. Per mese o intervallo usare Excel M11.</p>
         <StaffSensitiveRegion allowed={preview !== null && stampMatches(preview.stamp)}>
           {preview && <ExportPreview key={preview.generation} data={preview.data} />}
         </StaffSensitiveRegion>
