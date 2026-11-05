@@ -5,10 +5,6 @@ import { isIP } from "node:net";
 import { delimiter as pathDelimiter } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { config as loadEnvironment } from "dotenv";
-import pg from "pg";
-
-const { Client } = pg;
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const prismaCliPath = fileURLToPath(
@@ -251,6 +247,8 @@ function defaultLogger(event) {
 }
 
 async function withClient(connectionString, operation) {
+  const { default: pg } = await import("pg");
+  const { Client } = pg;
   const client = new Client({ connectionString, connectionTimeoutMillis: 5_000 });
   await client.connect();
   try {
@@ -313,6 +311,11 @@ export async function runSanitizedNodeChild(
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  options.onChild?.(child);
+  // Under the ownership harness the registered parent stops the complete tree.
+  // Killing this root first would lose the Windows taskkill /T ancestry.
+  const abort = () => { if (!options.onChild) child.kill("SIGTERM"); };
+  options.signal?.addEventListener("abort", abort, { once: true });
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8");
@@ -324,6 +327,7 @@ export async function runSanitizedNodeChild(
     stderr += chunk;
   });
   const [exitCode] = await once(child, "exit");
+  options.signal?.removeEventListener("abort", abort);
   const secrets = collectChildEnvironmentSecrets(childEnvironment);
   const sanitizedStdout = redactRunnerOutput(stdout, secrets);
   const sanitizedStderr = redactRunnerOutput(stderr, secrets);
@@ -332,13 +336,13 @@ export async function runSanitizedNodeChild(
   return typeof exitCode === "number" ? exitCode : 1;
 }
 
-async function runChild(step, childEnvironment, vitestArguments = []) {
+async function runChild(step, childEnvironment, vitestArguments = [], options = {}) {
   const argumentsByStep = {
     migrate: [prismaCliPath, "migrate", "deploy"],
     seed: [prismaCliPath, "db", "seed"],
     vitest: [vitestCliPath, "run", ...vitestArguments],
   };
-  return runSanitizedNodeChild(argumentsByStep[step], childEnvironment);
+  return runSanitizedNodeChild(argumentsByStep[step], childEnvironment, options);
 }
 
 function fakePassword(label) {
@@ -356,7 +360,7 @@ export async function runIsolatedVitest(options = {}) {
     dropDatabase,
     databaseExists,
     migrationCount,
-    runChild,
+    runChild: (step, childEnvironment, argumentsList) => runChild(step, childEnvironment, argumentsList, { signal: options.signal, onChild: options.onChild }),
     ...options.dependencies,
   };
   const adminPassword = fakePassword("Admin");
@@ -373,6 +377,14 @@ export async function runIsolatedVitest(options = {}) {
   let createAttemptStarted = false;
   let createAcknowledged = false;
   let exitCode = 0;
+  let primaryFailure = null;
+  const guard = async (phase) => {
+    if (!options.requireOwnership && !options.ownershipGuard) return;
+    if (options.signal?.aborted) throw new IsolatedVitestSafetyError("OWNERSHIP_ABORTED");
+    if (typeof options.ownershipGuard !== "function") throw new IsolatedVitestSafetyError("OWNERSHIP_GUARD_REQUIRED");
+    const proof = await options.ownershipGuard({ phase, plan });
+    if (proof?.valid !== true || typeof proof.generation !== "string") throw new IsolatedVitestSafetyError("OWNERSHIP_GUARD_REJECTED");
+  };
 
   safeLog(logger, {
     event: "isolated_vitest_lifecycle",
@@ -381,6 +393,7 @@ export async function runIsolatedVitest(options = {}) {
   });
 
   try {
+    await guard("vitest:prepare");
     if (await dependencies.databaseExists(plan)) {
       throw new IsolatedVitestSafetyError("TEMP_DATABASE_COLLISION");
     }
@@ -391,6 +404,7 @@ export async function runIsolatedVitest(options = {}) {
       database: plan.targetDatabaseName,
     });
 
+    await guard("vitest:create");
     createAttemptStarted = true;
     safeLog(logger, {
       event: "isolated_vitest_lifecycle",
@@ -406,6 +420,7 @@ export async function runIsolatedVitest(options = {}) {
     });
 
     for (const step of ["migrate", "seed"]) {
+      await guard(`vitest:${step}`);
       const childExitCode = await dependencies.runChild(
         step,
         childEnvironment,
@@ -422,6 +437,7 @@ export async function runIsolatedVitest(options = {}) {
     }
 
     if (exitCode === 0) {
+      await guard("vitest:inspect");
       const appliedMigrations = await dependencies.migrationCount(plan);
       safeLog(logger, {
         event: "isolated_vitest_migrations",
@@ -431,6 +447,7 @@ export async function runIsolatedVitest(options = {}) {
         throw new IsolatedVitestSafetyError("MIGRATION_COUNT_MISMATCH");
       }
 
+      await guard("vitest:test");
       exitCode = await dependencies.runChild(
         "vitest",
         childEnvironment,
@@ -444,6 +461,7 @@ export async function runIsolatedVitest(options = {}) {
     }
   } catch (error) {
     exitCode = 1;
+    primaryFailure = error instanceof IsolatedVitestSafetyError ? error.code : error.code ?? "ISOLATED_RUN_FAILED";
     safeLog(logger, {
       event: "isolated_vitest_lifecycle",
       state: "failed",
@@ -455,8 +473,10 @@ export async function runIsolatedVitest(options = {}) {
   } finally {
     if (targetConfirmedAbsent && createAttemptStarted) {
       try {
+        await guard("vitest:cleanup");
         const existsAfterCreateAttempt = await dependencies.databaseExists(plan);
         if (existsAfterCreateAttempt) {
+          await guard("vitest:drop");
           await dependencies.dropDatabase(plan);
           const stillExists = await dependencies.databaseExists(plan);
           if (stillExists) {
@@ -469,13 +489,15 @@ export async function runIsolatedVitest(options = {}) {
           database: plan.targetDatabaseName,
           createAcknowledged,
         });
-      } catch {
+      } catch (error) {
         exitCode = 1;
         safeLog(logger, {
           event: "isolated_vitest_lifecycle",
           state: "cleanup_failed",
           code: "TEMP_DATABASE_CLEANUP_FAILED",
           createAcknowledged,
+          primaryFailure,
+          cleanupFailure: error.code ?? "TEMP_DATABASE_CLEANUP_FAILED",
         });
       }
     }
@@ -484,7 +506,8 @@ export async function runIsolatedVitest(options = {}) {
   return exitCode;
 }
 
-function loadLocalEnvironment() {
+async function loadLocalEnvironment() {
+  const { config: loadEnvironment } = await import("dotenv");
   loadEnvironment({
     path: fileURLToPath(new URL("../.env", import.meta.url)),
     override: false,
@@ -502,8 +525,7 @@ const entryPoint = process.argv[1]
   : undefined;
 
 if (entryPoint === import.meta.url) {
-  loadLocalEnvironment();
-  runIsolatedVitest({ vitestArguments: process.argv.slice(2) })
+  loadLocalEnvironment().then(() => runIsolatedVitest({ vitestArguments: process.argv.slice(2) }))
     .then((exitCode) => {
       process.exitCode = exitCode;
     })

@@ -61,6 +61,24 @@ function fakeDependencies(input = {}) {
 }
 
 describe("isolated Vitest runner safety", () => {
+  it.each(["OWNERSHIP_GUARD_REQUIRED", "LEASE_EXPIRED", "CONTAINER_CHANGED", "DATABASE_WRONG", "NETWORK_CHANGED", "ENDPOINT_CHANGED"])("D6 strict %s produces no DDL or child", async (code) => {
+    const fake = fakeDependencies();
+    const exitCode = await runIsolatedVitest({ environment: environment(), targetDatabaseName: safeTarget, requireOwnership: true,
+      ownershipGuard: code === "OWNERSHIP_GUARD_REQUIRED" ? undefined : async () => { throw Object.assign(new Error("synthetic"), { code }); },
+      dependencies: fake.dependencies, logger() {},
+    });
+    expect(exitCode).toBe(1); expect(fake.calls).toEqual([]);
+  });
+  it.each(["vitest:create", "vitest:migrate", "vitest:seed", "vitest:cleanup", "vitest:drop"])("D6 revocation before %s cannot write or drop afterward", async (phase) => {
+    const fake = fakeDependencies(); let revoked = false;
+    const exitCode = await runIsolatedVitest({ environment: environment(), targetDatabaseName: safeTarget, requireOwnership: true,
+      ownershipGuard: async ({ phase: current }) => { if (current === phase) revoked = true; if (revoked) throw Object.assign(new Error("synthetic"), { code: "LEASE_REVOKED" }); return { valid: true, generation: "synthetic" }; }, dependencies: fake.dependencies, logger() {},
+    });
+    expect(exitCode).toBe(1); expect(fake.calls).not.toContain("drop");
+    if (phase === "vitest:create") expect(fake.calls).not.toContain("create");
+    if (phase === "vitest:migrate") expect(fake.calls).not.toContain("migrate");
+    if (phase === "vitest:seed") expect(fake.calls).not.toContain("seed");
+  });
   it.each([15, 17])("rejects migration count %s instead of exact latest16 and still cleans up", async (migrationCount) => {
     const fake = fakeDependencies({ migrationCount });
     const events = [];
