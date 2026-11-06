@@ -148,10 +148,31 @@ I comandi sono CLI, non endpoint HTTP. Richiedono `APP_ENV=staging`, `RENDER=tru
 service type allow-listed, tenant demo esatto e database staging. Rifiutano
 provider reali e produzione.
 
-`staging:fake-data-scan` enumera globalmente ristoranti, impostazioni pubbliche,
-prenotazioni e destinazioni notification. Richiede esattamente il tenant demo e
-restituisce solo classi/conteggi sanitizzati; qualunque tenant o dato inatteso
-fa fallire il gate senza stampare contatti.
+`staging:fake-data-scan` enumera globalmente il tenant e i dati rilevanti, senza
+filtro sul solo demo. Oltre a nomi, contatti, hostname e destinazioni, verifica
+NC, NI autonoma, note legacy anche cleared, preferenze/esigenze serializzate,
+motivi override, audit reservation/amministrativi e payload outbox. Copre anche
+username, testi pubblici, nomi sala/tavolo, note operative e riferimenti provider.
+Una sola SELECT read-only mantiene coerente lo snapshot di tutte le proiezioni.
+
+La classificazione è positiva: contatti `+390000` seguiti da sei cifre e
+`@example.test`; nomi fixture M13 con suffisso FIRST/LAST; testi null/vuoti,
+letterali sintetici già approvati o identificatori run M13 con suffissi
+NOTES/ASSIGNMENT (e variante NOTES-ASSIGNMENT). Un prefisso M13 seguito da prosa
+arbitraria non basta. Le strutture JSON dei request, audit e notifiche sono
+tipizzate e strict anche nei nodi annidati: campi extra, versioni sconosciute,
+valori non classificabili e query incomplete bloccano il gate. Le notifiche
+devono rispettare il payload V1 canonico e contenere nome sintetico e ristorante
+demo; i testi pubblici devono coincidere per lingua/chiave con il seed demo.
+Un nuovo testo o formato legittimo richiede una classificazione esplicita e una
+regressione; non viene ammesso automaticamente dal fatto di non contenere contatti.
+
+Il risultato contiene soltanto conteggi; i finding contengono classe e conteggio.
+Errori del driver e dettagli Zod non vengono propagati, né conservati come cause.
+La CLI mantiene l'errore generico sanitizzato. Non vengono stampati valori, JSON,
+note o identificativi cliente. Lo scan non certifica la provenienza di hash o
+identificativi opachi e non sostituisce la generazione controllata delle fixture.
+Non modifica dati, schema o provider e non autorizza accessi remoti.
 
 ```text
 npm run staging:verify-seed
