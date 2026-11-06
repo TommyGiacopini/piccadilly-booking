@@ -1,5 +1,30 @@
 # Piccadilly Booking — Registro delle decisioni
 
+## M13 P1-B — classificazione positiva dei dati sintetici (5 novembre 2026)
+
+Il privacy scan staging estende la SELECT globale esistente a NI autonoma,
+note legacy active/cleared, request serializzati, audit e outbox JSON, oltre ai
+testi e identificativi di configurazione rilevanti. Non modifica schema, seed,
+runner P1-A, dipendenze o provider. Nessun filtro di tenant può nascondere dati
+estranei al demo. Le altre famiglie con restaurant_id partecipano al controllo
+globale; sessioni/token sono ricondotti ai rispettivi utenti/prenotazioni.
+
+Testi liberi ammessi soltanto tramite vocabolario sintetico finito o grammatica
+degli identificatori fixture M13; il solo prefisso o l'assenza di email/telefoni
+non sono una prova. JSON validati per forma, tipi e valori con schemi strict
+annidati, distinti per azione audit e payload notifica canonico V1. Campi o
+strutture sconosciuti falliscono; nessuna sanitizzazione che scarti contenuti
+prima della verifica. I contenuti pubblici sono vincolati al seed demo e testati
+contro la sua copia canonica. Contatti fittizi, hostname staging e cardinalità
+del tenant mantengono i controlli precedenti.
+
+Solo classe e conteggio entrano nei finding, senza valori o cause del driver.
+Fixture sentinella verificano il rifiuto e l'assenza di divulgazione nei risultati
+e nei log; le query sono provate esclusivamente sul PostgreSQL effimero attribuito
+al run tramite i guard P1-A. Gli hash e gli ID opachi non costituiscono una prova
+di origine sintetica: resta necessario generare i dati nel perimetro controllato.
+WORK3 Final QG e pubblicazione richiedono mandati separati.
+
 **Stato:** approvato
 **Data:** 31 luglio 2026
 

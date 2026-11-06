@@ -10,6 +10,7 @@ import {
   assertStagingToolingGuard,
   cleanupStagingRun,
   scanStagingFakeData,
+  hasUnambiguousStagingJson,
   STAGING_DEMO_RESTAURANT_ID,
   StagingFakeDataScanError,
   stagingRunPrefix,
@@ -19,6 +20,12 @@ import {
 } from "./staging-tooling";
 import { Prisma, PrismaClient } from "../src/generated/prisma/client";
 import { resolveDatabaseUrl } from "../src/server/db/database-config";
+import { DEMO_PUBLIC_CONTENTS } from "../prisma/seed";
+import { buildNotificationPayloadV1 } from "../src/modules/notifications/domain/notification-rules";
+import { serializePublicPreferences, serializePublicAllergies } from "../src/modules/reservations/domain/public-validation";
+import { reservationAuditSnapshot } from "../src/modules/reservations/domain/reservation-audit-snapshot";
+import { reservationAssignmentAuditSnapshot } from "../src/modules/rooms/domain/reservation-assignment";
+import { reservationArrivalAuditSnapshot } from "../src/modules/reservations/domain/reservation-arrival";
 
 const { Pool } = pg;
 
@@ -89,6 +96,7 @@ describe("M13 guarded staging tooling", () => {
   it("rejects real-looking data and accepts only prefixed fake rows", async () => {
     const safeDatabase: StagingDatabase = {
       query: vi.fn(async () => ({
+        rowCount: 3,
         rows: [
           {
             recordType: "restaurant",
@@ -131,6 +139,7 @@ describe("M13 guarded staging tooling", () => {
     });
     const unsafeDatabase: StagingDatabase = {
       query: vi.fn(async () => ({
+        rowCount: 4,
         rows: [
           {
             recordType: "restaurant",
@@ -253,6 +262,188 @@ describe("M13 guarded staging tooling", () => {
         preBaseline,
       }),
     ).rejects.toThrow("exact run-scoped confirmation");
+  });
+});
+
+// Only artificial sentinels are used; no private values are emitted by tests.
+const privacySentinel = "P1B_UNAUTHORIZED_SENTINEL";
+function privacyRow(recordType: string, dataValue: unknown) {
+  return { recordType, restaurantId: STAGING_DEMO_RESTAURANT_ID, nameValue: null, phoneValue: null, secondaryPhoneValue: null, emailValue: null, urlValue: null, textValue: null, channelValue: null, dataValue };
+}
+const syntheticContent = {
+  notes: "M13 fixture", privateNotes: "M13 synthetic PRE private note", capacityOverrideReason: null,
+  preferences: serializePublicPreferences({ roomCode: "sala-1", highChair: false, stroller: false, accessibility: false, children: false, celebration: null, animals: false }),
+  allergies: serializePublicAllergies({ celiac: false, allergies: null, intolerances: null }),
+};
+const syntheticPayload = buildNotificationPayloadV1("RESERVATION_CONFIRMED", {
+  id: "00000000-0000-4000-8000-000000000003", restaurantId: STAGING_DEMO_RESTAURANT_ID, restaurantName: "Piccadilly Demo", timezone: "Europe/Rome", version: 1, origin: "PHONE",
+  customerFirstName: "M13-FIRST", customerPhone: "+390000001234", customerEmail: null, consentLanguage: "it", localDate: "2026-11-05", serviceType: "DINNER", arrivalTime: "20:00", partySize: 2,
+});
+function privacyDatabase(extra: unknown[]): StagingDatabase {
+  const baseline = [
+    { ...privacyRow("restaurant", null), nameValue: "Piccadilly Demo", textValue: "Europe/Rome" },
+    { ...privacyRow("public-settings", null), phoneValue: "+390000000000", secondaryPhoneValue: "+390000000001", emailValue: "demo@example.test", urlValue: "https://piccadilly-m13.onrender.com/" },
+  ];
+  // Replace singleton rows so their negative cases cannot pass merely on cardinality.
+  const singletons = baseline.filter(base => !extra.some(row => typeof row === "object" && row !== null && "recordType" in row && row.recordType === base.recordType));
+  const rows = [...singletons, ...extra];
+  return { query: vi.fn(async () => ({ rows, rowCount: rows.length })) };
+}
+function auditPrivacyRow(recordType: "audit" | "reservation-audit", overrides: Record<string, unknown> = {}) {
+  return privacyRow(recordType, { action: recordType === "audit" ? "LOGIN_SUCCEEDED" : "PRIVATE_NOTES_UPDATED", category: recordType === "audit" ? "AUTHENTICATION" : "RESERVATION", outcome: "SUCCESS", entityType: null, previousState: null, newState: recordType === "audit" ? null : { privateNotes: { present: true }, version: 2 }, metadata: null, capacityOverrideReason: null, ...overrides });
+}
+
+describe("P1-B positive privacy classification and sanitized failures", () => {
+  it("accepts approved NI, legacy notes, structured requests, audit, notification and seed fixtures", async () => {
+    const snapshot = reservationAuditSnapshot({
+      ...fakeReservationData({ restaurantId: STAGING_DEMO_RESTAURANT_ID, userId: "00000000-0000-4000-8000-000000000101", firstName: "M13-FIRST", lastName: "M13-LAST" }),
+      id: "00000000-0000-4000-8000-000000000003", localDate: "2099-01-01", arrivalTime: "20:00", childrenCount: 0, gameRoomPreference: null, capacityOverride: false, capacityOverrideReason: null, version: 1, createdAt: new Date(), updatedAt: new Date(), arrivedAt: null,
+    });
+    const rows = [privacyRow("reservation-content", syntheticContent), privacyRow("legacy-notes", "M13-RUN-20260830-ASSIGNMENT"),
+      auditPrivacyRow("reservation-audit"), auditPrivacyRow("audit"), privacyRow("outbox-payload", { payloadVersion: 1, payload: syntheticPayload }),
+      privacyRow("provider-reference", "sim-wa-" + "a".repeat(48)), privacyRow("user", "demo.admin"),
+      auditPrivacyRow("reservation-audit", { action: "CREATED", newState: snapshot }),
+      auditPrivacyRow("reservation-audit", { action: "UPDATED", previousState: snapshot, newState: { ...snapshot, notification: { confirmationWhatsAppRequested: true } } }),
+      auditPrivacyRow("reservation-audit", { action: "ASSIGNED", previousState: reservationAssignmentAuditSnapshot(null), newState: reservationAssignmentAuditSnapshot({ finalRoomCode: "sala-1", tableIds: [], internalNotes: null }) }),
+      auditPrivacyRow("reservation-audit", { action: "ARRIVAL_RECORDED", previousState: reservationArrivalAuditSnapshot(null), newState: reservationArrivalAuditSnapshot(new Date("2026-11-05T12:00:00.000Z")) }),
+      auditPrivacyRow("audit", { action: "LOGIN_FAILED", metadata: { credentialFingerprint: "a".repeat(64) } }),
+      auditPrivacyRow("audit", { category: "EXPORT", action: "PDF_EXPORT_REQUESTED", metadata: { format: "PDF", mode: "DAY", fromDate: "2026-11-05", toDate: "2026-11-05", dayCount: 1, reservationCount: 0 } }),
+    ];
+    for (const [locale, contents] of Object.entries(DEMO_PUBLIC_CONTENTS)) for (const [key, text] of Object.entries(contents)) rows.push(privacyRow("public-content", { locale, key, text }));
+    await expect(scanStagingFakeData(privacyDatabase(rows))).resolves.toMatchObject({ violationClasses: 0 });
+  });
+
+  it.each([
+    ["NI prose without contacts", privacyRow("reservation-content", { ...syntheticContent, privateNotes: privacySentinel })],
+    ["NI marker followed by unapproved prose", privacyRow("reservation-content", { ...syntheticContent, privateNotes: "M13 " + privacySentinel })],
+    ["legacy notes", privacyRow("legacy-notes", privacySentinel)],
+    ["NC", privacyRow("reservation-content", { ...syntheticContent, notes: privacySentinel })],
+    ["override reason", privacyRow("reservation-content", { ...syntheticContent, capacityOverrideReason: privacySentinel })],
+    ["preferences nested text", privacyRow("reservation-content", { ...syntheticContent, preferences: JSON.stringify({ ...JSON.parse(syntheticContent.preferences), celebration: privacySentinel }) })],
+    ["unknown request structure", privacyRow("reservation-content", { ...syntheticContent, allergies: JSON.stringify({ celiac: false, extra: privacySentinel }) })],
+    ["audit previous snapshot", auditPrivacyRow("reservation-audit", { previousState: { privateNotes: privacySentinel } })],
+    ["audit new snapshot", auditPrivacyRow("reservation-audit", { newState: { privateNotes: { present: true, extra: privacySentinel }, version: 2 } })],
+    ["audit arbitrary nested metadata", auditPrivacyRow("audit", { metadata: { envelope: [{ detail: privacySentinel }] } })],
+    ["audit scalar", auditPrivacyRow("audit", { previousState: privacySentinel })],
+    ["audit unclassified header", auditPrivacyRow("audit", { entityType: privacySentinel })],
+    ["outbox extra nested property", privacyRow("outbox-payload", { payloadVersion: 1, payload: { ...syntheticPayload, params: { ...syntheticPayload.params, extra: privacySentinel } } })],
+    ["outbox unauthorized name", privacyRow("outbox-payload", { payloadVersion: 1, payload: { ...syntheticPayload, params: { ...syntheticPayload.params, customerFirstName: privacySentinel } } })],
+    ["unknown payload version", privacyRow("outbox-payload", { payloadVersion: 2, payload: syntheticPayload })],
+    ["unknown record kind", privacyRow(privacySentinel, null)],
+    ["malformed row", { recordType: "reservation-content", dataValue: privacySentinel }],
+    ["unknown tenant in audit only", { ...auditPrivacyRow("audit"), restaurantId: "00000000-0000-4000-8000-000000000099" }],
+    ["public content", privacyRow("public-content", { locale: "IT", key: "BOOKING_PAGE_TITLE", text: privacySentinel })],
+    ["user name", privacyRow("user", privacySentinel)],
+    ["missing mandatory NI projection", privacyRow("reservation-content", { notes: null })],
+    ["empty required hostname", { ...privacyRow("public-settings", null), phoneValue: "+390000000000", urlValue: "" }],
+    ["unclassified JSON projection", { ...privacyRow("restaurant", { extra: privacySentinel }), nameValue: "Piccadilly Demo", textValue: "Europe/Rome" }],
+  ])("rejects %s without leaking values", async (_label, row) => {
+    const info = vi.spyOn(console, "info"); const errorLog = vi.spyOn(console, "error");
+    try {
+      const failure = await scanStagingFakeData(privacyDatabase([row])).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(StagingFakeDataScanError);
+      expect((failure as StagingFakeDataScanError).findings.length).toBeGreaterThan(0);
+      expect(JSON.stringify({ message: (failure as Error).message, error: failure, info: info.mock.calls, logs: errorLog.mock.calls })).not.toContain(privacySentinel);
+      expect(info).not.toHaveBeenCalled(); expect(errorLog).not.toHaveBeenCalled();
+    } finally { info.mockRestore(); errorLog.mockRestore(); }
+  });
+
+  it("sanitizes driver failures and cannot turn an incomplete query into PASS", async () => {
+    const query = vi.fn(async () => { throw new Error(privacySentinel); });
+    const failure = await scanStagingFakeData({ query }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(StagingFakeDataScanError);
+    expect((failure as Error).message).toContain("scan-unavailable");
+    expect(JSON.stringify(failure)).not.toContain(privacySentinel);
+    await expect(scanStagingFakeData({ query: async () => ({ rows: [], rowCount: 0 }) })).rejects.toBeInstanceOf(StagingFakeDataScanError);
+  });
+});
+
+const d17Sentinel = ["D17", "PRIVATE", "SENTINEL"].join("_");
+
+async function expectSanitizedD17Rejection(database: StagingDatabase, type: string) {
+  const logs = [vi.spyOn(console, "info"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
+  try {
+    const failure = await scanStagingFakeData(database).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(StagingFakeDataScanError);
+    expect((failure as StagingFakeDataScanError).findings).toContainEqual({ type, count: 1 });
+    expect(JSON.stringify({ message: (failure as Error).message, error: failure, logs: logs.map(log => log.mock.calls) }).includes(d17Sentinel)).toBe(false);
+    for (const log of logs) expect(log).not.toHaveBeenCalled();
+  } finally { for (const log of logs) log.mockRestore(); }
+}
+
+describe("D17 JSON01 raw serialized request integrity", () => {
+  it.each([
+    ["JSON01_PREFERENCES_DUPLICATE", "preferences", syntheticContent.preferences.replace('"celebration":null', `"celebration":"${d17Sentinel}","celebration":null`)],
+    ["JSON01_ALLERGIES_DUPLICATE", "allergies", syntheticContent.allergies.replace('"allergies":null', `"allergies":"${d17Sentinel}","allergies":null`)],
+    ["JSON01_ESCAPED_KEY_ALIAS", "allergies", syntheticContent.allergies.replace('"allergies":null', `"allergies":"${d17Sentinel}","\\u0061llergies":null`)],
+  ] as const)("%s rejects a value that ordinary parsing would erase", async (_id, field, raw) => {
+    expect(raw !== syntheticContent[field]).toBe(true);
+    expect(JSON.stringify(JSON.parse(raw)) === JSON.stringify(JSON.parse(syntheticContent[field]))).toBe(true);
+    expect(hasUnambiguousStagingJson(raw)).toBe(false);
+    await expectSanitizedD17Rejection(privacyDatabase([privacyRow("reservation-content", { ...syntheticContent, [field]: raw })]), "unexpected-reservation-content-content");
+  });
+
+  it("JSON01_NESTED_DUPLICATE rejects repeated decoded names in each object", () => {
+    const invalid = [
+      '{"nested":{"key":0,"key":1}}',
+      '[{"key":0,"\\u006bey":1}]',
+      '{"nested":{"a/b":0,"a\\/b":1}}',
+      '{"nested":{"\\uD83D\\uDE00":0,"😀":1}}',
+      '{"nested":{"__proto__":null,"__proto__":null}}',
+    ];
+    for (const raw of invalid) expect(hasUnambiguousStagingJson(raw)).toBe(false);
+  });
+
+  it("JSON01_DIFFERENT_OBJECT_SAME_KEY handles scoped keys and legitimate escapes", () => {
+    const valid = [
+      '{"left":{"key":0},"right":{"key":1}}',
+      '[{"key":0},{"\\u006bey":1}]',
+      '{"key":{"key":{"key":true}}}',
+      JSON.stringify({ 'quoted"key': 'escaped\\value " : { } ,', nested: { 'quoted"key': "same name, different object" } }),
+      ' \t\r\n {"numbers":[0,-1,1.5,2e3,-1.2E-3],"values":[true,false,null]} \r\n',
+      syntheticContent.preferences, syntheticContent.allergies,
+    ];
+    for (const raw of valid) expect(hasUnambiguousStagingJson(raw)).toBe(true);
+  });
+
+  it("JSON01_MALFORMED fails closed without exposing parser errors", async () => {
+    const invalid = ["", '{"key":1,}', '[1,]', '{"key" 1}', '{"key":01}', '{"key":NaN}', '{"key":true} trailing', '{"key":"\\x20"}', '{"key":"\\u00"}', '{"key":"unterminated}', '{"key":"line\nbreak"}', '{"key":1e}', '\uFEFF{}', '['.repeat(130) + '0' + ']'.repeat(130)];
+    for (const raw of invalid) expect(hasUnambiguousStagingJson(raw)).toBe(false);
+    await expectSanitizedD17Rejection(privacyDatabase([privacyRow("reservation-content", { ...syntheticContent, preferences: `{"celebration":"${d17Sentinel}` })]), "unexpected-reservation-content-content");
+  });
+});
+
+describe("D17 FC01 canonical scanner SELECT completeness", () => {
+  it("FC01_MATCHING_ROW_COUNT accepts a complete clean SELECT", async () => {
+    const result = await privacyDatabase([]).query("synthetic SELECT");
+    expect(result.rowCount).toBe(result.rows.length);
+    await expect(scanStagingFakeData({ query: async () => result })).resolves.toMatchObject({ violationClasses: 0 });
+  });
+
+  it.each([["FC01_ROW_COUNT_GREATER", 3], ["FC01_ROW_COUNT_LOWER", 1]] as const)("%s rejects inconsistent metadata", async (_id, rowCount) => {
+    const result = await privacyDatabase([]).query("synthetic SELECT");
+    await expectSanitizedD17Rejection({ query: async () => ({ ...result, rowCount }) }, "scan-row-count-mismatch");
+  });
+
+  it("FC01_MISSING_OR_INVALID_METADATA never certifies an unverifiable result", async () => {
+    const { rows } = await privacyDatabase([]).query("synthetic SELECT");
+    const invalid = [undefined, null, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, "2", true, {}, d17Sentinel];
+    await expectSanitizedD17Rejection({ query: async () => ({ rows }) }, "scan-row-count-unverifiable");
+    for (const rowCount of invalid) {
+      const database = { query: async () => ({ rows, rowCount }) } as unknown as StagingDatabase;
+      await expectSanitizedD17Rejection(database, "scan-row-count-unverifiable");
+    }
+    for (const invalidRows of [undefined, null, {}, "not-an-array"]) {
+      const database = { query: async () => ({ rows: invalidRows, rowCount: 2 }) } as unknown as StagingDatabase;
+      await expectSanitizedD17Rejection(database, "scan-unverifiable");
+    }
+  });
+
+  it("FC01_COMPLETE_CONTAMINATED_RESULT remains rejected after matching the count", async () => {
+    const database = privacyDatabase([privacyRow("reservation-content", { ...syntheticContent, privateNotes: d17Sentinel })]);
+    const result = await database.query("synthetic SELECT");
+    expect(result.rowCount).toBe(result.rows.length);
+    await expectSanitizedD17Rejection(database, "unexpected-reservation-content-content");
   });
 });
 
@@ -422,6 +613,54 @@ describe
           where: { restaurantId: decoyRestaurantId },
         }),
       ).toBe(0);
+    });
+
+    it("P1-B scans real SQL projections and detects NI, legacy, audit and outbox sentinels", async () => {
+      const before = await demoSeedFingerprint();
+      const contacts = await client.restaurantPublicSettings.findUniqueOrThrow({ where: { restaurantId: STAGING_DEMO_RESTAURANT_ID } });
+      const admin = await client.user.findFirstOrThrow({ where: { restaurantId: STAGING_DEMO_RESTAURANT_ID, username: "demo.admin" } });
+      const room = await client.room.findFirstOrThrow({ where: { restaurantId: STAGING_DEMO_RESTAURANT_ID, code: "sala-1" } });
+      const id = randomUUID();
+      const generalAuditId = randomUUID();
+      try {
+        await client.restaurantPublicSettings.update({ where: { restaurantId: STAGING_DEMO_RESTAURANT_ID }, data: { publicBookingBaseUrl: "https://piccadilly-m13.onrender.com/" } });
+        await client.reservation.create({ data: { ...fakeReservationData({ restaurantId: STAGING_DEMO_RESTAURANT_ID, userId: admin.id, firstName: "M13-FIRST", lastName: "M13-LAST" }), id, ...syntheticContent } });
+        const assignment = await client.reservationAssignment.create({ data: { restaurantId: STAGING_DEMO_RESTAURANT_ID, reservationId: id, roomId: room.id, internalNotes: "M13-RUN-20260830-ASSIGNMENT", assignedByUserId: admin.id, updatedByUserId: admin.id } });
+        const audit = await client.reservationAuditEvent.create({ data: { restaurantId: STAGING_DEMO_RESTAURANT_ID, reservationId: id, action: "PRIVATE_NOTES_UPDATED", actorOrigin: "STAFF", actorUserId: admin.id, actorRole: "ADMIN", correlationId: randomUUID(), previousState: { privateNotes: { present: false }, version: 1 }, newState: { privateNotes: { present: true }, version: 2 } } });
+        const generalAudit = await client.auditEvent.create({ data: { id: generalAuditId, restaurantId: STAGING_DEMO_RESTAURANT_ID, category: "AUTHENTICATION", action: "LOGIN_SUCCEEDED", outcome: "SUCCESS", actorUserId: admin.id, actorRole: "ADMIN", correlationId: randomUUID() } });
+        const now = new Date();
+        const outbox = await client.notificationOutbox.create({ data: { restaurantId: STAGING_DEMO_RESTAURANT_ID, reservationId: id, eventGroupId: randomUUID(), reservationVersion: 1, eventType: "RESERVATION_CONFIRMED", source: "PHONE", actorUserId: admin.id, channel: "WHATSAPP", strategy: "WHATSAPP_ONLY", destination: "+390000001234", payloadVersion: 1, payload: syntheticPayload as unknown as Prisma.InputJsonValue, scheduledAt: now, availableAt: now, expiresAt: new Date(now.getTime() + 60000), idempotencyKey: hashFixture(randomUUID()), originCorrelationId: randomUUID() } });
+        const scan = () => scanStagingFakeData(pool as unknown as StagingDatabase);
+        await expect(scan()).resolves.toMatchObject({ violationClasses: 0 });
+        for (const field of ["privateNotes", "notes", "preferences", "allergies", "capacityOverrideReason"] as const) {
+          await client.reservation.update({ where: { id }, data: { [field]: privacySentinel, ...(field === "capacityOverrideReason" ? { capacityOverride: true } : {}) } });
+          const failure = await scan().catch((error: unknown) => error);
+          expect(failure).toBeInstanceOf(StagingFakeDataScanError);
+          expect(JSON.stringify(failure)).not.toContain(privacySentinel);
+          await client.reservation.update({ where: { id }, data: { [field]: syntheticContent[field], ...(field === "capacityOverrideReason" ? { capacityOverride: false } : {}) } });
+        }
+        await client.reservationAssignment.update({ where: { id: assignment.id }, data: { internalNotes: privacySentinel, clearedAt: now } });
+        await expect(scan()).rejects.toMatchObject({ findings: expect.arrayContaining([{ type: "unexpected-legacy-notes-content", count: 1 }]) });
+        await client.reservationAssignment.update({ where: { id: assignment.id }, data: { internalNotes: null } });
+        await client.reservationAuditEvent.update({ where: { id: audit.id }, data: { newState: { privateNotes: { present: true, detail: privacySentinel }, version: 2 } } });
+        await expect(scan()).rejects.toMatchObject({ findings: expect.arrayContaining([{ type: "unexpected-reservation-audit-content", count: 1 }]) });
+        await client.reservationAuditEvent.update({ where: { id: audit.id }, data: { newState: { privateNotes: { present: true }, version: 2 } } });
+        await client.auditEvent.update({ where: { id: generalAudit.id }, data: { metadata: { unexpected: { detail: privacySentinel } } } });
+        await expect(scan()).rejects.toMatchObject({ findings: expect.arrayContaining([{ type: "unexpected-audit-content", count: 1 }]) });
+        await client.auditEvent.update({ where: { id: generalAudit.id }, data: { metadata: Prisma.DbNull } });
+        await client.notificationOutbox.update({ where: { id: outbox.id }, data: { payload: { ...syntheticPayload, unexpected: privacySentinel } as unknown as Prisma.InputJsonValue } });
+        await expect(scan()).rejects.toMatchObject({ findings: expect.arrayContaining([{ type: "unexpected-outbox-payload-content", count: 1 }]) });
+        await client.notificationOutbox.update({ where: { id: outbox.id }, data: { payload: syntheticPayload as unknown as Prisma.InputJsonValue } });
+        await expect(scan()).resolves.toMatchObject({ violationClasses: 0 });
+      } finally {
+        await client.notificationOutbox.deleteMany({ where: { reservationId: id } });
+        await client.reservationAuditEvent.deleteMany({ where: { reservationId: id } });
+        await client.auditEvent.deleteMany({ where: { id: generalAuditId } });
+        await client.reservationAssignment.deleteMany({ where: { reservationId: id } });
+        await client.reservation.deleteMany({ where: { id } });
+        await client.restaurantPublicSettings.update({ where: { restaurantId: STAGING_DEMO_RESTAURANT_ID }, data: { publicBookingBaseUrl: contacts.publicBookingBaseUrl, updatedAt: contacts.updatedAt } });
+      }
+      expect(await demoSeedFingerprint()).toBe(before);
     });
 
     it("LQG-002 restores a non-empty lifecycle exactly to its PRE manifest", async () => {

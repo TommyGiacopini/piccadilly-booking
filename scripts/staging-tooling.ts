@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
+import { z } from "zod";
 
 import { resolveAppEnvironment } from "../src/shared/config/app-environment";
+import { parseNotificationPayload } from "../src/modules/notifications/domain/notification-rules";
+import { DEMO_ROOMS } from "../src/modules/configuration/domain/defaults";
+import { isLocalDate, isOperationalTime } from "../src/modules/configuration/domain/operational-time";
+import { PUBLIC_CONTENT_KEYS, PUBLIC_CONTENT_LOCALES } from "../src/modules/configuration/domain/public-settings";
+import { AUDIT_CATEGORIES, AUDIT_OUTCOMES } from "../src/modules/audit/domain/audit-event";
+import { AUDIT_ENTITY_TYPES } from "../src/modules/audit/domain/audit-query";
 
 export const STAGING_DEMO_RESTAURANT_ID =
   "00000000-0000-4000-8000-000000000001";
@@ -192,7 +199,7 @@ export async function verifyStagingSeed(database: StagingDatabase) {
 }
 
 type FakeDataRow = {
-  recordType: "restaurant" | "public-settings" | "reservation" | "destination";
+  recordType: string;
   restaurantId: string;
   nameValue: string | null;
   phoneValue: string | null;
@@ -201,7 +208,196 @@ type FakeDataRow = {
   urlValue: string | null;
   textValue: string | null;
   channelValue: string | null;
+  dataValue?: unknown;
 };
+
+// Positive fixture grammar: a marker alone never authorizes arbitrary prose.
+const syntheticText = z.union([
+  z.enum(["", "M13 fixture", "M13-LQG synthetic fixture", "M13 synthetic PRE private note", "M13 synthetic changed NI", "M13 synthetic run private note"]),
+  z.string().regex(/^M13-[A-Z0-9][A-Z0-9-]{7,31}-(?:(?:PUBLIC|PHONE|STAFF)-)?(?:NOTES(?:-ASSIGNMENT)?|ASSIGNMENT)$/),
+]).nullable();
+const syntheticName = z.string().regex(/^M13-(?:(?:NONRUN|[A-Z0-9][A-Z0-9-]{7,31}(?:-(?:PUBLIC|PHONE|STAFF))?)-)?(?:FIRST|LAST)$/);
+const count = z.number().int().nonnegative();
+const date = z.string().refine(isLocalDate);
+const time = z.string().refine(isOperationalTime);
+const service = z.enum(["LUNCH", "DINNER"]);
+const roomCode = z.enum(["", "sala-1", "sala-2", "sala-3", "galleria", "terrazzo"]);
+const tableName = z.enum(["DEMO-S1-01", "DEMO-S2-01", "DEMO-S3-01", "DEMO-G-01", "DEMO-T-01"]);
+const preferences = z.strictObject({ roomCode, highChair: z.boolean(), stroller: z.boolean(), accessibility: z.boolean(), children: z.boolean(), celebration: syntheticText, animals: z.boolean(), legacyText: syntheticText.optional() });
+const allergies = z.strictObject({ celiac: z.boolean(), allergies: syntheticText, intolerances: syntheticText, legacyText: syntheticText.optional() });
+
+/** Inspect serialized request JSON before object parsing can discard duplicate keys. */
+export function hasUnambiguousStagingJson(raw: string): boolean {
+  let position = 0;
+  const invalid = (): never => { throw new Error("Staging request JSON is ambiguous or invalid."); };
+  const whitespace = () => {
+    while (position < raw.length && /[\t\n\r ]/.test(raw[position])) position += 1;
+  };
+  const string = (): string => {
+    const start = position;
+    if (raw[position++] !== '"') invalid();
+    while (position < raw.length) {
+      const character = raw[position++];
+      if (character === '"') {
+        // Only a string token is decoded here, never an object with repeated keys.
+        return JSON.parse(raw.slice(start, position)) as string;
+      }
+      if (character === "\\") position += 1;
+    }
+    return invalid();
+  };
+  const value = (depth: number): void => {
+    // Canonical request schemas are shallow. Bound malformed/untrusted nesting.
+    if (depth > 128) invalid();
+    whitespace();
+    const character = raw[position];
+    if (character === "{") {
+      position += 1;
+      whitespace();
+      const keys = new Set<string>();
+      if (raw[position] === "}") { position += 1; return; }
+      while (position < raw.length) {
+        whitespace();
+        const key = string();
+        if (keys.has(key)) invalid();
+        keys.add(key);
+        whitespace();
+        if (raw[position++] !== ":") invalid();
+        value(depth + 1);
+        whitespace();
+        const delimiter = raw[position++];
+        if (delimiter === "}") return;
+        if (delimiter !== ",") invalid();
+      }
+      invalid();
+    } else if (character === "[") {
+      position += 1;
+      whitespace();
+      if (raw[position] === "]") { position += 1; return; }
+      while (position < raw.length) {
+        value(depth + 1);
+        whitespace();
+        const delimiter = raw[position++];
+        if (delimiter === "]") return;
+        if (delimiter !== ",") invalid();
+      }
+      invalid();
+    } else if (character === '"') {
+      string();
+    } else {
+      const literal = ["true", "false", "null"].find(token => raw.startsWith(token, position));
+      if (literal) position += literal.length;
+      else {
+        const number = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(raw.slice(position));
+        if (!number) return invalid();
+        position += number[0].length;
+      }
+    }
+  };
+  try {
+    value(0);
+    whitespace();
+    return position === raw.length;
+  } catch {
+    // Syntax errors may contain source fragments. Expose only the boolean verdict.
+    return false;
+  }
+}
+
+function serializedRequests(value: unknown, schema: z.ZodType): boolean {
+  if (syntheticText.safeParse(value).success) return true;
+  if (typeof value !== "string" || !hasUnambiguousStagingJson(value)) return false;
+  try { return schema.safeParse(JSON.parse(value)).success; }
+  catch { return false; }
+}
+
+const reservationContent = z.strictObject({
+  notes: syntheticText, privateNotes: syntheticText, capacityOverrideReason: syntheticText,
+  preferences: z.unknown().refine(value => serializedRequests(value, preferences)),
+  allergies: z.unknown().refine(value => serializedRequests(value, allergies)),
+});
+const assignmentState = z.strictObject({ assignment: z.strictObject({ finalRoomCode: roomCode, tableIds: z.array(z.uuid()).max(20), tableCount: count, internalNotesPresent: z.boolean() }).nullable(), reason: z.literal("RESERVATION_SCHEDULE_CHANGED").optional() });
+const reservationState = z.strictObject({
+  localDate: date, serviceType: service, arrivalTime: time, partySize: count, childrenCount: count.nullable().optional(), gameRoomPreference: z.boolean().nullable().optional(),
+  status: z.enum(["CONFIRMED", "CANCELLED"]), origin: z.enum(["PUBLIC", "PHONE", "STAFF"]), version: count,
+  requests: z.strictObject({ roomCode: roomCode.nullable(), legacyPreferencePresent: z.boolean(), highChair: z.boolean(), stroller: z.boolean(), accessibility: z.boolean(), children: z.boolean(), celiac: z.boolean(), foodRequestsPresent: z.boolean(), allergiesPresent: z.boolean(), intolerancesPresent: z.boolean(), celebrationPresent: z.boolean(), animals: z.boolean(), notesPresent: z.boolean() }),
+  capacityOverride: z.boolean(), capacityOverrideReason: syntheticText,
+  capacityOverrideResult: z.strictObject({ capacityLimit: count, totalBefore: count, totalAfter: count }).optional(),
+  notification: z.strictObject({ confirmationWhatsAppRequested: z.boolean() }).optional(),
+  assignment: assignmentState.shape.assignment.optional(), reason: assignmentState.shape.reason,
+});
+const reservationStates: Record<string, z.ZodType> = {
+  CREATED: reservationState, UPDATED: reservationState, CANCELLED: reservationState,
+  ASSIGNED: assignmentState, REASSIGNED: assignmentState, UNASSIGNED: assignmentState,
+  ARRIVAL_RECORDED: z.strictObject({ arrival: z.strictObject({ recorded: z.boolean(), arrivedAt: z.iso.datetime().nullable() }) }),
+  ARRIVAL_REVERTED: z.strictObject({ arrival: z.strictObject({ recorded: z.boolean(), arrivedAt: z.iso.datetime().nullable() }) }),
+  PRIVATE_NOTES_UPDATED: z.strictObject({ privateNotes: z.strictObject({ present: z.boolean() }), version: count }),
+};
+const role = z.enum(["ADMIN", "STAFF"]);
+const identityState = z.strictObject({ role, isActive: z.boolean(), disabledAtPresent: z.boolean(), mustChangePassword: z.boolean() });
+const roomState = z.strictObject({ code: roomCode, displayOrder: count, isActive: z.boolean() });
+const diningTableState = z.strictObject({ roomId: z.uuid(), name: tableName.optional(), minimumSeats: count, maximumSeats: count, displayOrder: count, isActive: z.boolean() });
+const bookingState = z.strictObject({ rollingCapacityCovers: count, rollingWindowMinutes: count, lunchModificationCutoff: time, dinnerModificationCutoff: time, managementLinkDurationHours: count.optional() });
+const dayOfWeek = z.enum(["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]);
+const weeklyState = z.strictObject({ dayOfWeek, serviceType: service, isEnabled: z.boolean(), startTime: time, endTime: time, slotIntervalMinutes: count });
+const cutoffState = z.strictObject({ dayOfWeek, serviceType: service, isEnabled: z.boolean(), cutoffTime: time });
+const specialDateState = z.strictObject({ date, scope: z.enum(["ALL", "LUNCH", "DINNER"]), isClosed: z.boolean(), specialStartTime: time.nullable(), specialEndTime: time.nullable(), specialCapacityCovers: count.nullable(), operationalNotesPresent: z.boolean(), archived: z.boolean() });
+const administrativeStates: Record<string, z.ZodType> = {
+  LOGIN_SUCCEEDED: z.null(), LOGIN_FAILED: z.null(), LOGIN_RATE_LIMITED: z.null(), LOGOUT_SUCCEEDED: z.null(),
+  USER_CREATED: identityState, USER_ROLE_CHANGED: identityState, USER_ENABLED: identityState, USER_DISABLED: identityState, USER_PASSWORD_RESET: identityState, PASSWORD_CHANGED: identityState,
+  ROOM_UPDATED: roomState, ROOM_DISABLED: roomState, ROOM_ENABLED: roomState,
+  ROOM_ORDER_UPDATED: roomState,
+  ROOM_AVAILABILITY_UPDATED: z.strictObject({ localDate: date, serviceType: service, roomCode: roomCode.nullable(), isAvailable: z.boolean() }),
+  DINING_TABLE_CREATED: diningTableState, DINING_TABLE_UPDATED: diningTableState, DINING_TABLE_DISABLED: diningTableState, DINING_TABLE_ENABLED: diningTableState,
+  BOOKING_SETTINGS_UPDATED: bookingState, WEEKLY_SCHEDULE_UPDATED: weeklyState,
+  PUBLIC_BOOKING_CUTOFF_RULE_CREATED: cutoffState, PUBLIC_BOOKING_CUTOFF_RULE_UPDATED: cutoffState, PUBLIC_BOOKING_CUTOFF_RULE_DISABLED: cutoffState,
+  SPECIAL_DATE_CREATED: specialDateState, SPECIAL_DATE_UPDATED: specialDateState, SPECIAL_DATE_ARCHIVED: specialDateState, SPECIAL_DATE_REACTIVATED: specialDateState,
+  PUBLIC_CONTACTS_UPDATED: z.strictObject({ phoneConfigured: z.boolean(), emailConfigured: z.boolean(), whatsappConfigured: z.boolean(), urlConfigured: z.boolean() }),
+  PUBLIC_CONTENT_UPDATED: z.strictObject({ complete: z.boolean(), locales: z.array(z.enum(PUBLIC_CONTENT_LOCALES)), keys: z.array(z.enum(PUBLIC_CONTENT_KEYS)) }),
+  MANAGEMENT_LINK_DURATION_UPDATED: z.strictObject({ managementLinkDurationHours: count }),
+  NOTIFICATION_STRATEGY_UPDATED: z.strictObject({ strategy: z.enum(["WHATSAPP_ONLY", "WHATSAPP_WITH_EMAIL_FALLBACK", "WHATSAPP_AND_EMAIL_PARALLEL"]) }),
+  PDF_EXPORT_REQUESTED: z.null(), EXCEL_EXPORT_REQUESTED: z.null(),
+};
+const classification = z.enum(["SERVICE_DISABLED", "OUTSIDE_NEW_HOURS", "CAPACITY_EXCEEDED", "MODIFICATION_CUTOFF_CHANGED", "ROOM_UNAVAILABLE", "ROOM_DISABLED", "TABLE_DISABLED", "RESERVATION_WITH_AFFECTED_ROOM_PREFERENCE", "RESERVATION_WITH_AFFECTED_FINAL_ASSIGNMENT", "NO_EXISTING_RESERVATION_IMPACT"]);
+const impactMetadata = z.strictObject({ reservationCount: count, covers: count, classifications: z.array(classification), classification: classification.nullable().optional(), previousLimit: count.nullable().optional(), proposedLimit: count.nullable().optional(), maxLoad: count.nullable().optional(), instanceMaterialized: z.boolean().optional(), preferenceReservationCount: count.optional(), assignmentReservationCount: count.optional() });
+const exportMetadata = z.strictObject({ format: z.enum(["PDF", "EXCEL"]), mode: z.enum(["DAY", "MONTH", "RANGE"]), fromDate: date, toDate: date, dayCount: count, reservationCount: count.optional(), failureCode: z.enum(["GENERATION_FAILED", "EXPORT_TOO_LARGE", "EXPORT_RANGE_TOO_LARGE"]).optional() });
+
+function validAudit(value: unknown, reservation: boolean): boolean {
+  const envelope = z.strictObject({ action: z.string(), category: z.enum([...AUDIT_CATEGORIES, "RESERVATION"]), outcome: z.enum(AUDIT_OUTCOMES), entityType: z.enum(AUDIT_ENTITY_TYPES).nullable(), previousState: z.unknown(), newState: z.unknown(), metadata: z.unknown(), capacityOverrideReason: syntheticText }).safeParse(value);
+  if (!envelope.success) return false;
+  const event = envelope.data;
+  const states = reservation ? reservationStates : administrativeStates;
+  if (!Object.hasOwn(states, event.action)) return false;
+  const schema = states[event.action];
+  if (!(event.previousState === null || schema.safeParse(event.previousState).success) ||
+      !(event.newState === null && !reservation || schema.safeParse(event.newState).success)) return false;
+  if (reservation) return event.metadata === null;
+  if (event.metadata === null) return true;
+  const metadata = event.action.startsWith("LOGIN_") ? z.strictObject({ credentialFingerprint: z.string().regex(/^[a-f0-9]{64}$/) })
+    : event.action.startsWith("USER_") || event.action === "PASSWORD_CHANGED" ? z.strictObject({ revokedSessionCount: count, flowType: z.enum(["ADMIN_CREATE", "ADMIN_ROLE_CHANGE", "ADMIN_ENABLE", "ADMIN_DISABLE", "ADMIN_PASSWORD_RESET", "PERSONAL_PASSWORD_CHANGE"]) })
+    : event.action === "PUBLIC_CONTACTS_UPDATED" ? z.strictObject({ changedFields: z.array(z.enum(["publicPhone", "publicEmail", "publicBookingBaseUrl", "whatsappNumber"])) })
+    : event.action === "PUBLIC_CONTENT_UPDATED" ? z.strictObject({ changed: z.array(z.strictObject({ locale: z.enum(PUBLIC_CONTENT_LOCALES), keys: z.array(z.enum(PUBLIC_CONTENT_KEYS)) })) })
+    : event.action === "MANAGEMENT_LINK_DURATION_UPDATED" ? z.strictObject({ existingTokensAffected: z.literal(0) })
+    : event.action.endsWith("_EXPORT_REQUESTED") ? exportMetadata : impactMetadata;
+  return metadata.safeParse(event.metadata).success;
+}
+
+function validNotification(value: unknown): boolean {
+  try {
+    const payload = parseNotificationPayload(value);
+    return syntheticName.safeParse(payload.params.customerFirstName).success && payload.params.restaurantName === "Piccadilly Demo";
+  } catch { return false; }
+}
+
+// Exact seed copy, keyed by locale and content key; no arbitrary editorial prose.
+const syntheticPublicContents = {
+  IT: ["Prenotazione dimostrativa Piccadilly", "Contenuto dimostrativo: scegli data, servizio e orario disponibili.", "Nessuna disponibilità dimostrativa per la selezione corrente.", "Per assistenza sulla dimostrazione puoi usare uno dei contatti indicati.", "La prenotazione dimostrativa è stata registrata correttamente.", "Gestisci la prenotazione dimostrativa", "Consulta, modifica o annulla la prenotazione entro i termini disponibili."],
+  EN: ["Piccadilly demonstration booking", "Demonstration content: choose an available date, service and time.", "No demonstration availability exists for the current selection.", "For help with this demonstration, use one of the listed contacts.", "The demonstration booking has been recorded successfully.", "Manage the demonstration booking", "View, change or cancel the booking within the available time limits."],
+};
+function validPublicContent(value: unknown): boolean {
+  const parsed = z.strictObject({ locale: z.enum(PUBLIC_CONTENT_LOCALES), key: z.enum(PUBLIC_CONTENT_KEYS), text: z.string() }).safeParse(value);
+  return parsed.success && syntheticPublicContents[parsed.data.locale][PUBLIC_CONTENT_KEYS.indexOf(parsed.data.key)] === parsed.data.text;
+}
 
 export interface SanitizedFakeDataFinding {
   type: string;
@@ -227,22 +423,83 @@ function addViolation(violations: Map<string, number>, type: string): void {
 }
 
 export async function scanStagingFakeData(database: StagingDatabase) {
-  const result = await database.query(
+  let result: QueryResult;
+  try { result = await database.query(
     `/* staging:fake-data-scan */
-    SELECT 'restaurant'::text AS "recordType", r.id::text AS "restaurantId", r.name AS "nameValue", NULL::text AS "phoneValue", NULL::text AS "secondaryPhoneValue", NULL::text AS "emailValue", NULL::text AS "urlValue", r.timezone AS "textValue", NULL::text AS "channelValue"
+    SELECT 'restaurant'::text AS "recordType", r.id::text AS "restaurantId", r.name AS "nameValue", NULL::text AS "phoneValue", NULL::text AS "secondaryPhoneValue", NULL::text AS "emailValue", NULL::text AS "urlValue", r.timezone AS "textValue", NULL::text AS "channelValue", NULL::jsonb AS "dataValue"
       FROM restaurants r
     UNION ALL
-    SELECT 'public-settings', ps.restaurant_id::text, NULL, ps.public_phone, ps.whatsapp_number, ps.public_email, ps.public_booking_base_url, NULL, NULL
+    SELECT 'public-settings', ps.restaurant_id::text, NULL, ps.public_phone, ps.whatsapp_number, ps.public_email, ps.public_booking_base_url, NULL, NULL, NULL
       FROM restaurant_public_settings ps
     UNION ALL
-    SELECT 'reservation', x.restaurant_id::text, x.customer_first_name || ' ' || x.customer_last_name, x.customer_phone, NULL, x.customer_email, NULL, concat_ws(' ', x.preferences, x.notes, x.allergies, x.capacity_override_reason), NULL
+    SELECT 'reservation', x.restaurant_id::text, x.customer_first_name || ' ' || x.customer_last_name, x.customer_phone, NULL, x.customer_email, NULL, concat_ws(' ', x.preferences, x.notes, x.allergies, x.capacity_override_reason), NULL, NULL
       FROM reservations x
     UNION ALL
-    SELECT 'destination', n.restaurant_id::text, NULL, CASE WHEN n.channel::text = 'WHATSAPP' THEN n.destination END, NULL, CASE WHEN n.channel::text = 'EMAIL' THEN n.destination END, NULL, NULL, n.channel::text
-      FROM notification_outbox n`,
-  );
-  const rows = result.rows as FakeDataRow[];
+    SELECT 'destination', n.restaurant_id::text, NULL, CASE WHEN n.channel::text = 'WHATSAPP' THEN n.destination END, NULL, CASE WHEN n.channel::text = 'EMAIL' THEN n.destination END, NULL, NULL, n.channel::text, NULL
+      FROM notification_outbox n
+    UNION ALL
+    SELECT 'reservation-content', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      jsonb_build_object('notes', x.notes, 'privateNotes', x.private_notes, 'preferences', x.preferences, 'allergies', x.allergies, 'capacityOverrideReason', x.capacity_override_reason)
+      FROM reservations x
+    UNION ALL
+    SELECT 'legacy-notes', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL, to_jsonb(x.internal_notes)
+      FROM reservation_assignments x
+    UNION ALL
+    SELECT 'reservation-audit', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      jsonb_build_object('action', x.action, 'category', 'RESERVATION', 'outcome', 'SUCCESS', 'entityType', 'RESERVATION', 'previousState', x.previous_state, 'newState', x.new_state, 'metadata', NULL, 'capacityOverrideReason', x.capacity_override_reason)
+      FROM reservation_audit_events x
+    UNION ALL
+    SELECT 'audit', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      jsonb_build_object('action', x.action, 'category', x.category, 'outcome', x.outcome, 'entityType', x.entity_type, 'previousState', x.previous_state, 'newState', x.new_state, 'metadata', x.metadata, 'capacityOverrideReason', NULL)
+      FROM audit_events x
+    UNION ALL
+    SELECT 'outbox-payload', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      jsonb_build_object('payloadVersion', x.payload_version, 'payload', x.payload)
+      FROM notification_outbox x
+    UNION ALL
+    SELECT 'user', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL, to_jsonb(x.username) FROM users x
+    UNION ALL
+    SELECT 'operational-notes', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL, to_jsonb(x.operational_notes) FROM special_date_overrides x
+    UNION ALL
+    SELECT 'room', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL, jsonb_build_object('code', x.code, 'name', x.name) FROM rooms x
+    UNION ALL
+    SELECT 'table', r.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL, to_jsonb(x.name) FROM dining_tables x JOIN rooms r ON r.id = x.room_id
+    UNION ALL
+    SELECT 'public-content', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL, jsonb_build_object('locale', x.locale, 'key', x.content_key, 'text', x.content_text) FROM public_contents x
+    UNION ALL
+    SELECT 'provider-reference', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL, to_jsonb(x.provider_reference) FROM notification_attempts x
+    UNION ALL
+    SELECT 'provider-reference', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL, to_jsonb(x.provider_reference) FROM notification_simulation_receipts x
+    UNION ALL
+    SELECT 'tenant', x.restaurant_id::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL FROM (
+      SELECT restaurant_id FROM restaurant_notification_settings UNION ALL SELECT restaurant_id FROM restaurant_booking_settings
+      UNION ALL SELECT restaurant_id FROM weekly_service_schedules UNION ALL SELECT restaurant_id FROM booking_cutoff_rules
+      UNION ALL SELECT restaurant_id FROM service_instances UNION ALL SELECT restaurant_id FROM service_room_availability
+      UNION ALL SELECT restaurant_id FROM reservation_assignment_tables UNION ALL SELECT restaurant_id FROM reservation_idempotency_keys
+      UNION ALL SELECT restaurant_id FROM public_reservation_rate_limits
+    ) x`,
+  ); } catch {
+    // Drivers may include SQL, cell contents or credentials in errors. Never forward them.
+    throw new StagingFakeDataScanError([{ type: "scan-unavailable", count: 1 }]);
+  }
+  if (!result || !Array.isArray(result.rows)) {
+    throw new StagingFakeDataScanError([{ type: "scan-unverifiable", count: 1 }]);
+  }
+  // This contract belongs only to the canonical scanner SELECT, not other SQL commands.
+  if (typeof result.rowCount !== "number" || !Number.isSafeInteger(result.rowCount) || result.rowCount < 0) {
+    throw new StagingFakeDataScanError([{ type: "scan-row-count-unverifiable", count: 1 }]);
+  }
+  if (result.rowCount !== result.rows.length) {
+    throw new StagingFakeDataScanError([{ type: "scan-row-count-mismatch", count: 1 }]);
+  }
+  const rows: FakeDataRow[] = [];
   const violations = new Map<string, number>();
+  const rowSchema = z.strictObject({ recordType: z.string(), restaurantId: z.string(), nameValue: z.string().nullable(), phoneValue: z.string().nullable(), secondaryPhoneValue: z.string().nullable(), emailValue: z.string().nullable(), urlValue: z.string().nullable(), textValue: z.string().nullable(), channelValue: z.string().nullable(), dataValue: z.unknown().optional() });
+  for (const value of result.rows) {
+    const parsed = rowSchema.safeParse(value);
+    if (!parsed.success) addViolation(violations, "unknown-row-structure");
+    else rows.push(parsed.data);
+  }
   const restaurantRows = rows.filter((row) => row.recordType === "restaurant");
 
   if (restaurantRows.length !== 1) {
@@ -294,18 +551,18 @@ export async function scanStagingFakeData(database: StagingDatabase) {
     if (row.phoneValue && !isFakePhone(row.phoneValue)) {
       addViolation(violations, "non-fake-phone");
     }
-    if (row.secondaryPhoneValue && !isFakePhone(row.secondaryPhoneValue)) {
+    if (row.secondaryPhoneValue !== null && !isFakePhone(row.secondaryPhoneValue)) {
       addViolation(violations, "non-fake-phone");
     }
     if (!isExampleTestEmail(row.emailValue)) {
       addViolation(violations, "non-fake-email");
     }
-    if (row.urlValue && !isOnrenderRootUrl(row.urlValue)) {
+    if ((row.recordType === "public-settings" || row.urlValue !== null) && !isOnrenderRootUrl(row.urlValue ?? "")) {
       addViolation(violations, "non-staging-hostname");
     }
     if (
       row.recordType === "reservation" &&
-      (!row.nameValue || !row.nameValue.split(" ").every((name) => name.startsWith("M13-")))
+      (!row.nameValue || row.nameValue.split(" ").length !== 2 || !row.nameValue.split(" ").every((name) => syntheticName.safeParse(name).success))
     ) {
       addViolation(violations, "unprefixed-test-name");
     }
@@ -315,6 +572,33 @@ export async function scanStagingFakeData(database: StagingDatabase) {
       row.channelValue !== "EMAIL"
     ) {
       addViolation(violations, "unexpected-notification-channel");
+    }
+    if ((row.recordType === "reservation" || row.recordType === "public-settings") && !isFakePhone(row.phoneValue)) {
+      addViolation(violations, "missing-required-contact");
+    }
+    const privacyChecks: Record<string, () => boolean> = {
+      "reservation-content": () => reservationContent.safeParse(row.dataValue).success,
+      "legacy-notes": () => row.dataValue !== undefined && syntheticText.safeParse(row.dataValue).success,
+      "reservation-audit": () => validAudit(row.dataValue, true),
+      audit: () => validAudit(row.dataValue, false),
+      "outbox-payload": () => {
+        const envelope = z.strictObject({ payloadVersion: z.literal(1), payload: z.unknown() }).safeParse(row.dataValue);
+        return envelope.success && validNotification(envelope.data.payload);
+      },
+      user: () => row.dataValue === "demo.admin" || row.dataValue === "demo.staff",
+      "operational-notes": () => row.dataValue !== undefined && syntheticText.safeParse(row.dataValue).success,
+      room: () => DEMO_ROOMS.some(room => z.strictObject({ code: z.literal(room.code), name: z.literal(room.name) }).safeParse(row.dataValue).success),
+      table: () => tableName.safeParse(row.dataValue).success,
+      "public-content": () => validPublicContent(row.dataValue),
+      "provider-reference": () => row.dataValue === null || typeof row.dataValue === "string" && /^sim-(?:wa|email)-[a-f0-9]{48}$/.test(row.dataValue),
+      tenant: () => row.dataValue === null,
+    };
+    if (Object.hasOwn(privacyChecks, row.recordType)) {
+      if (!privacyChecks[row.recordType]()) addViolation(violations, `unexpected-${row.recordType}-content`);
+    } else if (!["restaurant", "public-settings", "reservation", "destination"].includes(row.recordType)) {
+      addViolation(violations, "unknown-record-type");
+    } else if (row.dataValue !== null && row.dataValue !== undefined) {
+      addViolation(violations, "unknown-row-structure");
     }
   }
 
