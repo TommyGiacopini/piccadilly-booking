@@ -1,0 +1,84 @@
+name: M13 P1-C runner resource preflight
+
+"on":
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  runner-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Read aggregate runner resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+
+          fail() {
+            printf 'RESOURCE_PROBE_STATUS=FAILED_METADATA_READ\nERROR_CODE=%s\n' "$1"
+            exit 1
+          }
+
+          [[ "$(uname -s)" == Linux ]] || fail UNEXPECTED_RUNNER_OS
+          [[ "$(uname -m)" == x86_64 ]] || fail UNEXPECTED_RUNNER_ARCHITECTURE
+          cpu_count="$(nproc 2>/dev/null)" || fail CPU_READ_FAILED
+          memory_row="$(awk '/^MemTotal:/ {total=$2} /^MemAvailable:/ {available=$2} END {if (total != "" && available != "") print total, available; else exit 1}' /proc/meminfo 2>/dev/null)" || fail MEMORY_READ_FAILED
+          read -r memory_total_kib memory_available_kib <<< "$memory_row"
+          disk_row="$(df -B1 --output=size,avail -- / 2>/dev/null | awk 'NR == 2 {print $1, $2}')" || fail DISK_READ_FAILED
+          read -r disk_total_bytes disk_free_bytes <<< "$disk_row"
+
+          for value in "$cpu_count" "$memory_total_kib" "$memory_available_kib" "$disk_total_bytes" "$disk_free_bytes"; do
+            [[ "$value" =~ ^(0|[1-9][0-9]{0,14})$ ]] || fail INVALID_NUMERIC_METADATA
+          done
+          (( cpu_count > 0 && memory_total_kib > 0 && disk_total_bytes > 0 )) || fail INVALID_RESOURCE_TOTAL
+          (( memory_available_kib <= memory_total_kib && disk_free_bytes <= disk_total_bytes )) || fail INCONSISTENT_RESOURCE_METADATA
+
+          memory_total_bytes=$((memory_total_kib * 1024))
+          memory_available_bytes=$((memory_available_kib * 1024))
+          admission_bytes=$((3840 * 1024 * 1024))
+          admission_margin_bytes=$((memory_available_bytes - admission_bytes))
+          failed=0
+          if (( memory_available_bytes >= admission_bytes )); then
+            ram_numeric_floor=MEETS_NUMERIC_FLOOR_ONLY
+          else
+            ram_numeric_floor=BELOW_NUMERIC_FLOOR
+            failed=1
+          fi
+
+          docker_client_version=NOT_VERIFIABLE
+          docker_engine_version=NOT_VERIFIABLE
+          docker_engine_availability=UNAVAILABLE_OR_NOT_VERIFIABLE
+          version_pattern='^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9][A-Za-z0-9._+-]*)?$'
+          if client_value="$(timeout 5s docker --version 2>/dev/null | awk '$1 == "Docker" && $2 == "version" {gsub(/,/, "", $3); print $3; found=1} END {if (!found) exit 1}')"; then
+            if [[ "$client_value" =~ $version_pattern ]]; then
+              docker_client_version="$client_value"
+            fi
+          fi
+          # Force the local Unix socket; never use inherited remote contexts or TLS targets.
+          if engine_value="$(env -u DOCKER_HOST -u DOCKER_CONTEXT -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH timeout 10s docker --host unix:///var/run/docker.sock version --format '{{.Server.Version}}' 2>/dev/null)"; then
+            if [[ "$engine_value" =~ $version_pattern ]]; then
+              docker_engine_version="$engine_value"
+              docker_engine_availability=AVAILABLE
+            fi
+          fi
+          if [[ "$docker_client_version" == NOT_VERIFIABLE || "$docker_engine_availability" != AVAILABLE ]]; then
+            failed=1
+          fi
+
+          printf 'DOCUMENTED_RUNNER_CPU=4\nDOCUMENTED_RUNNER_RAM_GB=16\nDOCUMENTED_RUNNER_SSD_GB=14\n'
+          printf 'RUNNER_OS=Linux\nRUNNER_ARCHITECTURE=X64\nAVAILABLE_CPU_COUNT=%s\n' "$cpu_count"
+          printf 'TOTAL_PHYSICAL_MEMORY_BYTES=%s\nAVAILABLE_PHYSICAL_MEMORY_BYTES=%s\n' "$memory_total_bytes" "$memory_available_bytes"
+          awk -v total="$memory_total_bytes" -v available="$memory_available_bytes" 'BEGIN {printf "TOTAL_PHYSICAL_MEMORY_MIB=%.3f\nAVAILABLE_PHYSICAL_MEMORY_MIB=%.3f\n", total/1048576, available/1048576}'
+          printf 'DISK_MEASUREMENT_SCOPE=ROOT_FILESYSTEM\nDISK_TOTAL_BYTES=%s\nDISK_FREE_BYTES=%s\n' "$disk_total_bytes" "$disk_free_bytes"
+          printf 'DOCKER_CLIENT_VERSION=%s\nDOCKER_ENGINE_VERSION=%s\nDOCKER_ENGINE_AVAILABILITY=%s\n' "$docker_client_version" "$docker_engine_version" "$docker_engine_availability"
+          printf 'D13_ADMISSION_PROFILE_MIB=3840\nD15_SUM_HARD_LIMITS_MIB=2816\nD15_ADDITIONAL_RESERVE_MIB=1024\n'
+          printf 'RAM_NUMERIC_ADMISSION_MARGIN_BYTES=%s\nRAM_NUMERIC_FLOOR=%s\n' "$admission_margin_bytes" "$ram_numeric_floor"
+          printf 'DISK_REQUIREMENT=NOT_QUALIFIED\nP1_C_WORKLOAD_PEAK=NOT_MEASURED\nTOPOLOGY_QUALIFICATION=NOT_PERFORMED\nP1_C=ON_HOLD\n'
+          if (( failed != 0 )); then
+            printf 'RESOURCE_PROBE_STATUS=FAILED_PREREQUISITE_CHECK\n'
+            exit 1
+          fi
+          printf 'RESOURCE_PROBE_STATUS=METRICS_COLLECTED_ONLY\n'
