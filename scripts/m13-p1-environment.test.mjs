@@ -13,11 +13,409 @@ import { Worker } from "node:worker_threads";
 import { verifyFilesBounded, verificationQuiescence, ownedProcessQuiescence } from "./m13-p1-environment.mjs";
 import { D13_LIMITS } from "./m13-p1-environment.mjs";
 import { classifySessionCensus } from "./m13-p1-environment.mjs";
+import { registerOwnedRunner, stopOwnedRunners, runTrackedTaskkill, runEventEnvelope } from "./m13-p1-environment.mjs";
+import { createWorkerShutdown, createLinuxWorkerGroup } from "./m13-p1-worker-runtime.mjs";
 import { D15_ENGINE_ENDPOINT, assertDockerTarget, verifyDockerEngine, readLocalEngineIdentity } from "./m13-p1-environment.mjs";
+import { createLinuxAuthority, parseLinuxStat, reconcileLinuxProcesses, reconcileLinuxDrain, createLinuxLineReader, runLinuxSupervisor, assertLinuxDnsIsolation } from "./m13-p1-worker-linux-entry.mjs";
+import { decodeDockerFrames, assertLinuxArtifactPlan, LINUX_NODE_ARCHIVE_SHA256, linuxImageSpecification, handoffLinuxRuntime, downloadLinuxArtifact, createLinuxEngine } from "./m13-p1-worker-linux-image.mjs";
+import { fileURLToPath } from "node:url";
+import { linuxTeardownPhase, assertLinuxNetwork, assertLinuxWorkerContainer, createLinuxResourceEventMonitor } from "./m13-p1-environment.mjs";
+import { runInNewContext } from "node:vm";
+const { test } = process.env.VITEST ? await import("vitest") : await import("node:test");
+
+// In-memory HTTP/socket adapters exercise the unchanged Engine event decoder
+// and attach endpoint; no socket, native process, Docker or SQL is opened.
+async function evt01Fixture({ order = "event-first", verifyGate, proofChange = value => value, suppressEvents = false } = {}) {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", generation = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  const lease = { runId: id, generation, owner: "owner", workers: {} }, attempts = [], failures = [], records = [], calls = [], handles = [];
+  const state = { phase: "BOOTSTRAP", dispatchClosed: false, closing: false, expired: false };
+  for (const [index, slot] of ["A", "B"].entries()) {
+    const worker = { id: String(index + 1).repeat(64), attempt: (index ? "d" : "c").repeat(8) + "-cccc-cccc-cccc-cccccccccccc",
+      created: "2026-11-17T10:00:00Z", started: "2026-11-17T10:00:01Z", pid: 100 + index, imageId: "sha256:" + "e".repeat(64), address: "172.20.0." + (index + 4) };
+    lease.workers[slot] = worker;
+    attempts.push({ runId: id, generation, role: "worker-" + slot, attempt: worker.attempt, id: worker.id, owned: true, dispatched: true, removed: false });
+  }
+  let eventStream;
+  const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const profile = { init: { path: "/init", sha256: "a".repeat(64) }, node: { path: "/node", sha256: "a".repeat(64) }, helper: {} };
+  const workers = Object.entries(lease.workers).map(([slot, worker]) => ({ ...worker, slot, dnsProof: { bootId: id, upstream: ["127.0.0.1"] } }));
+  const raw = (slot, action = "attach", changes = {}) => ({ Type: "container", Action: action,
+    Actor: { ID: lease.workers[slot].id, Attributes: { "piccadilly.attempt": lease.workers[slot].attempt } }, ...changes });
+  const feed = value => eventStream.emit("data", Buffer.from(JSON.stringify(value) + "\n"));
+  const request = options => {
+    calls.push(options); const req = new EventEmitter(); let response;
+    req.destroy = () => { queueMicrotask(() => { req.emit("close"); response?.emit("close"); }); };
+    req.end = () => queueMicrotask(() => {
+      if (options.path === "/v1.47/info") {
+        response = new EventEmitter(); response.statusCode = 200; response.destroy = req.destroy;
+        req.emit("response", response); response.emit("data", Buffer.from(JSON.stringify({ ID: "SYNTHETIC_ENGINE", OSType: "linux", Architecture: "amd64" })));
+        response.emit("end"); req.emit("close"); return;
+      }
+      if (options.path.startsWith("/v1.47/events?")) {
+        eventStream = response = new EventEmitter(); response.statusCode = 200; response.destroy = () => {};
+        req.emit("response", response); return;
+      }
+      const worker = workers.find(value => options.path.startsWith("/v1.47/containers/" + value.id + "/attach?"));
+      assert.ok(worker, "only the real attach endpoint may be requested");
+      const socket = new EventEmitter(); socket.destroyed = false; socket.end = () => {}; socket.destroy = () => {
+        if (!socket.destroyed) { socket.destroyed = true; queueMicrotask(() => { socket.emit("close"); req.emit("close"); }); }
+      };
+      socket.write = text => {
+        const packet = JSON.parse(text); assert.equal(packet.type, "IDENTIFY");
+        const ns = worker.slot === "A" ? 11 : 12;
+        const row = (pid, parent, executable) => ({ pid, parent, executable, executableSha256: "a".repeat(64), commandSha256: "b".repeat(64), startTicks: String(pid + 100), state: "S",
+          pidns: "pid:[" + ns + "]", netns: "net:[" + ns + "]", mntns: "mnt:[" + ns + "]", bootId: id, cgroupSha256: "c".repeat(64) });
+        const init = row(1, 0, "/init"), supervisor = row(2, 1, "/node"), payload = Buffer.from(JSON.stringify({ v: 1, runId: id, generation, slot: worker.slot, attempt: worker.attempt, seq: 1, type: "IDENTIFIED",
+          data: { init, supervisor, rows: [init, supervisor], profileSha256: digest(profile), dnsObservation: { upstream: "127.0.0.1", netNamespace: supervisor.netns, clientAddress: worker.address, proofSha256: digest(worker.dnsProof) } } }) + "\n");
+        const frame = Buffer.alloc(payload.length + 8); frame[0] = 1; frame.writeUInt32BE(payload.length, 4); payload.copy(frame, 8);
+        queueMicrotask(() => socket.emit("data", frame));
+      };
+      if (!suppressEvents && order === "event-first") feed(raw(worker.slot));
+      req.emit("upgrade", { statusCode: 101 }, socket, Buffer.alloc(0));
+      if (!suppressEvents && order === "transport-first") setTimeout(() => feed(raw(worker.slot)), 5);
+    }); return req;
+  };
+  const adapter = await createLinuxEngine({ synthetic: true, request, inspectSocket: async () => ({ isSocket: () => true, isSymbolicLink: () => false, uid: 0, dev: 1, ino: 2 }) });
+  const engine = { ...adapter, async attach(...args) { const transport = await adapter.attach(...args); handles.push(transport); return transport; } };
+  const ownedExecs = new Set(), pendingExecEvents = new Set();
+  const options = { engine, lease, attempts, ownedExecs, pendingExecEvents, lifecycle: () => state,
+    assertAuthority: () => { if (state.expired) throw new SafetyError("LINUX_BOOTSTRAP_TIMEOUT"); },
+    verifyWorker: async value => { await verifyGate; return proofChange({ ...value }); },
+    revoke: error => { failures.push(error.code); state.dispatchClosed = true; }, record: (kind, data) => records.push({ kind, ...data }) };
+  const monitor = createLinuxResourceEventMonitor(options), watch = await adapter.watch(id, monitor.receive, error => failures.push(error.code));
+  return { lease, attempts, state, failures, records, calls, monitor, options, workers, profile, raw, feed, ownedExecs, pendingExecEvents,
+    async close() { for (const handle of handles) await handle.close(); await watch.close(); } };
+}
+
+test("EVT01 previous frozen ALT07-A callback rejects an owned attach through the actual decoder", async () => {
+  const path = process.env.EVT01_REFERENCE_ENVIRONMENT; assert.ok(path, "external frozen reference required");
+  const source = await readFile(path, "utf8"), start = source.indexOf("eventMonitor = await engine.watch(runId, value => {");
+  assert.equal(createHash("sha256").update(source).digest("hex"), "425b02fbf0aefb4f6950ec340cfb85eded83f796d1b8367ee250f4d4c82ed71c");
+  assert.ok(start >= 0); const end = source.indexOf("}, revoke);", start); assert.ok(end > start);
+  const callbackSource = source.slice(start + "eventMonitor = await engine.watch(runId, ".length, end + 1);
+  const f = await evt01Fixture();
+  try {
+    const errors = [], callback = runInNewContext("(" + callbackSource + ")", { attempts: f.attempts, ownedExecs: new Set(), pendingExecEvents: new Set(), dispatchClosed: false, resourcePhase: "BOOTSTRAP", SafetyError,
+      revoke: error => errors.push(error.code), event: () => {} });
+    const watch = await f.options.engine.watch(f.lease.runId, callback, error => errors.push(error.code));
+    // The fixture's current stream is the most recently registered real decoder.
+    f.feed(f.raw("A")); await watch.close();
+    assert.deepEqual(errors, ["LINUX_UNEXPECTED_RESOURCE_EVENT"]);
+  } finally { await f.close(); }
+});
+
+for (const order of ["event-first", "transport-first"]) test("EVT01 nominal actual worker-group bootstrap accepts A and B: " + order, { timeout: 2000 }, async () => {
+  const f = await evt01Fixture({ order }); let group;
+  try {
+    group = createLinuxWorkerGroup({ engine: { attach: f.monitor.attach }, image: { profile: f.profile }, workers: f.workers, runId: f.lease.runId, generation: f.lease.generation,
+      controllerNamespaces: { pidns: "pid:[999]", netns: "net:[999]", mntns: "mnt:[999]", bootId: f.lease.runId }, timeoutMs: 1000, onFailure: error => f.failures.push(error.code) });
+    await group.ready(); await f.monitor.ready();
+    assert.deepEqual(f.failures, []); assert.equal(group.records().length, 2);
+    assert.equal(f.monitor.records().length, 2); assert.ok(f.monitor.records().every(value => value.state === "CONNECTED" && value.eventObserved));
+    for (const slot of ["A", "B"]) {
+      const worker = f.lease.workers[slot], record = f.monitor.records().find(value => value.id === worker.id);
+      assert.equal(record.attempt, worker.attempt); assert.equal(record.generation, f.lease.generation);
+    }
+    assert.equal(f.calls.filter(value => value.method === "POST" && value.path.includes("/attach?")).length, 2);
+    assert.ok(f.records.some(value => value.kind === "attach-reconciled"));
+  } finally { group?.dispose(); await f.close(); }
+});
+
+const evt01Negatives = [
+  ["unknown container", f => f.feed(f.raw("A", "attach", { Actor: { ID: "f".repeat(64), Attributes: { "piccadilly.attempt": f.lease.workers.A.attempt } } }))],
+  ["different attempt", f => f.feed(f.raw("A", "attach", { Actor: { ID: f.lease.workers.A.id, Attributes: { "piccadilly.attempt": "f".repeat(36) } } }))],
+  ["missing attempt", f => f.feed(f.raw("A", "attach", { Actor: { ID: f.lease.workers.A.id, Attributes: {} } }))],
+  ["wrong event type", f => f.feed(f.raw("A", "attach", { Type: "network" }))],
+  ["different generation", f => { f.attempts[0].generation = "other"; f.feed(f.raw("A")); }],
+  ["different run", f => { f.attempts[0].runId = "other"; f.feed(f.raw("A")); }],
+  ["unauthorized role", f => { f.attempts[0].role = "postgres"; f.feed(f.raw("A")); }],
+  ["not owned", f => { f.attempts[0].owned = false; f.feed(f.raw("A")); }],
+  ["container unregistered", f => { const value = f.raw("A"); delete f.lease.workers.A; f.feed(value); }],
+  ["identity collision", f => { f.attempts.push({ ...f.attempts[0] }); f.feed(f.raw("A")); }],
+  ["attempt collision", f => { f.attempts[1].attempt = f.attempts[0].attempt; f.feed(f.raw("A")); }],
+  ["instance reused", f => { f.lease.workers.A.started = "2026-11-17T10:01:00Z"; f.feed(f.raw("A")); }],
+  ["READY phase", f => { f.state.phase = "READY"; f.feed(f.raw("A")); }],
+  ["closing phase", f => { f.state.closing = true; f.feed(f.raw("A")); }],
+  ["revoked dispatch", f => { f.state.dispatchClosed = true; f.feed(f.raw("A")); }],
+  ["bootstrap expired", f => { f.state.expired = true; f.feed(f.raw("A")); }],
+];
+for (const [name, change] of evt01Negatives) test("EVT01 rejects correlated attach with " + name, async () => {
+  const f = await evt01Fixture({ suppressEvents: true });
+  try { await f.monitor.attach(f.lease.workers.A.id, () => {}, error => f.failures.push(error.code)); change(f); assert.equal(f.failures.length, 1); assert.equal(f.monitor.records()[0].eventObserved, false); }
+  finally { await f.close(); }
+});
+
+test("EVT01 known container alone cannot authorize an unplanned attach", async () => {
+  const f = await evt01Fixture(); try { f.feed(f.raw("A")); assert.deepEqual(f.failures, ["LINUX_UNEXPECTED_ATTACH_EVENT"]); assert.equal(f.monitor.records().length, 0); } finally { await f.close(); }
+});
+test("EVT01 attach event before validation/dispatch is not authorized", async () => {
+  let release; const gate = new Promise(done => { release = done; }); const f = await evt01Fixture({ verifyGate: gate });
+  try { const pending = f.monitor.attach(f.lease.workers.A.id, () => {}, () => {}); f.feed(f.raw("A")); release(); await assert.rejects(pending, /LINUX_UNEXPECTED_ATTACH_EVENT/u); assert.equal(f.calls.filter(value => value.method === "POST").length, 0); }
+  finally { release(); await f.close(); }
+});
+test("EVT01 fresh proof from another generation is rejected before native attach dispatch", async () => {
+  const f = await evt01Fixture({ proofChange: value => ({ ...value, generation: "other" }) });
+  try { await assert.rejects(f.monitor.attach(f.lease.workers.A.id, () => {}, () => {}), /LINUX_ATTACH_IDENTITY_CHANGED/u); assert.equal(f.calls.filter(value => value.method === "POST").length, 0); } finally { await f.close(); }
+});
+test("EVT01 duplicate event or second attach request cannot consume the same authorization", async () => {
+  const f = await evt01Fixture();
+  try { await f.monitor.attach(f.lease.workers.A.id, () => {}, () => {}); f.feed(f.raw("A")); assert.deepEqual(f.failures, ["LINUX_UNEXPECTED_ATTACH_EVENT"]); await assert.rejects(f.monitor.attach(f.lease.workers.A.id, () => {}, () => {})); assert.equal(f.calls.filter(value => value.method === "POST").length, 1); }
+  finally { await f.close(); }
+});
+test("EVT01 missing event cannot be promoted to READY or waited for beyond bootstrap", async () => {
+  const f = await evt01Fixture({ suppressEvents: true });
+  try { for (const slot of ["A", "B"]) await f.monitor.attach(f.lease.workers[slot].id, () => {}, () => {}); f.state.expired = true;
+    await assert.rejects(f.monitor.ready(), /LINUX_BOOTSTRAP_TIMEOUT/u); assert.ok(f.monitor.records().every(value => !value.eventObserved)); }
+  finally { await f.close(); }
+});
+test("EVT01 a second attach operation for the same instance is an explicit collision", async () => {
+  const f = await evt01Fixture({ suppressEvents: true });
+  try { await f.monitor.attach(f.lease.workers.A.id, () => {}, () => {});
+    await assert.rejects(f.monitor.attach(f.lease.workers.A.id, () => {}, () => {}), /LINUX_ATTACH_OPERATION_COLLISION/u);
+    assert.equal(f.calls.filter(value => value.method === "POST").length, 1); }
+  finally { await f.close(); }
+});
+test("EVT01 preserves rejection of unrelated resources and unauthorized non-attach events", async () => {
+  for (const raw of [{ Type: "container", Action: "start", Actor: { ID: "f".repeat(64), Attributes: {} } }, null]) {
+    const f = await evt01Fixture();
+    try { f.feed(raw ?? f.raw("A", "kill")); assert.deepEqual(f.failures, [raw ? "LINUX_UNKNOWN_RESOURCE_EVENT" : "LINUX_UNEXPECTED_RESOURCE_EVENT"]); }
+    finally { await f.close(); }
+  }
+});
+
+test("ALT07 authority fences queued commands, expired deadlines and settled startup", () => {
+  let time = 0, writes = 0, children = 0;
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const authority = createLinuxAuthority({ runId: id, generation: id, attempt: id, slot: "A", durationMs: 100, now: () => time, send: () => writes++ });
+  authority.commit("IDENTIFY", {}); authority.fence();
+  assert.throws(() => authority.commit("START", {}), /P1C_ABORTED/u);
+  assert.throws(() => authority.spawnOnce(() => children++, () => {}), /P1C_ABORTED/u);
+  authority.reconcile("STOP"); assert.throws(() => authority.reconcile("START"), /CANNOT_DISPATCH/u);
+  authority.settle(); assert.equal(writes, 2); assert.equal(children, 0);
+  const deadline = createLinuxAuthority({ runId: id, generation: id, attempt: id, slot: "B", durationMs: 100, now: () => time });
+  time = 100; assert.throws(() => deadline.spawnOnce(() => children++, () => {}), /P1C_ABORTED/u);
+});
+
+test("ALT07 one consumer ever and immediate ownership before registration failure", () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", child = {}, tracked = [];
+  const authority = createLinuxAuthority({ runId: id, generation: id, attempt: id, slot: "A", durationMs: 1000 });
+  assert.throws(() => authority.spawnOnce(() => child, handle => { tracked.push(handle); throw Error("registration"); }), /registration/u);
+  assert.deepEqual(tracked, [child]); assert.throws(() => authority.spawnOnce(() => ({}), () => {}), /RESTART_FORBIDDEN/u);
+});
+
+test("ALT07 proc stat parser preserves instance identity with parentheses in comm", () => {
+  const fields = Array(22).fill("0"); fields[0] = "7"; fields[18] = "123456789";
+  assert.deepEqual(parseLinuxStat(`19 (helper (with) spaces) S ${fields.join(" ")}`), { pid: 19, state: "S", parent: 7, startTicks: "123456789" });
+  assert.throws(() => parseLinuxStat("19 incomplete"), /INVALID/u);
+});
+
+function linuxProcess(pid, parent, executable = "/node", extra = {}) {
+  return { pid, parent, startTicks: String(pid + 100), state: "S", executable, executableSha256: "a".repeat(64), commandSha256: "b".repeat(64),
+    pidns: "pid:[1]", netns: "net:[2]", mntns: "mnt:[3]", bootId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", cgroupSha256: "c".repeat(64), ...extra };
+}
+test("ALT07 process census rejects unknown executables, PID reuse, namespace mismatch and zombies", () => {
+  const init = linuxProcess(1, 0, "/init"), supervisor = linuxProcess(2, 1), consumer = linuxProcess(3, 2), helper = { path: "/esbuild", sha256: "a".repeat(64), commandSha256: "b".repeat(64) };
+  const context = { init, supervisor, consumer, helper, helpers: new Map() }, rows = [init, supervisor, consumer];
+  assert.equal(reconcileLinuxProcesses(rows, context).status, "PASS_VERIFIED");
+  for (const extra of [{ executable: "/unknown" }, { parent: 99 }, { executableSha256: "d".repeat(64) }, { netns: "net:[other]" }, { state: "Z" }]) {
+    assert.throws(() => reconcileLinuxProcesses([...rows, linuxProcess(4, 3, "/esbuild", extra)], context));
+  }
+  reconcileLinuxProcesses([...rows, linuxProcess(4, 3, "/esbuild")], context);
+  assert.throws(() => reconcileLinuxProcesses([...rows, linuxProcess(4, 3, "/esbuild", { startTicks: "999" })], context), /PID_REUSE/u);
+  assert.throws(() => reconcileLinuxProcesses(rows.map(row => row.pid === 3 ? { ...row, commandSha256: undefined } : row), context), /IDENTITY_MISMATCH/u);
+});
+
+test("ALT07 Docker frames reject truncation, forged streams and output instead of packets", () => {
+  const packets = [], failures = [], reader = createLinuxLineReader(packet => packets.push(packet), error => failures.push(error.code));
+  const decoder = decodeDockerFrames(bytes => reader.push(bytes), () => failures.push("STDERR"), error => failures.push(error.code));
+  const payload = Buffer.from('{"type":"STATUS"}\n'), frame = Buffer.alloc(8 + payload.length); frame[0] = 1; frame.writeUInt32BE(payload.length, 4); payload.copy(frame, 8);
+  decoder.push(frame.subarray(0, 3)); decoder.push(frame.subarray(3)); decoder.end(); assert.deepEqual(packets, [{ type: "STATUS" }]);
+  const truncated = decodeDockerFrames(() => {}, () => {}, error => failures.push(error.code)); truncated.push(frame.subarray(0, 9)); truncated.end();
+  assert.ok(failures.includes("LINUX_DOCKER_FRAME_TRUNCATED"));
+  const invalid = Buffer.alloc(8); invalid[0] = 7; decoder.push(invalid); assert.ok(failures.includes("LINUX_DOCKER_FRAME_INVALID"));
+  reader.push(Buffer.from("not-json\n")); assert.ok(failures.includes("LINUX_CHANNEL_INVALID"));
+});
+
+test("ALT07 artifact identity cannot come from a tag or an unapproved manifest", () => {
+  const plan = { v: 1, platform: "linux/amd64", nodeVersion: "24.14.1", nodeArchiveSha256: LINUX_NODE_ARCHIVE_SHA256, nodeSha256: "a".repeat(64), sourceFreeze: "b".repeat(64),
+    baseReference: "docker.io/library/node@sha256:" + "c".repeat(64), baseConfig: "sha256:" + "d".repeat(64), init: { path: "/sbin/docker-init", sha256: "e".repeat(64) },
+    tools: { tar: "f".repeat(64), docker: "1".repeat(64) }, osFiles: { "/usr/lib/libc.so": "2".repeat(64), "/usr/lib/libssl.so": "3".repeat(64) },
+    workerSeccomp: { defaultAction: "SCMP_ACT_ERRNO", architectures: ["SCMP_ARCH_X86_64"], syscalls: [{ names: ["read"], action: "SCMP_ACT_ALLOW" }] },
+    prisma: { engineCommit: "e".repeat(40), gzipSha256: "5".repeat(64), binarySha256: "6".repeat(64), helpers: { generate: [], migrate: [] } }, diskAdmissionMiB: 1024 };
+  const bytes = Buffer.from(JSON.stringify(plan)), digest = createHash("sha256").update(bytes).digest("hex");
+  assert.equal(assertLinuxArtifactPlan(plan, bytes, digest), plan); assert.throws(() => assertLinuxArtifactPlan(plan, bytes, "0".repeat(64)), /APPROVAL_MISSING/u);
+  assert.throws(() => assertLinuxArtifactPlan({ ...plan, baseReference: "node:latest" }, bytes, digest), /PLAN_INVALID/u);
+  assert.throws(() => assertLinuxArtifactPlan({ ...plan, diskAdmissionMiB: 0 }, bytes, digest), /PLAN_INVALID/u);
+  const spec = linuxImageSpecification(plan); assert.ok(spec.includes(plan.baseReference)); assert.ok(!spec.includes("RUN "));
+});
+test("ALT07 qualified runtime handoff requires completed preparation and never silently returns", () => {
+  const calls = [], options = { node: process.execPath, args: [fileURLToPath(new URL("./m13-p1-worker-linux-image.mjs", import.meta.url)), "--qualified-job"], environment: { PATH: "/synthetic" },
+    quiescence: { verified: false }, execute: (...args) => calls.push(args) };
+  assert.throws(() => handoffLinuxRuntime(options), /NOT_SAFE/u); assert.equal(calls.length, 0);
+  assert.throws(() => handoffLinuxRuntime({ ...options, quiescence: { verified: true } }), /HANDOFF_RETURNED/u); assert.equal(calls.length, 1);
+});
+
+test("ALT07 teardown uses one 70-second origin without resetting phase budgets", () => {
+  assert.equal(linuxTeardownPhase(100, 10000, () => 5100), 5000);
+  assert.equal(linuxTeardownPhase(100, 70000, () => 69100), 1000);
+  assert.throws(() => linuxTeardownPhase(100, 70000, () => 70100), /DEADLINE/u);
+  assert.throws(() => linuxTeardownPhase(100, 71000, () => 200), /DEADLINE/u);
+});
+
+test("ALT07 backend membership is the exact four registered instances, never a relaxed count", () => {
+  const lease = { owner: "owner", runId: "run", backend: { id: "net", created: "created", attempt: "attempt" }, postgres: { id: "pg" }, haproxy: { id: "proxy" }, workers: { A: { id: "a" }, B: { id: "b" } } };
+  const network = { Id: "net", Created: "created", Labels: { "piccadilly.owner": "owner", "piccadilly.run": "run", "piccadilly.role": "backend", "piccadilly.attempt": "attempt" },
+    Driver: "bridge", EnableIPv6: false, Internal: true, Options: { "com.docker.network.bridge.gateway_mode_ipv4": "isolated" }, Containers: { pg: {}, proxy: {}, a: {}, b: {} } };
+  assertLinuxNetwork(lease, network, "backend", ["postgres", "haproxy", "worker-A", "worker-B"]);
+  assert.throws(() => assertLinuxNetwork(lease, { ...network, Containers: { pg: {}, proxy: {}, a: {}, foreign: {} } }, "backend", ["postgres", "haproxy", "worker-A", "worker-B"]), /FOREIGN/u);
+});
+
+test("ALT07 worker admission rejects privileges, host mounts, foreign instances and external DNS", () => {
+  const image = { imageId: "sha256:" + "a".repeat(64), profile: { baseEnvironment: [], workerSeccomp: { defaultAction: "SCMP_ACT_ERRNO" } } };
+  const lease = { runId: "run", generation: "generation", owner: "owner", backend: { id: "backend" }, workers: { A: { id: "worker", created: "created", started: "started", pid: 123, attempt: "attempt", address: "172.20.0.4" } } };
+  const current = { Id: "worker", Created: "created", Image: image.imageId, RestartCount: 0, Path: "/usr/local/bin/node", Args: ["/app/scripts/m13-p1-worker-linux-entry.mjs"],
+    State: { Running: true, Pid: 123, StartedAt: "started", OOMKilled: false },
+    Config: { Image: image.imageId, User: "10001:10001", OpenStdin: true, Labels: { "piccadilly.run": "run", "piccadilly.owner": "owner", "piccadilly.attempt": "attempt", "piccadilly.role": "worker-A" },
+      Env: ["PATH=/usr/local/bin:/usr/bin:/bin", "P1C_RUN_ID=run", "P1C_GENERATION=generation", "P1C_SLOT=A", "P1C_ATTEMPT=attempt"] },
+    HostConfig: { RestartPolicy: { Name: "no" }, Init: true, ReadonlyRootfs: true, Privileged: false, CapDrop: ["ALL"],
+      SecurityOpt: ["no-new-privileges", "seccomp=" + JSON.stringify(image.profile.workerSeccomp)], Sysctls: { "net.ipv6.conf.all.disable_ipv6": "1", "net.ipv6.conf.default.disable_ipv6": "1", "net.ipv4.ip_forward": "0" },
+      LogConfig: { Type: "none" }, Memory: 512 * 1024 ** 2, MemorySwap: 512 * 1024 ** 2, Dns: ["127.0.0.1"], Tmpfs: { "/run/p1c": "size=67108864,nosuid,noexec" } },
+    Mounts: [{ Type: "tmpfs", Destination: "/run/p1c" }], NetworkSettings: { Networks: { backend: { NetworkID: "backend", IPAddress: "172.20.0.4", Gateway: "" } } } };
+  assertLinuxWorkerContainer(lease, current, "A", image);
+  for (const changed of [{ Privileged: true }, { Binds: ["/var/run/docker.sock:/var/run/docker.sock"] }, { Dns: ["8.8.8.8"] }, { MemorySwap: -1 }, { PidMode: "host" }, { RestartPolicy: { Name: "always" } }]) {
+    assert.throws(() => assertLinuxWorkerContainer(lease, { ...current, HostConfig: { ...current.HostConfig, ...changed } }, "A", image));
+  }
+  assert.throws(() => assertLinuxWorkerContainer(lease, { ...current, State: { ...current.State, StartedAt: "reused" } }, "A", image));
+  assert.throws(() => assertLinuxWorkerContainer(lease, { ...current, Config: { ...current.Config, Env: [...current.Config.Env, "DATABASE_URL=unattested"] } }, "A", image));
+});
+
+test("ALT07 artifact download waits for transport close and bounds a stalled response without native calls", { timeout: 2000 }, async () => {
+  const request = (_url, _options, respond) => {
+    const req = new EventEmitter(), res = new EventEmitter(); req.setTimeout = () => {}; res.statusCode = 200; res.headers = {};
+    req.destroy = () => { queueMicrotask(() => { req.emit("close"); res.emit("close"); }); }; res.destroy = () => {};
+    queueMicrotask(() => { respond(res); res.emit("data", Buffer.from("approved")); res.emit("end"); req.emit("close"); setTimeout(() => res.emit("close"), 5); });
+    return req;
+  };
+  assert.equal((await downloadLinuxArtifact("https://nodejs.org/synthetic", 64, { request, timeoutMs: 100 })).toString(), "approved");
+  let stopped = 0;
+  const stalled = (_url, _options, respond) => {
+    const req = new EventEmitter(), res = new EventEmitter(); req.setTimeout = () => {}; res.statusCode = 200; res.headers = {};
+    req.destroy = () => { stopped++; queueMicrotask(() => { req.emit("close"); res.emit("close"); }); }; res.destroy = () => {};
+    queueMicrotask(() => respond(res)); return req;
+  };
+  await assert.rejects(downloadLinuxArtifact("https://nodejs.org/synthetic", 64, { request: stalled, timeoutMs: 10 }), /LINUX_DOWNLOAD_TIMEOUT/u);
+  assert.ok(stopped > 0);
+});
+
+function linuxStartData(id) {
+  const database = "piccadilly_e2e_" + "a".repeat(32), role = "m13_p1_" + "a".repeat(16), serverAddress = "172.20.0.2";
+  return { nonce: id, environment: { DATABASE_URL: `postgresql://${role}:SYNTHETIC_ONLY@${serverAddress}:5432/${database}`, APP_ENV: "development", NODE_ENV: "test", PGAPPNAME: "m13-p1c-aaaaaaaaaaaa-A" },
+    target: { runId: id, generation: id, slot: "A", containerId: "a".repeat(64), networkId: "b".repeat(64), postgresId: "c".repeat(64), serverAddress, database, role,
+      identity: { database, role, version: "18.4", dataDirectory: "/var/lib/postgresql/18/docker", systemIdentifier: "123", postmasterStart: "2026-11-17T12:00:00Z", serverAddress, clientAddress: "172.20.0.4", serverPort: 5432 } } };
+}
+function linuxNetworkFixture(id) {
+  return { proof: { runId: id, generation: id, slot: "A", attempt: id, containerId: "a".repeat(64), networkId: "b".repeat(64), engineId: "SYNTHETIC_ENGINE",
+    upstream: ["127.0.0.1"], subnet: "172.20.0.0/24", bootId: id, created: "2026-11-17T10:00:00Z", started: "2026-11-17T10:00:01Z", imageId: "sha256:" + "c".repeat(64) },
+    observation: { resolvers: ["127.0.0.11"], pidNamespace: "pid:[1]", netNamespace: "net:[2]", bootId: id, addresses: ["172.20.0.4"],
+      route: "Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\neth0 000014AC 00000000 0001 0 0 0 00FFFFFF 0 0 0\n", route6: "" } };
+}
+test("ALT07 embedded DNS is accepted only with owned loopback upstream, namespace and isolated routes", () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", f = linuxNetworkFixture(id), context = { ...f.proof, pidNamespace: "pid:[1]", netNamespace: "net:[2]" };
+  assert.equal(assertLinuxDnsIsolation(f.observation, f.proof, context).resolver, "127.0.0.11");
+  assert.throws(() => assertLinuxDnsIsolation(f.observation, { ...f.proof, upstream: ["8.8.8.8"] }, context), /UPSTREAM/u);
+  assert.throws(() => assertLinuxDnsIsolation({ ...f.observation, netNamespace: "net:[999]" }, f.proof, context), /NAMESPACE/u);
+  assert.throws(() => assertLinuxDnsIsolation({ ...f.observation, resolvers: ["127.0.0.53"] }, f.proof, context), /NAMESPACE/u);
+  assert.throws(() => assertLinuxDnsIsolation({ ...f.observation, route: f.observation.route + "eth0 00000000 010014AC 0003 0 0 0 00000000 0 0 0\n" }, f.proof, context), /EXTERNAL_ROUTE/u);
+  assert.throws(() => assertLinuxDnsIsolation(f.observation, { ...f.proof, engineId: null }, context), /UPSTREAM/u);
+});
+test("ALT07 real supervisor aborts a pending filesystem startup before spawn", { timeout: 2000 }, async () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", context = { runId: id, generation: id, slot: "A", attempt: id };
+  const digest = value => createHash("sha256").update(value).digest("hex");
+  const args = ["/node", "/app/scripts/m13-p1-worker-linux-entry.mjs"];
+  const init = linuxProcess(1, 0, "/init", { commandSha256: digest(Buffer.from(["/init", "--", ...args].join("\0") + "\0")) });
+  const supervisor = linuxProcess(2, 1, "/node", { commandSha256: digest(Buffer.from(args.join("\0") + "\0")) });
+  const profile = { node: { path: "/node", sha256: "a".repeat(64) }, init: { path: "/init", sha256: "a".repeat(64) }, helper: {}, files: {}, osFiles: {} };
+  const network = linuxNetworkFixture(id);
+  const input = new PassThrough(), output = new PassThrough(), packets = [];
+  output.on("data", bytes => { for (const line of bytes.toString().trim().split("\n")) packets.push(JSON.parse(line)); });
+  let entered, release, spawns = 0, sequence = 0;
+  const pending = new Promise(done => { release = done; }), waiting = new Promise(done => { entered = done; });
+  const run = runLinuxSupervisor(profile, { synthetic: true, pid: 2, input, output, environment: { P1C_RUN_ID: id, P1C_GENERATION: id, P1C_SLOT: "A", P1C_ATTEMPT: id },
+    networkObservation: network.observation,
+    readProcess: async pid => pid === 1 ? init : supervisor, readdir: async () => ["1", "2"], mkdir: async () => { entered(); await pending; }, spawn: () => { spawns++; throw Error("forbidden"); } });
+  const write = (type, data = {}) => input.write(JSON.stringify({ v: 1, ...context, seq: ++sequence, type, data }) + "\n");
+  await new Promise(done => setTimeout(done, 0)); write("IDENTIFY", { dnsProof: network.proof });
+  for (let i = 0; i < 100 && !packets.some(value => value.type === "IDENTIFIED"); i++) await new Promise(done => setTimeout(done, 1));
+  write("START", linuxStartData(id));
+  await waiting; write("STOP"); await new Promise(done => setTimeout(done, 0));
+  assert.ok(packets.some(value => value.type === "DORMANT_JOINED")); assert.equal(spawns, 0);
+  release(); await new Promise(done => setTimeout(done, 0)); write("RELEASE");
+  const result = await run; assert.equal(spawns, 0); assert.equal(result.exitCode, 0); assert.ok(!packets.some(value => value.type === "CHILD_REGISTERED"));
+});
+
+test("ALT07 drain admits observation only of an already-attributed helper, never a new process", () => {
+  const init = linuxProcess(1, 0, "/init"), supervisor = linuxProcess(2, 1), consumer = linuxProcess(3, 2), helper = linuxProcess(4, 3, "/esbuild");
+  const context = { init, supervisor, consumer, helpers: new Map([[4, helper]]) };
+  assert.equal(reconcileLinuxDrain([init, supervisor, { ...helper, parent: 1 }], context).complete, false);
+  assert.equal(reconcileLinuxDrain([init, supervisor], context).complete, true);
+  for (const extra of [{ pid: 5 }, { startTicks: "changed" }, { executable: "/unrelated" }, { parent: 99 }, { state: "Z" }]) {
+    assert.throws(() => reconcileLinuxDrain([init, supervisor, { ...helper, ...extra }], context), /UNKNOWN_DRAIN/u);
+  }
+});
+
+test("ALT07 unknown namespace member preserves failure and quarantines without terminating it", { timeout: 2000 }, async () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", digest = value => createHash("sha256").update(value).digest("hex");
+  const context = { runId: id, generation: id, slot: "A", attempt: id }, args = ["/node", "/app/scripts/m13-p1-worker-linux-entry.mjs"];
+  const init = linuxProcess(1, 0, "/init", { commandSha256: digest(Buffer.from(["/init", "--", ...args].join("\0") + "\0")) });
+  const supervisor = linuxProcess(2, 1, "/node", { commandSha256: digest(Buffer.from(args.join("\0") + "\0")) });
+  const profile = { node: { path: "/node", sha256: "a".repeat(64) }, init: { path: "/init", sha256: "a".repeat(64) }, helper: {}, files: {}, osFiles: {} };
+  const network = linuxNetworkFixture(id), input = new PassThrough(), output = new PassThrough(), packets = [];
+  let quarantines = 0, spawns = 0;
+  output.on("data", bytes => { for (const line of bytes.toString().trim().split("\n")) packets.push(JSON.parse(line)); });
+  const run = runLinuxSupervisor(profile, { synthetic: true, pid: 2, input, output, environment: { P1C_RUN_ID: id, P1C_GENERATION: id, P1C_SLOT: "A", P1C_ATTEMPT: id },
+    networkObservation: network.observation, readProcess: async pid => pid === 1 ? init : pid === 2 ? supervisor : linuxProcess(4, 2, "/unknown"),
+    readdir: async () => ["1", "2", "4"], onQuarantine: () => quarantines++, spawn: () => { spawns++; throw Error("forbidden"); } });
+  await new Promise(done => setTimeout(done, 0)); input.write(JSON.stringify({ v: 1, ...context, seq: 1, type: "IDENTIFY", data: { dnsProof: network.proof } }) + "\n");
+  const result = await run; assert.equal(result.exitCode, 2); assert.equal(result.primary, "P1C_UNKNOWN_DESCENDANT");
+  assert.equal(result.quarantined, true); assert.equal(quarantines, 1); assert.equal(spawns, 0);
+  assert.ok(packets.some(packet => packet.type === "FAILURE" && packet.data.code === result.primary));
+  assert.ok(!packets.some(packet => ["CHILD_JOINED", "RELEASED"].includes(packet.type)));
+});
+
+test("ALT07 real supervisor registers, stops and joins its sole child without inferring SQL quiescence", { timeout: 2000 }, async () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", digest = value => createHash("sha256").update(value).digest("hex");
+  const context = { runId: id, generation: id, slot: "A", attempt: id }, args = ["/node", "/app/scripts/m13-p1-worker-linux-entry.mjs"];
+  const init = linuxProcess(1, 0, "/init", { commandSha256: digest(Buffer.from(["/init", "--", ...args].join("\0") + "\0")) });
+  const supervisor = linuxProcess(2, 1, "/node", { commandSha256: digest(Buffer.from(args.join("\0") + "\0")) });
+  const consumerArgs = ["/node", "--conditions=react-server", "--import", "/app/node_modules/tsx/dist/loader.mjs", "/app/scripts/m13-p1-worker-consumer.ts"];
+  const consumer = linuxProcess(3, 2, "/node", { commandSha256: digest(Buffer.from(consumerArgs.join("\0") + "\0")) });
+  const profile = { node: { path: "/node", sha256: "a".repeat(64) }, init: { path: "/init", sha256: "a".repeat(64) }, helper: {}, files: {}, osFiles: {} };
+  const network = linuxNetworkFixture(id);
+  const input = new PassThrough(), output = new PassThrough(), packets = [], child = new EventEmitter();
+  let running = false, spawns = 0, sequence = 0;
+  Object.assign(child, { pid: 3, connected: true, stdout: new PassThrough(), stderr: new PassThrough(), send(packet) {
+    if (packet.type === "STOP") queueMicrotask(() => {
+      child.emit("message", { v: 1, runId: id, generation: id, slot: "A", nonce: id, seq: 1, type: "STOPPED", data: { exitCode: 0, databaseClosed: true, aborted: true } }); running = false;
+      child.emit("exit", 0, null); child.emit("close", 0, null);
+    });
+  } });
+  output.on("data", bytes => { for (const line of bytes.toString().trim().split("\n")) packets.push(JSON.parse(line)); });
+  const run = runLinuxSupervisor(profile, { synthetic: true, pid: 2, input, output, environment: { P1C_RUN_ID: id, P1C_GENERATION: id, P1C_SLOT: "A", P1C_ATTEMPT: id },
+    networkObservation: network.observation,
+    readProcess: async pid => pid === 1 ? init : pid === 2 ? supervisor : consumer,
+    readdir: async () => running ? ["1", "2", "3"] : ["1", "2"], mkdir: async () => {}, spawn: () => { running = true; spawns++; return child; } });
+  const write = (type, data = {}) => input.write(JSON.stringify({ v: 1, ...context, seq: ++sequence, type, data }) + "\n");
+  const until = async type => { for (let i = 0; i < 200 && !packets.some(packet => packet.type === type); i++) await new Promise(done => setTimeout(done, 1)); assert.ok(packets.some(packet => packet.type === type), type); };
+  await new Promise(done => setTimeout(done, 0)); write("IDENTIFY", { dnsProof: network.proof }); await until("IDENTIFIED");
+  write("START", linuxStartData(id)); await until("CHILD_REGISTERED");
+  write("STOP"); await until("CHILD_JOINED"); write("RELEASE");
+  const result = await run; assert.equal(result.exitCode, 0); assert.equal(spawns, 1);
+  assert.ok(packets.find(packet => packet.type === "CHILD_JOINED").data.helperAbsence);
+  assert.ok(packets.every(packet => !Object.hasOwn(packet.data, "sqlQuiescence")));
+});
 
 // The protected Vitest configuration includes every *.test.mjs. Keep the same
 // assertions executable both there and under Node's dependency-free test runner.
-const { test } = process.env.VITEST ? await import("vitest") : await import("node:test");
 const fail = code => error => error instanceof SafetyError && error.code === code;
 function fixture() {
   const state = { calls: [], children: [], exists: false, networkExists: false, sourceCalls: 0 };
@@ -1073,7 +1471,7 @@ test("D15 expired operational budget never starts the identity transport or a wr
 
 // D16 exercises the versioned main() body; no Docker, SQL, or role child is run.
 async function d16Cli(options = {}, check) {
-  const { validationError, cleanup = true, cleanupError } = options;
+  const { validationError, cleanup = true, cleanupError, plan = "core" } = options;
   const validation = Object.hasOwn(options, "validation") ? options.validation : { status: "PASS_VERIFIED" };
   const directory = await mkdtemp(join(tmpdir(), "m13-d16-cli-")), calls = [];
   const runtime = { receipt: { status: "TEST_DOUBLE_ONLY_NOT_RUNTIME_QUALIFICATION" } };
@@ -1097,7 +1495,7 @@ async function d16Cli(options = {}, check) {
     async createHarness(options) { calls.push("harness"); configured = options; return harness; },
   };
   try {
-    try { await main(["run", "--distribution-dir", join(directory, "distribution"), "--evidence-dir", join(directory, "evidence"), "--artifact-dir", join(directory, "artifacts"), "--engine-id", d15EngineId, "--plan", "core"], dependencies); }
+    try { await main(["run", "--distribution-dir", join(directory, "distribution"), "--evidence-dir", join(directory, "evidence"), "--artifact-dir", join(directory, "artifacts"), "--engine-id", d15EngineId, "--plan", plan], dependencies); }
     catch (error) { caught = error; }
     const receipt = JSON.parse(await readFile(join(directory, "evidence", "run.json"), "utf8"));
     assert.deepEqual(["SIGINT", "SIGTERM"].map(name => process.listenerCount(name)), listeners);
@@ -1149,3 +1547,213 @@ test("D16 CLI main rejects every non-explicit-positive validation result before 
     });
   }
 });
+
+test("P1-C main dispatches the closed worker plan only after explicit early quiescence", async () => {
+  await d16Cli({ plan: "worker" }, async ({ calls, caught, receipt }) => {
+    assert.equal(caught, undefined);
+    assert.deepEqual(calls, ["qualify", "harness", "create", "validate:start", "validate:pass", "run:ci", "run:generate", "run:validate", "run:migrate", "run:worker-runtime", "close"]);
+    assert.equal(receipt.cleanupStatus, "COMPLETE");
+  });
+});
+
+test("P1-C does not open a second harness run while the single worker role owns its child group", async () => {
+  const f = d8BatchedFixture(), original = f.backend.child;
+  let release, entered;
+  const started = new Promise(done => { entered = done; }), stopped = new Promise(done => { release = done; });
+  f.backend.child = async (...args) => { entered(); await stopped; return original(...args); };
+  const h = await f.harness(); await h.create(); const work = h.run("worker-runtime");
+  await started; await assert.rejects(h.run("seed"), fail("RUN_BUSY_CLOSED_OR_REVOKED"));
+  release(); await work; assert.equal(await h.close(), true);
+});
+
+test("P1-C worker role has a 600s aggregate cap without extending any existing role budget", async () => {
+  const f = d8BatchedFixture(), original = f.backend.child;
+  f.backend.child = async (...args) => { const result = await original(...args); f.state.ms += 600_001; return result; };
+  const h = await f.harness(); await h.create();
+  await assert.rejects(h.run("worker-runtime"), fail("WORKER_ROLE_DEADLINE"));
+  assert.equal(h.receipt().positiveOwnership, false); await h.close();
+  assert.equal(D8_LIMITS.bootstrapMs, 30_000); assert.equal(D13_LIMITS.operationalMs, 15_000);
+});
+// D2 uses EventEmitter children only: no native process or termination is run.
+function d2RunnerGroup() {
+  const children = new Set(), joins = new WeakMap(), records = [], events = [];
+  const controller = new AbortController();
+  const control = { signal: controller.signal, beforeSpawn() { if (controller.signal.aborted) throw controller.signal.reason; }, effectiveTimeout: () => 1000 };
+  const register = pid => {
+    const child = Object.assign(new EventEmitter(), { pid, exitCode: null, signalCode: null });
+    registerOwnedRunner(child, children, joins, records, (kind, value) => events.push({ kind, ...value }));
+    return child;
+  };
+  const close = child => { child.exitCode = 0; child.emit("exit", 0); child.emit("close", 0); };
+  return { children, joins, records, events, controller, control, register, close };
+}
+test("P1-C D2 JOIN_TWO_CONCURRENT_WORKERS and already closed sibling use registered close evidence", async () => {
+  const f = d2RunnerGroup(), a = f.register(101), b = f.register(102), stopped = [];
+  await stopOwnedRunners(f.children, f.joins, f.control, async child => { stopped.push(child.pid); f.close(a); f.close(b); await Promise.resolve(); });
+  assert.deepEqual(stopped, [101]); assert.equal(f.children.size, 0);
+  assert.ok(f.records.every(r => r.state === "JOINED" && r.closeObserved));
+  await stopOwnedRunners(f.children, f.joins, f.control, () => { throw new Error("unowned-stop"); });
+});
+
+test("P1-C D2 JOIN_PARENT_AND_HELPERS waits for each registered handle", async () => {
+  const f = d2RunnerGroup(), parent = f.register(111), helper = f.register(112), stopped = [];
+  await stopOwnedRunners(f.children, f.joins, f.control, async child => { stopped.push(child.pid); f.close(child); });
+  assert.deepEqual(stopped, [parent.pid, helper.pid]); assert.equal(f.records.length, 2);
+  assert.ok(f.records.every(r => r.closeObserved));
+});
+
+test("P1-C D2 JOIN_ABORT_DURING_STARTUP includes a child registered while another stop is pending", async () => {
+  const f = d2RunnerGroup(), a = f.register(121), stopped = [], application = new AbortController();
+  await stopOwnedRunners(f.children, f.joins, f.control, async child => {
+    stopped.push(child.pid);
+    if (child === a) { application.abort(); f.register(122); }
+    f.close(child);
+  });
+  assert.deepEqual(stopped, [121, 122]); assert.equal(f.children.size, 0); assert.equal(application.signal.aborted, true);
+});
+
+test("P1-C D2 JOIN_ALREADY_EXITED_CHILD still requires its actual close", async () => {
+  const f = d2RunnerGroup(), a = f.register(131); let terminated = 0, finished = false;
+  a.exitCode = 0; a.emit("exit", 0);
+  const pending = stopOwnedRunners(f.children, f.joins, f.control, async () => { terminated++; }).then(() => { finished = true; });
+  await new Promise(done => setImmediate(done)); assert.equal(finished, false); assert.equal(terminated, 0);
+  a.emit("close", 0); await pending; assert.equal(finished, true); assert.equal(f.records[0].closeObserved, true);
+});
+
+test("P1-C D2 JOIN_ABORT_DURING_SHUTDOWN and LATE_EXIT cannot erase a timed out join", async () => {
+  const f = d2RunnerGroup(), a = f.register(141), primary = new SafetyError("PROCESS_STOP_TIMEOUT");
+  const pending = stopOwnedRunners(f.children, f.joins, f.control, async () => {});
+  const failure = assert.rejects(pending, error => error === primary);
+  await new Promise(done => setImmediate(done)); f.controller.abort(primary); await failure;
+  assert.equal(f.records[0].state, "UNKNOWN"); assert.equal(f.records[0].closeObserved, false);
+  f.close(a); assert.equal(f.records[0].state, "JOINED"); assert.equal(f.records[0].stopFailure, "PROCESS_STOP_TIMEOUT");
+});
+
+test("P1-C D2 JOIN_UNKNOWN and PID replacement never invoke unowned termination", async () => {
+  const f = d2RunnerGroup(); let calls = 0;
+  const foreign = Object.assign(new EventEmitter(), { pid: 151, exitCode: null, signalCode: null });
+  f.children.add(foreign);
+  await assert.rejects(stopOwnedRunners(f.children, f.joins, f.control, async () => { calls++; }), fail("OWNED_CHILD_IDENTITY_UNKNOWN"));
+  assert.equal(calls, 0); f.children.delete(foreign);
+  const owned = f.register(152); owned.pid = 153;
+  await assert.rejects(stopOwnedRunners(f.children, f.joins, f.control, async () => { calls++; }), fail("OWNED_CHILD_IDENTITY_UNKNOWN"));
+  assert.equal(calls, 0);
+});
+
+test("P1-C D2 JOIN_TIMEOUT uses the real bounded phase and cannot certify an unclosed handle", async () => {
+  const f = d2RunnerGroup(), child = f.register(155);
+  const budget = new MonotonicBudget({ durationMs: 30, code: "PROCESS_STOP_TIMEOUT" });
+  try {
+    await assert.rejects(budget.run("synthetic-stop", 30, control => stopOwnedRunners(f.children, f.joins, control, async () => {})), fail("PROCESS_STOP_TIMEOUT"));
+    assert.equal(f.records[0].state, "UNKNOWN"); assert.equal(f.records[0].closeObserved, false);
+    assert.equal(f.children.size, 1); f.close(child);
+    assert.equal(f.records[0].stopFailure, "PROCESS_STOP_TIMEOUT");
+  } finally { budget.dispose(); }
+});
+
+test("P1-C D2 concurrent stops share one termination and observed close", async () => {
+  const f = d2RunnerGroup(), a = f.register(161); let calls = 0, release;
+  const barrier = new Promise(done => { release = done; });
+  const terminate = async () => { calls++; await barrier; f.close(a); };
+  const left = stopOwnedRunners(f.children, f.joins, f.control, terminate);
+  const right = stopOwnedRunners(f.children, f.joins, f.control, terminate);
+  await new Promise(done => setImmediate(done)); assert.equal(calls, 1); release(); await Promise.all([left, right]);
+  assert.equal(f.records.filter(r => r.closeObserved).length, 1);
+});
+
+test("P1-C D2 JOIN_PRIMARY_FAILURE_PRESERVED through independently failed shutdown", async () => {
+  const f = d2RunnerGroup(), a = f.register(171), original = new SafetyError("P1C_PROCESS_PROBE_FAILED"), cleanup = new SafetyError("SYNTHETIC_STOP_FAILED");
+  await assert.rejects(stopOwnedRunners(f.children, f.joins, f.control, async () => { throw cleanup; }), error => error === cleanup);
+  assert.equal(f.records[0].stopFailure, cleanup.code);
+  const result = await finishOwnedRun({ close: async () => { throw cleanup; }, receipt: () => ({ runners: f.records }) }, original);
+  assert.equal(result.error, original); assert.equal(result.receipt.cleanupError, cleanup.code); assert.equal(result.cleanupStatus, "INCOMPLETE");
+  f.close(a);
+});
+
+test("P1-C D5 parent event envelope cannot inherit a child clock, kind or run identity", () => {
+  const identity = { sequence: 15, at: "2026-11-10T00:00:00Z", monotonicMs: 52, runId: "parent", kind: "worker-runtime" };
+  const child = { sequence: 1, monotonicMs: 0, runId: "wrong", kind: "child-probe", at: "wrong", event: "consumer-ready" };
+  const result = runEventEnvelope(identity, { ...child, workerEvent: child });
+  assert.equal(result.sequence, 15); assert.equal(result.monotonicMs, 52); assert.equal(result.kind, "worker-runtime");
+  assert.equal(result.runId, "parent"); assert.equal(result.at, identity.at);
+  assert.deepEqual(result.workerEvent, child);
+});
+
+test("P1-C D5 parent abort and role finally delegate to one shutdown operation", async () => {
+  const f = d2RunnerGroup(), owner = createWorkerShutdown({ runId: "a".repeat(36), generation: "b".repeat(36) });
+  let stopA = 0, stopB = 0, native = 0;
+  const make = (pid, role, stopped) => {
+    const child = Object.assign(new EventEmitter(), { pid, exitCode: null, signalCode: null, kill() { throw new Error("unexpected-force"); } });
+    owner.track(child, { role, graceful: () => { stopped(); f.close(child); } });
+    registerOwnedRunner(child, f.children, f.joins, f.records, () => {}, { processRole: "P1C_" + role, shutdown: owner.stopAll });
+    return child;
+  };
+  make(321, "CONSUMER_A", () => { stopA++; }); make(322, "CONSUMER_B", () => { stopB++; });
+  const role = owner.stopAll(f.control);
+  await Promise.all([role, stopOwnedRunners(f.children, f.joins, f.control, () => { native++; })]);
+  assert.equal(stopA, 1); assert.equal(stopB, 1); assert.equal(native, 0);
+  assert.equal(f.children.size, 0); assert.equal(f.records.length, 2);
+  assert.ok(f.records.every(row => row.state === "JOINED"));
+});
+
+function d5NativeFailure(f, target, code = 128) {
+  const native = Object.assign(new EventEmitter(), { pid: 9001, exitCode: null, signalCode: null });
+  let calls = 0;
+  const execute = (file, args, options) => {
+    calls++; assert.match(file, /System32[/\\]taskkill\.exe$/u);
+    assert.deepEqual(args, ["/PID", String(target.pid), "/T", "/F"]); assert.equal(options.windowsHide, true);
+    const failure = Object.assign(new Error("SYNTHETIC_NATIVE_SECRET"), { code, stdout: "SYNTHETIC_NATIVE_SECRET", stderr: "SYNTHETIC_NATIVE_SECRET", killed: false });
+    const operation = new Promise((_, reject) => queueMicrotask(() => {
+      native.exitCode = code; native.emit("exit", code, null); native.emit("close", code, null); f.close(target); reject(failure);
+    }));
+    return Object.assign(operation, { child: native });
+  };
+  const registered = child => registerOwnedRunner(child, f.children, f.joins, f.records, () => {}, { processRole: "NATIVE_TERMINATOR", handleOnly: true });
+  return { execute, registered, calls: () => calls, native };
+}
+
+test("P1-C D5 native exit 128 remains failure with correlated command and target close evidence", async () => {
+  const f = d2RunnerGroup(), target = f.register(331), native = d5NativeFailure(f, target), receipts = [];
+  let failure;
+  try { await runTrackedTaskkill(target, f.joins, f.control, { onChild: native.registered, record: (kind, value) => receipts.push({ kind, ...value }) }, native.execute); }
+  catch (error) { failure = error; }
+  assert.equal(failure.code, "NATIVE_STOP_FAILED"); assert.equal(failure.nativeExitCode, 128);
+  assert.equal(failure.nativeStop.failureClass, "NATIVE_EXIT_128"); assert.equal(failure.nativeStop.result, "FAIL");
+  assert.equal(failure.nativeStop.pid, native.native.pid); assert.equal(failure.nativeStop.parentPid, process.pid);
+  assert.equal(failure.nativeStop.targetPid, 331); assert.equal(failure.nativeStop.targetCloseObservedAtDispatch, false);
+  assert.equal(failure.nativeStop.targetCloseObservedAtSettlement, true); assert.equal(failure.nativeStop.closeObserved, true);
+  assert.equal(failure.nativeStop.exitObserved, true); assert.equal(failure.nativeStop.causalRelation, "NOT_VERIFIABLE");
+  assert.equal(native.calls(), 1); assert.equal(f.children.size, 0);
+  assert.ok(!JSON.stringify({ failure, receipts }).includes("SYNTHETIC_NATIVE_SECRET"));
+  assert.equal(receipts.at(-1).kind, "native-stop-settled"); assert.equal(receipts.at(-1).exitCode, 128);
+});
+
+test("P1-C D5 native stop rejects unregistered, replaced and delegated P1-C targets before dispatch", async () => {
+  const f = d2RunnerGroup(), unknown = new EventEmitter(), target = f.register(341);
+  let calls = 0;
+  const execute = () => { calls++; throw new Error("unowned native dispatch"); };
+  await assert.rejects(runTrackedTaskkill(unknown, f.joins, f.control, {}, execute), fail("NATIVE_STOP_OWNERSHIP_REQUIRED"));
+  target.pid = 342;
+  await assert.rejects(runTrackedTaskkill(target, f.joins, f.control, {}, execute), fail("NATIVE_STOP_OWNERSHIP_REQUIRED"));
+  target.pid = 341; f.joins.get(target).shutdown = async () => {};
+  await assert.rejects(runTrackedTaskkill(target, f.joins, f.control, {}, execute), fail("NATIVE_STOP_OWNERSHIP_REQUIRED"));
+  assert.equal(calls, 0); f.close(target);
+});
+
+test("P1-C D5 exit 128 cleanup cannot replace TREE01 and does not fabricate aggregate teardown", async () => {
+  const f = d2RunnerGroup(), target = f.register(351), native = d5NativeFailure(f, target);
+  const original = new SafetyError("P1C_UNKNOWN_DESCENDANT");
+  original.observationId = "a".repeat(36); original.shutdownFailure = "P1C_SHUTDOWN_JOIN_UNKNOWN"; original.reconciliationFailure = "P1C_TREE_NEVER_QUALIFIED";
+  const close = () => stopOwnedRunners(f.children, f.joins, f.control, (child, control) =>
+    runTrackedTaskkill(child, f.joins, control, { onChild: native.registered }, native.execute));
+  const result = await finishOwnedRun({ close, receipt: () => ({ runners: f.records }) }, original);
+  assert.equal(result.error, original); assert.equal(result.receipt.primaryFailure.code, "P1C_UNKNOWN_DESCENDANT");
+  assert.equal(result.receipt.primaryFailure.observationId, original.observationId);
+  assert.equal(result.receipt.primaryFailure.shutdownFailure, original.shutdownFailure);
+  assert.equal(result.receipt.primaryFailure.reconciliationFailure, original.reconciliationFailure);
+  assert.equal(result.cleanupStatus, "INCOMPLETE"); assert.equal(result.receipt.cleanupError, "NATIVE_STOP_FAILED");
+  assert.equal(f.records[0].nativeStop.exitCode, 128); assert.equal(f.records[0].stopFailure, "NATIVE_STOP_FAILED");
+  assert.equal(f.records[0].closeObserved, true); assert.equal(native.calls(), 1);
+  assert.ok(!JSON.stringify(result.receipt).includes("SYNTHETIC_NATIVE_SECRET"));
+});
+

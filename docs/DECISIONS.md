@@ -1,5 +1,64 @@
 # Piccadilly Booking — Registro delle decisioni
 
+## M13 P1-C ALT07-A — candidato Linux isolato e non qualificato
+
+CLASSIC3 autorizza soltanto preparazione locale nei dieci path nominali, dalla
+base `9968c0249eea9da2e391191b5d4564062a70c2a8`, dopo ricostruzione byte-identica
+dei sette delta D6. Originale D6, workflow diagnostico ALT02, M12, package/lock e
+migration 1–16 rimangono protetti. Nessun commit, push, Docker locale o database.
+
+Il Controller ha accettato esplicitamente il contratto composto D15 §7.3 durante
+ALT07-A: nessun nuovo comando impegnato dopo la revoca del controller; nessuno
+spawn dopo la revoca locale del supervisor; i comandi già impegnati possono
+essere in transito e rimangono operazioni possedute da fermare e riconciliare.
+Non è una garanzia di assenza fisica globale di spawn successivi all'istante di
+abort del controller. Nessun cambiamento del contratto delivery M12.
+
+CLASSIC3 accetta anche il resolver Docker `127.0.0.11` solo con upstream
+`127.0.0.1` verificato dalla configurazione dell'istanza posseduta, identità
+run/attempt/Engine/rete/namespace concordanti e route prive di uscita esterna.
+Non è una nuova allowlist di processi né un PASS nativo: ogni prova mancante
+impedisce lo startup. La qualificazione del modello DNS resta da eseguire.
+
+Il percorso Linux usa controller Ubuntu x64, socket Engine Unix locale verificato,
+due worker, PostgreSQL effimero e proxy P1-A, due reti e inventario esatto degli
+endpoint. Non trasferisce la qualificazione Windows né amplia la sua allowlist.
+Ogni slot ha supervisor dormiente, init qualificato e un solo consumer originale,
+senza restart. Gli handle sono registrati prima delle successive operazioni
+fallibili. Identità: PID/start ticks, boot, namespace, eseguibile/argv e parentela.
+STOP revoca immediatamente anche durante un'attesa filesystem. Processo ignoto,
+canale perso, metadata mancanti o join contraddittorio impediscono il PASS;
+nessuna terminazione generalizzata per nascondere processi non riconciliati.
+
+Il target PostgreSQL interno arriva su IPC privato dal supervisor verificato dal
+consumer con parent/namespace/artefatto; nessun flag environment non-loopback.
+La verifica delle nove proprietà SQL conserva il client address specifico di
+ogni worker. Provider simulati; C05 interrompe soltanto A con exit 86 alla
+barriera receipt armata, senza terzo consumer né riduzione della lease M12.
+
+Un manifest esterno approvato separatamente, identificato da SHA-256, deve fornire
+identità Linux reali: base per digest, Node, init, tool, librerie OS, seccomp e
+budget disco motivato. Tag o campi mancanti non bastano. La preparazione usa
+Node Linux 24.14.1 dall'archivio ufficiale fissato, npm ci senza install script,
+generazione Prisma Linux e build senza rete; nessuna nuova dipendenza. Config ID
+e diff IDs attestano la build locale; nessun RepoDigest inventato o upload.
+
+STOP, exit/close del consumer, helper reconciliation, quiescenza SQL, uscita
+supervisor/init e rimozione Docker sono prove distinte. Supervisor vivi fino al
+census SQL sotto ownership valida; una sola origine e scadenza di teardown 70 s.
+Una failure primaria non diventa PASS dalla successiva assenza di una risorsa.
+Se il census rileva un membro sconosciuto, il supervisor resta inerte e fenced:
+uscire dal suo processo potrebbe fare terminare implicitamente il namespace PID.
+Il controller restituisce FAIL bounded e segnala la risorsa residua, senza
+`docker stop` su tale istanza. Non prolunga autorità, join o teardown; la perdita
+della VM runner non costituisce un percorso di riconciliazione qualificato.
+
+Workflow soltanto manuale, permessi vuoti, nessun secret, azione di terze parti o
+upload automatico; checkout pubblico del solo SHA dispatch. Servono approvazione
+separata per esecuzione/pubblicazione, identità artefatti, spazio misurabile e
+riserva per ruolo/teardown. ALT06 non sostituisce queste qualificazioni. D17
+attivo, P1-C sospesa, TREE01/STOP01 Windows aperti; WORK3 delta QG obbligatorio.
+
 ## M13 P1-B — classificazione positiva dei dati sintetici (5 novembre 2026)
 
 Il privacy scan staging estende la SELECT globale esistente a NI autonoma,
@@ -709,3 +768,25 @@ Prima di ciascuna lettura Engine viene ispezionato il context corrente: nome des
 Restano fresh nei due controlli che circondano le identità SQL: ID e stato container, generation, network, binding loopback, configurazione e privilegi proxy, immagini effettive, storage e budget, identità PostgreSQL interna/Windows e lease. Il census D14 e il drain bounded non sono modificati. Bootstrap30s, guard15s, full qualification massimo60s condizionale e teardown70s restano invariati. Nessuna promessa hard real-time durante sospensioni o stalli del sistema operativo.
 
 La nuova suite sintetica conserva273 test e aggiunge9 prove per API/close, CLI info lenta, Engine/context drift, resource/SQL drift, deadline, abort e trasporto non cooperativo. Una prova statica non qualifica il run reale. Solo tutti i gate positivi consentono l'unico run D15: early quiescence e preflight operativo mirato nello stesso ambiente, poi D2 canonico completo e census finale prima della revoca residua e dello stop PG. Una failure bloccante impone stop, evidenze e teardown senza retry o correzioni fuori scope; WORK3 separato.
+## M13 P1-C D1 — ruolo chiuso per due consumer locali (9 novembre 2026)
+
+Il piano `worker` estende l'harness P1-A con un unico ruolo `worker-runtime`,
+responsabile di due processi reali della CLI notifiche, sul solo PostgreSQL
+effimero positivamente attribuito al run. Nessuna esecuzione concorrente di
+`harness.run()`, comando arbitrario, target alternativo o simulazione Render.
+La logica M12, i repository e i provider applicativi restano invariati.
+
+Le injection esistenti della CLI permettono fixture sintetiche, barriere di prova,
+eventi minimizzati e STOP IPC. Claim, attempt, receipt, recovery e retry delegano
+ai componenti reali; i preflight live rimangono fresh e serializzati. Il cap del
+ruolo è600s; bootstrap30s, guard15s, qualifica60s condizionale e teardown70s non
+cambiano. Scadenza/abort revocano nuovi grant e richiedono stop/join bounded.
+
+La prova distingue at-least-once tecnico da una sola receipt logica persistente.
+Un crash intenzionale dopo receipt può produrre ABANDONED e un nuovo attempt
+deduplicato; non è una duplicazione logica né una promessa exactly-once fisica.
+Nessun timestamp di lease/retry viene anticipato artificialmente. Quiescenza SQL
+e assenza delle risorse vengono verificate separatamente, senza ignorare stati
+sconosciuti. Restano le riserve P1-A/P1-B e il limite sintetico locale; nessuna
+approvazione remota/produttiva o closure P1-C è implicita. WORK3 richiede QG separato.
+
