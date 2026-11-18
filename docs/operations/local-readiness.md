@@ -1,5 +1,144 @@
 # M13 P1-A — Provenance runtime e preflight locale
 
+## ALT07-A — percorso Linux remoto preparato, esecuzione non autorizzata
+
+Questa sezione descrive il candidato locale derivato D6, non una prova runtime.
+Il PC Windows non esegue Docker, PostgreSQL o i due worker per ALT07-A. Il
+candidato D6 originale e il workflow diagnostico ALT02 restano congelati. Il
+nuovo workflow Linux richiede revisione WORK3 e decisione CLASSIC3 separata per
+pubblicazione ed eventuale dispatch. D17 resta attivo; produzione non qualificata.
+
+### Prerequisiti esterni obbligatori
+
+Un futuro dispatch accetta soltanto un manifest JSON pubblico in una release del
+repository canonico e il suo SHA-256 approvato separatamente. Nessun valore di
+identità viene generato per sostituire una prova mancante. Schema versione 1:
+
+| Campo | Evidenza richiesta prima dell'esecuzione |
+|---|---|
+| `platform`, `nodeVersion` | `linux/amd64`, `24.14.1`; qualificazione Linux distinta da Windows |
+| `nodeArchiveSha256` | `84d38715d449447117d05c3e71acd78daa49d5b1bfa8aacf610303920c3322be`, archivio ufficiale Linux x64 |
+| `nodeSha256` | Hash reale del binario estratto e qualificato; nessun placeholder |
+| `sourceFreeze` | Inventario raw completo del candidato esatto pubblicato, ordinato per path, SHA-256 del JSON compatto `{name,sha256}` |
+| `baseReference`, `baseConfig` | `docker.io/library/node@sha256:...` e config OCI reale qualificata, glibc compatibile |
+| `init` | Percorso `/sbin/docker-init` e hash qualificato per l'Engine destinatario |
+| `tools` | Hash reali dei tool tar e Docker CLI del runner |
+| `osFiles` | Chiusura delle librerie OS del runtime Linux, path e hash; almeno libc/OpenSSL e tutte le dipendenze effettive |
+| `workerSeccomp` | Profilo JSON approvato con default deny e architettura x86_64; non `unconfined` |
+| `prisma` | Commit engine, SHA-256 gzip e binario Linux reali; profili esatti dei soli helper CLI generate/migrate con path, argv e hash degli entry Node quando applicabili |
+| `diskAdmissionMiB` | Budget positivo sostenuto dalla futura misura di preparazione/immagini/layer/artefatti, non ricavato arbitrariamente da ALT06 |
+
+La disponibilità di un tag non qualifica l'immagine. Il manifest non viene creato,
+approvato o pubblicato automaticamente dal workflow. I suoi input non sono
+secret. URL/hash sono passati alla shell tramite environment, validati prima
+dell'uso e mai valutati come comandi. Il workflow usa solo `workflow_dispatch`,
+`ubuntu-24.04`, permessi vuoti, checkout pubblico minimo dello SHA dispatch e
+nessun upload. L'esecuzione su branch diverso da main viene rifiutata.
+
+### Preparazione e confini di rete
+
+Preparazione artefatti separata dal ruolo: Node ufficiale, npm ci dal lock senza
+install script e con configurazioni npm vuote, generazione Prisma Linux, immagini
+PG/proxy già canoniche e base qualificata. Il contesto build è esterno, derivato
+da inventario positivo; niente `.git`, `.env`, evidenze, credenziali o moduli
+Windows. La build ha rete disabilitata. Il costo delle dipendenze e degli artefatti
+rimane una proprietà da misurare; nessun PASS locale di build o compatibilità.
+
+La generazione usa un config esterno data-only che indica lo stesso schema
+canonico congelato e non richiede un datasource prima del DB posseduto. Le
+migrazioni usano invece il config canonico e il database temporaneo verificato.
+Il binario Prisma Linux è scaricato dalla provenienza approvata e verificato
+compresso e decompresso; nessun engine alternativo o install script implicito.
+Ogni tool ha handle originale, birth identity e census dei soli helper dichiarati
+per quella CLI. Questa classificazione non estende l'helper applicativo esbuild.
+
+Prima di creare risorse applicative il bootstrap richiede il join dei tool e
+passa al binario Linux qualificato mediante `process.execve`, documentato ma
+sperimentale in Node 24. Il processo viene sostituito; non rimane un controller
+Node aggiuntivo. Non si fa affidamento su handler di cleanup al passaggio: tutti
+i tool devono essere già joined e non esistono ancora DB/worker. API assente,
+ritorno inatteso o quiescenza mancante bloccano prima del ruolo. Questo handoff e
+la chiusura del grafo dei tool richiedono qualificazione Linux separata; nessuna
+prova nativa è stata eseguita in ALT07-A.
+
+Topologia del ruolo: backend bridge internal/isolated, IPv6 disabilitato, con i
+soli quattro ID registrati; frontend con solo proxy. PostgreSQL non ha porte host.
+Il proxy pubblica `127.0.0.1:<porta-allocata>:15432`, raggiunge solo il PG posseduto
+e non abilita IP forwarding. Worker backend-only, resolver loopback e nessuna
+route default; niente Docker socket, bind mount host, privilegi, capability,
+restart o healthcheck. UID/GID 10001, root read-only, tmpfs 64 MiB noexec/nosuid,
+512 MiB hard cap ciascuno, swap disabilitato. PG 1536 MiB, proxy 256 MiB: 2816 MiB
+di cap totali più 1024 MiB di riserva, ammissione 3840 MiB invariata.
+
+Endpoint interni numerici e target SQL attestati per slot; provider esclusivamente
+simulati. DB persistenti, host, gateway, Internet e provider reali non sono target
+autorizzati dei worker. Il rischio egress del proxy resta quello locale sintetico
+già accettato P1-A, da riconfermare sul runner; non viene dichiarato eliminato.
+
+Per decisione esplicita CLASSIC3 il resolver interno Docker `127.0.0.11` è
+ammissibile solo con upstream `127.0.0.1` verificato sull'istanza posseduta,
+binding run/attempt/Engine/rete/namespace concordante e nessuna route esterna.
+Il supervisor verifica la vista effettiva nel proprio namespace; metadata
+mancanti o incongruenti bloccano prima dello startup. Il test sintetico non
+sostituisce la qualificazione nativa di DNS ed egress.
+
+### Autorità, processi e shutdown
+
+Controller unico, una sola generation/attempt per slot, canale Engine privato e
+sequenze monotone. Le operazioni impegnate prima dell'abort possono essere in
+transito e vanno riconciliate secondo il contratto composto D15 accettato dal
+Controller. Nessun dispatch nuovo dopo la revoca del controller e nessuno spawn
+dopo la revoca locale. Il supervisor rilegge l'autorità dopo le attese e prima
+dello spawn, senza await interposto. PID o container ID da soli non provano
+ownership. Perdita del canale è terminale; nessun resume/restart automatico.
+
+Si attestano init, supervisor, consumer e helper Linux esbuild con tuple di
+istanza, hash, argv e namespace. Un helper già identificato può essere osservato
+nel drain dopo la fine del consumer; nessun nuovo processo diventa ammesso per
+questo motivo. Ogni presenza ignota o riconciliazione incompleta impedisce PASS
+e vieta una terminazione indiscriminata del container.
+
+In presenza di un membro sconosciuto il supervisor mantiene una quarantena
+inerte e fenced, così la sua uscita non uccide implicitamente altri membri del
+namespace. Il controller termina la verifica entro il budget con FAIL e risorsa
+residua esplicita. Non è un join infinito né un prolungamento dell'autorità;
+nessuna terminazione del membro ignoto o fallback `docker stop` è consentita.
+La fine della VM GitHub non dimostra riconciliazione e non è qualificata qui.
+
+C10 nel receipt intermedio resta NOT_VERIFIABLE finché init/supervisor sono vivi;
+solo il teardown finale indipendente può attestare l'assenza completa. Le
+evidenze runtime restano esterne al checkout: prima di un futuro dispatch serve
+una decisione separata sulla loro conservazione/estrazione, perché il workflow
+non effettua upload automatici e il runner è effimero.
+
+Teardown: origine unica alla prima revoca/chiusura; cutoff cumulativi 10 s per
+stop/join, 20 s per census SQL, 25 s per release supervisor/init, 55 s per stop
+PG/proxy, 65 s per rimozione, 70 s per verifica finale. Ogni sottocomponente
+conserva i limiti più stretti. Timeout, ACK, exit container e assenza di risorse
+non sostituiscono il join applicativo né la quiescenza SQL live. Una perdita di
+ownership vieta nuove query, anche diagnostiche. Risorse non riconciliabili
+rimangono registrate come residue; nessun prune, force remove o kill sconosciuto.
+
+### C01–C10: contratto per la futura prova
+
+| Caso | Artefatti e condizione PASS | Condizione FAIL e responsabilità cleanup |
+|---|---|---|
+| C01 | Due READY e due claim non vuoti trattenuti nello stesso intervallo, due backend realmente bloccati sul lock | Startup soltanto sequenziale o intervallo non dimostrato; controller revoca entrambi |
+| C02 | Ledger claim per delivery leg senza sovrapposizioni valide, risultati DB coerenti | Lease concorrenti o leg estranea; STOP coordinato e conservazione errore |
+| C03 | Receipt simulata unica per outbox, reference/hash coerenti con provider e persistenza | Receipt duplicata/estranea o conteggio incompleto; nessuna deduzione dal solo successo delivery |
+| C04 | `pg_locks` e `pg_stat_activity` attestano entrambi i consumer sul lock reale; row lock conserva la leg e consente le altre | Lock non osservato o leg bloccata modificata; locker rollback/close separati |
+| C05 | A exit 86 soltanto alla barriera receipt armata, join positivo, lease originale 120000 ms e recupero B dopo scadenza | Crash non armato, lease abbreviata, A non joined o nuovo consumer; nessun restart |
+| C06 | Replay B con una receipt, attempt ABANDONED/WORKER_INTERRUPTED seguito da SUCCESS deduplicato | Duplicazione logica o stato non verificabile; DB resta posseduto per census solo se guard validi |
+| C07 | Retry delivery canonico 60000 ms, permanente un solo attempt, runtime distinto | Mutazione policy o retry anticipato; fermare consumer, conservare attempt/receipt |
+| C08 | Consumer non interrotto: STOP, abort osservato, DB disconnect, exit 0 e close/join distinti | ACK senza join o errore cleanup; A controllatamente crashato non viene dichiarato graceful |
+| C09 | Ledger fence controller/peer, assenza di nuovi impegni dopo revoca, riconciliazione in-flight | Nuovo grant dopo fence, spawn dopo revoca locale o eventi non correlati; nessun PASS globale fisico improprio |
+| C10 | Join dei due consumer originali, census senza helper/orfani/zombie, release init/S e risorse Docker assenti | Container exit da solo, PID assente da solo o risorsa non riconciliata non bastano |
+
+Ogni scenario resta `NOT_RUN` fino alla prova autorizzata. M12 e C01–C10 non
+vengono ridotti per ottenere un risultato positivo. Linux container qualification,
+concorrenza locale sintetica, process tree Windows e deployment produttivo restano
+qualificazioni distinte. Nessuna chiusura retroattiva TREE01/STOP01 Windows.
+
 Mandato CLASSIC3 del 3 novembre 2026, sola implementazione locale. Baseline main
 `3ae614045da426ab6e33f1d3c2d6e50a4505f983`, tree
 `11974842ce9fb47ab1747882523ce4a14122ea70`,476 file/schema16 e freeze raw
@@ -330,3 +469,45 @@ Il guard non avvia più docker info: legge fresh l'ID tramite GET /info sulla pi
 Dopo create eseguire validateQuiescence e un preflight operativo mirato sul medesimo run, con receipt di duration/cap/Engine/context e identità SQL, prima della suite. Solo dopo questi PASS eseguire ci una volta con scripts attivi, unit, Prisma generate/validate, typecheck, lint, build, migration/seed canonici e Vitest/Playwright mirati e completi. Ogni fase sensibile mantiene il proprio hook fresh. Nessun PASS storico sostituisce il nuovo gate.
 
 Al termine bloccare dispatch, join dei child e chiusura client, ownership fresh, census READ ONLY e drain5s entro teardown70s. Registrare monitor e conteggi/stati sanitizzati, anche idle e unknown. Solo zero altri client consente SQL live quiescence positiva. Chiudere il monitor, revocare accesso residuo, arrestare PG e rimuovere soltanto risorse possedute; verificare separatamente processi, server e assenza container/network. Se la lease è già revocata non eseguire nuovi SQL e mantenere NOT_VERIFIABLE. Una failure non diventa PASS dopo la rimozione fisica. Un solo pacchetto conclusivo con risultati effettivi, failure, manifest e SHA-256; nessuna closure formale o pubblicazione Git.
+## M13 P1-C — due consumer reali nello stesso ruolo
+
+Il piano versionato `--plan worker` esegue soltanto `ci`, `generate`, `validate`,
+`migrate`, `worker-runtime`. Il ruolo finale possiede due processi Node del worker
+notifiche reale sul medesimo PostgreSQL effimero P1-A. Non eseguire due `run()`
+concorrenti, comandi worker manuali o il launcher Render per sostituire questo piano.
+
+Conservare i prerequisiti CLI già descritti: distribuzione Node/npm autenticata,
+artefatti qualificati esterni, Engine locale verificato, source freeze, assenza di
+residui, ambiente senza `.env` personali e directory evidenze nuova. Dopo `create`,
+la CLI richiede `validateQuiescence()` positivo prima del primo ruolo. La migration
+deploy e tutte le fixture restano vincolate al database privato della lease.
+
+I cap restano bootstrap30s, guard operativo15s, qualifica completa massimo60s
+condizionale e teardown70s. Solo `worker-runtime` ha un cap aggregato600s;
+le altre modalità conservano i propri limiti. Le richieste di preflight dei due
+consumer sono serializzate; coda e lavoro consumano il deadline del guard.
+
+Il coordinatore verifica PID/runtime, nonce, generation e identità SQL prima del
+loop; usa esclusivamente i simulatori M12. Barriere prima/dopo il claim e lock
+PostgreSQL osservati dimostrano la contesa effettiva. Il test mantiene batch25,
+max5 per tenant/consumer, processing5, sweep100 e lease120s. Non richiede fairness.
+Il primo retry attende realmente60s; il crash controllato di A dopo la receipt è
+l'ultimo scenario, seguito da recovery/replay in B dopo la scadenza reale della
+lease. Non si modificano timestamp o stati per anticipare questi eventi.
+
+Su Windows lo shutdown normale usa STOP IPC collegato all'abort della CLI reale;
+`child.kill(SIGTERM)` non è una prova di graceful shutdown. Servono disconnect
+Prisma, close osservato, join e inventario dei helper attribuiti. Il crash di A
+è registrato separatamente dallo stop graceful di B. Ogni altro exit inatteso,
+messaggio fuori protocollo, drift, scadenza o stato UNKNOWN blocca il run.
+
+`worker-runtime.json` conserva solo identità tecniche, contatori, hash, esiti e
+timing, senza contatti, payload, query text, URL DB o errori grezzi. Dopo chiusura
+dei client, il census P1-A deve dimostrare zero altri client prima della revoca e
+dello stop PostgreSQL. Quiescenza dei processi, SQL live, stop del server e assenza
+container/network restano prove distinte. Dopo perdita della lease non si
+riabilita SQL diagnostico né si dichiara quiescenza verificata per deduzione.
+
+P1-C resta locale/sintetico; nessun provider reale, Render o produzione.
+Le riserve P1-A e P1-B OPAQUE01 rimangono valide; WORK3 QG è separato.
+

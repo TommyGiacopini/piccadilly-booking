@@ -1,7 +1,7 @@
 import { spawn, execFile } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, constants } from "node:fs";
-import { access, lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, readdir, realpath, writeFile, readlink } from "node:fs/promises";
 import { arch, platform, release } from "node:os";
 import { performance } from "node:perf_hooks";
 import { createServer, isIPv4 } from "node:net";
@@ -11,6 +11,10 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inflateRawSync } from "node:zlib";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { statfs } from "node:fs/promises";
+import { LINUX_PROFILE, decodeDockerFrames, linuxSourceInventory, runLinuxTool, isQualifiedLinuxImage, isQualifiedLinuxEngine, linuxToolQuiescence } from "./m13-p1-worker-linux-image.mjs";
+import { linuxBounded } from "./m13-p1-worker-linux-entry.mjs";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 export const NODE_REFERENCE = "24.14.1";
 export const ARCHIVE_NAME = "node-v24.14.1-win-x64.zip";
@@ -377,10 +381,11 @@ export function commandDefinitions(runtime) {
     migrate: ["node_modules/prisma/build/index.js", "migrate", "deploy"], seed: ["node_modules/prisma/build/index.js", "db", "seed"],
     vitest: ["scripts/run-vitest-isolated.mjs"], "vitest-core": ["scripts/run-vitest-isolated.mjs", "scripts/m13-p1-environment.test.mjs", "scripts/staging-worker-startup.test.mjs", "scripts/start-staging-worker.test.mjs", "scripts/staging-tooling.test.ts", "scripts/run-vitest-isolated.test.mjs", "scripts/run-e2e.test.mjs"],
     e2e: ["scripts/run-e2e.mjs"], "e2e-core": ["scripts/run-e2e.mjs", "tests/e2e/m13-local-readiness.spec.ts", "--workers=1", "--retries=0"],
+    "worker-runtime": ["scripts/m13-p1-worker-consumer.ts"],
     "npm-ls": npm("ls", "--all", "--json"), "audit-full": npm("audit", "--json"), "audit-production": npm("audit", "--omit=dev", "--json"),
   };
 }
-export const PLANS = Object.freeze({ core: ["ci", "unit", "generate", "validate", "lint", "typecheck", "build", "migrate", "seed", "vitest-core", "e2e-core"], full: ["ci", "unit", "generate", "validate", "lint", "typecheck", "build", "migrate", "seed", "vitest", "e2e"], diagnostics: ["npm-ls", "audit-full", "audit-production"] });
+export const PLANS = Object.freeze({ core: ["ci", "unit", "generate", "validate", "lint", "typecheck", "build", "migrate", "seed", "vitest-core", "e2e-core"], full: ["ci", "unit", "generate", "validate", "lint", "typecheck", "build", "migrate", "seed", "vitest", "e2e"], diagnostics: ["npm-ls", "audit-full", "audit-production"], worker: ["ci", "generate", "validate", "migrate", "worker-runtime"] });
 
 export async function createRunHarness({ runtime, adapters, evidenceDirectory, signal, deadlineMs = 1_800_000 }) {
   requireSafe(adapters || verifiedRuntimes.has(runtime), "VERIFIED_RUNTIME_CAPABILITY_REQUIRED");
@@ -522,7 +527,10 @@ export async function finishOwnedRun(harness, primaryError) {
     catch (error) { complete = false; cleanupCode = error instanceof SafetyError ? error.code : "CLEANUP_FAILED"; }
   }
   const cleanupStatus = harness ? complete ? "COMPLETE" : "INCOMPLETE" : "NOT_REQUIRED";
-  const receipt = { ...(harness?.receipt() ?? {}), primaryFailure: primaryError ? { code: primaryError instanceof SafetyError ? primaryError.code : "UNCLASSIFIED_FAILURE", secondaryDiagnosticFailure: primaryError.secondaryDiagnosticFailure ?? null, abortFailure: primaryError.verification?.abortFailure ?? null, joinFailure: primaryError.joinFailure ?? null } : null, cleanupStatus, cleanupError: cleanupCode };
+  const receipt = { ...(harness?.receipt() ?? {}), primaryFailure: primaryError ? { code: primaryError instanceof SafetyError ? primaryError.code : "UNCLASSIFIED_FAILURE", secondaryDiagnosticFailure: primaryError.secondaryDiagnosticFailure ?? null, abortFailure: primaryError.verification?.abortFailure ?? null, joinFailure: primaryError.joinFailure ?? null,
+    observationId: /^[a-f0-9-]{36}$/u.test(primaryError.observationId ?? "") ? primaryError.observationId : null,
+    shutdownFailure: /^[A-Z][A-Z0-9_]{2,79}$/u.test(primaryError.shutdownFailure ?? "") ? primaryError.shutdownFailure : null,
+    reconciliationFailure: /^[A-Z][A-Z0-9_]{2,79}$/u.test(primaryError.reconciliationFailure ?? "") ? primaryError.reconciliationFailure : null } : null, cleanupStatus, cleanupError: cleanupCode };
   const error = primaryError ?? (complete ? null : new SafetyError("TEARDOWN_INCOMPLETE"));
   if (error) error.cleanupStatus = cleanupStatus;
   return { complete, cleanupStatus, receipt, error };
@@ -719,7 +727,9 @@ export function assertD6Identity(lease, internal, host) {
 }
 export function assertD6RunnerTarget(lease, context) {
   const phases = ["vitest:prepare", "vitest:create", "vitest:migrate", "vitest:seed", "vitest:inspect", "vitest:test", "vitest:cleanup", "vitest:drop", "e2e:fingerprint-before", "e2e:prepare-fixture", "e2e:cleanup-initial", "e2e:prepare-users", "e2e:application", "e2e:playwright", "e2e:cleanup-final", "e2e:fingerprint-after"];
-  requireSafe(phases.includes(context.phase), "RUNNER_PHASE_NOT_ALLOWED");
+  const workerPhases = ["worker:fixture", "worker:start:A", "worker:start:B", "worker:batch:A", "worker:batch:B", "worker:locking", "worker:recovery", "worker:assert", "worker:cleanup"];
+  requireSafe(phases.includes(context.phase) || workerPhases.includes(context.phase), "RUNNER_PHASE_NOT_ALLOWED");
+  if (workerPhases.includes(context.phase)) requireSafe(!context.plan, "RUNNER_DATABASE_MISMATCH");
   const raw = context.plan?.sourceUrl?.href ?? context.environment?.DATABASE_URL;
   requireSafe(raw === lease.url, "RUNNER_DATABASE_MISMATCH");
   if (context.plan) {
@@ -755,6 +765,115 @@ function waitWithSignal(promise, signal) {
     signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort();
     Promise.resolve(promise).then(value => { signal.removeEventListener("abort", abort); done(value); }, error => { signal.removeEventListener("abort", abort); reject(error); });
   });
+}
+
+// Install close evidence at registration, before any abort/termination request.
+// A PID/exit code alone never substitutes for the observed close of this handle.
+export function runEventEnvelope(identity, fields = {}) {
+  return { ...fields, sequence: identity.sequence, at: identity.at, monotonicMs: identity.monotonicMs, runId: identity.runId, kind: identity.kind };
+}
+
+// Retain the native command's identity and error separately from its target.
+// P1-C never enters this legacy tree-stop path: it delegates to handle ownership.
+export async function runTrackedTaskkill(child, joins, control, { onChild = value => { void value; }, record = (kind, value) => { void kind; void value; } } = {}, executor = null) {
+  const entry = joins.get(child);
+  requireSafe(entry && entry.pid === child.pid && Number.isInteger(entry.pid) && entry.pid > 0 && !entry.shutdown && !entry.handleOnly, "NATIVE_STOP_OWNERSHIP_REQUIRED");
+  control.beforeSpawn();
+  const native = { requestId: randomUUID(), processRole: "NATIVE_TERMINATOR", targetPid: entry.pid, targetStartedAt: entry.row.startedAt,
+    targetExitObservedAtDispatch: entry.row.exitObserved, targetCloseObservedAtDispatch: entry.closeObserved,
+    executableCategory: "SYSTEM_TASKKILL", argumentCategory: "REGISTERED_CANONICAL_RUNNER_TREE", startedAt: timestamp(), parentPid: process.pid,
+    pid: null, exitObserved: false, closeObserved: false, exitCode: null, signal: null, killed: null, result: "PENDING", causalRelation: "NOT_VERIFIABLE",
+    scope: /^[A-Z][A-Z0-9_]{2,79}$/u.test(control.deadlineCode ?? "") ? control.deadlineCode : "STOP_OWNED_CHILDREN",
+    executablePathSha256: hash(resolve(process.env.SystemRoot, "System32/taskkill.exe").toLowerCase()) };
+  let operation, error, evidenceFailure;
+  const emit = kind => { try { record(kind, { ...native }); } catch { evidenceFailure = "NATIVE_STOP_EVIDENCE_FAILED"; } };
+  const started = performance.now();
+  try {
+    operation = (executor ?? exec)(join(process.env.SystemRoot, "System32/taskkill.exe"), ["/PID", String(entry.pid), "/T", "/F"], { windowsHide: true, timeout: Math.min(5_000, control.effectiveTimeout()), signal: control.signal });
+    requireSafe(operation?.child && typeof operation.child.once === "function", "NATIVE_STOP_CHILD_NOT_REGISTERED");
+    const nativeChild = operation.child; native.pid = nativeChild.pid ?? null;
+    nativeChild.once("exit", (code, signal) => { native.exitObserved = true; native.exitCode = typeof code === "number" ? code : null; native.signal = typeof signal === "string" && /^SIG[A-Z]+$/u.test(signal) ? signal : null; });
+    nativeChild.once("close", () => { native.closeObserved = true; });
+    onChild(nativeChild); emit("native-stop-start");
+    const output = await operation;
+    native.stdoutBytes = Buffer.byteLength(output.stdout ?? ""); native.stderrBytes = Buffer.byteLength(output.stderr ?? "");
+    native.stdoutSha256 = hash(output.stdout ?? ""); native.stderrSha256 = hash(output.stderr ?? "");
+    requireSafe(native.exitObserved && native.closeObserved && native.exitCode === 0, "NATIVE_STOP_UNVERIFIED");
+    control.beforeSpawn(); native.result = "PASS_VERIFIED";
+  } catch (caught) {
+    native.result = "FAIL";
+    native.exitCode = typeof caught.code === "number" ? caught.code : native.exitCode;
+    native.killed = typeof caught.killed === "boolean" ? caught.killed : null;
+    native.signal = typeof caught.signal === "string" && /^SIG[A-Z]+$/u.test(caught.signal) ? caught.signal : native.signal;
+    native.stdoutBytes = Buffer.byteLength(caught.stdout ?? ""); native.stderrBytes = Buffer.byteLength(caught.stderr ?? "");
+    native.stdoutSha256 = hash(caught.stdout ?? ""); native.stderrSha256 = hash(caught.stderr ?? "");
+    native.failureClass = native.exitCode === 128 ? "NATIVE_EXIT_128" : native.exitCode !== null ? "NATIVE_NONZERO_EXIT" : "NATIVE_OPERATION_FAILED";
+    error = new SafetyError("NATIVE_STOP_FAILED"); error.nativeExitCode = native.exitCode;
+  }
+  native.elapsedMs = performance.now() - started; native.endedAt = timestamp();
+  native.targetCloseObservedAtSettlement = entry.closeObserved; emit("native-stop-settled");
+  if (evidenceFailure) { native.result = "FAIL"; error ??= new SafetyError(evidenceFailure); error.secondaryDiagnosticFailure = evidenceFailure; }
+  if (error) { error.nativeStop = { ...native }; throw error; }
+  return native;
+}
+
+export function registerOwnedRunner(child, children, joins, records, record = () => {}, options = {}) {
+  requireSafe(child && typeof child.once === "function", "OWNED_CHILD_HANDLE_REQUIRED");
+  if (joins.has(child)) return joins.get(child);
+  const row = { pid: child.pid ?? null, state: Number.isInteger(child.pid) && child.pid > 0 ? "ACTIVE" : "UNKNOWN", startedAt: timestamp(), exitObserved: typeof child.exitCode === "number" || typeof child.signalCode === "string", closeObserved: false,
+    processRole: ["P1C_CONSUMER_A", "P1C_CONSUMER_B", "P1C_PROCESS_PROBE", "NATIVE_TERMINATOR"].includes(options.processRole) ? options.processRole : "CANONICAL_RUNNER" };
+  let resolveClose;
+  const entry = { pid: row.pid, row, close: new Promise(done => { resolveClose = done; }), closeObserved: false, stop: null,
+    shutdown: options.shutdown, handleOnly: options.handleOnly === true };
+  joins.set(child, entry); children.add(child); records.push(row);
+  child.once("exit", () => { row.exitObserved = true; record("owned-runner-child-exit", { pid: row.pid }); });
+  child.once("close", () => {
+    entry.closeObserved = true; row.closeObserved = true;
+    row.state = child.pid === entry.pid && Number.isInteger(entry.pid) && entry.pid > 0 ? "JOINED" : "UNKNOWN";
+    row.endedAt = timestamp(); children.delete(child);
+    record("owned-runner-child-joined", { ...row }); resolveClose();
+  });
+  record("owned-runner-child-start", { ...row });
+  return entry;
+}
+
+export async function stopOwnedRunners(children, joins, control, terminate, record = () => {}) {
+  const visited = new Set(); let primary;
+  // Read the live set: another child may close while the current stop is pending.
+  while (true) {
+    const child = [...children].find(value => !visited.has(value));
+    if (!child) break; visited.add(child);
+    const entry = joins.get(child);
+    if (!entry || !Number.isInteger(entry.pid) || entry.pid < 1 || child.pid !== entry.pid) {
+      primary ??= new SafetyError("OWNED_CHILD_IDENTITY_UNKNOWN"); break;
+    }
+    if (entry.closeObserved) {
+      if (entry.row.state !== "JOINED") primary ??= new SafetyError("OWNED_CHILD_IDENTITY_UNKNOWN");
+      children.delete(child); continue;
+    }
+    try {
+      control.beforeSpawn();
+      if (!entry.row.exitObserved && child.exitCode === null && child.signalCode === null) {
+        entry.stop ??= Promise.resolve().then(() => {
+          control.beforeSpawn();
+          requireSafe(child.pid === entry.pid, "OWNED_CHILD_IDENTITY_UNKNOWN");
+          if (!entry.closeObserved && !entry.row.exitObserved && child.exitCode === null && child.signalCode === null) return entry.shutdown ? entry.shutdown(control) : terminate(child, control);
+        });
+        await waitWithSignal(entry.stop, control.signal);
+      }
+      await waitWithSignal(entry.close, control.signal);
+      requireSafe(entry.closeObserved && entry.row.state === "JOINED", "PROCESS_JOIN_INCOMPLETE");
+    } catch (error) {
+      primary ??= error;
+      entry.row.stopFailure = error.code ?? "OWNED_CHILD_STOP_FAILED";
+      if (error.nativeStop) entry.row.nativeStop = error.nativeStop;
+      if (!entry.closeObserved) entry.row.state = "UNKNOWN";
+      record("owned-runner-child-stop-failed", { pid: entry.pid, code: entry.row.stopFailure, closeObserved: entry.closeObserved });
+      if (control.signal.aborted) break;
+    }
+  }
+  if (primary) throw primary;
+  requireSafe(children.size === 0, "PROCESS_JOIN_INCOMPLETE");
 }
 
 // A deadline belongs to one phase/generation. It is never renewed by a re-check.
@@ -1030,11 +1149,11 @@ export async function createProxyRunHarness({ runtime, adapters, evidenceDirecto
   const now = backend.now ?? (() => performance.now()), origin = now();
   const runId = randomUUID(), owner = randomBytes(32).toString("hex"), suffix = randomBytes(16).toString("hex");
   const lease = { runId, owner, createdAt: timestamp(), generation: randomUUID(), database: "piccadilly_e2e_" + suffix, role: "m13_p1_" + suffix.slice(0, 16), password: randomBytes(32).toString("base64url") };
-  const controller = new AbortController(), signal = controller.signal, events = [], commands = [], attempts = [], children = new Set(), inFlight = new Set(), runnerProcesses = [], sqlOperations = [], syntheticConnections = new Set();
-  const secrets = [lease.password]; let activeBudget, bootstrapBudget, bootstrapTiming, closePromise, closed = false, closing = false, revoked = false, armed = false, monitor, firstWriter = false, busy = false, evidenceFailed = false, stoppingChildren, qualificationPending = true;
+  const controller = new AbortController(), signal = controller.signal, events = [], commands = [], attempts = [], children = new Set(), childJoins = new WeakMap(), inFlight = new Set(), runnerProcesses = [], sqlOperations = [], syntheticConnections = new Set();
+  const secrets = [lease.password]; let activeBudget, bootstrapBudget, bootstrapTiming, closePromise, closed = false, closing = false, revoked = false, armed = false, monitor, firstWriter = false, busy = false, evidenceFailed = false, stoppingChildren, processStopFailure, stopDeadline, qualificationPending = true, workerShutdown, workerRuntimeActive = false;
   if (!simulated) requireSafe(evidenceDirectory && !inside(projectRoot, evidenceDirectory), "ARTIFACTS_MUST_BE_EXTERNAL");
   const event = (kind, fields = {}) => {
-    const record = { sequence: events.length + 1, at: timestamp(), monotonicMs: now() - origin, runId, kind, ...fields }; events.push(record);
+    const record = runEventEnvelope({ sequence: events.length + 1, at: timestamp(), monotonicMs: now() - origin, runId, kind }, fields); events.push(record);
     if (!simulated) try { appendFileSync(join(evidenceDirectory, "events.jsonl"), JSON.stringify(record) + "\n", { encoding: "utf8", flush: true }); } catch { evidenceFailed = true; }
   };
   const budget = (ms, code, parent = signal) => new MonotonicBudget({ durationMs: ms, code, now, signal: parent, record: event, onTimeout: error => { if (parent === signal) revoke(error); } });
@@ -1195,21 +1314,35 @@ export async function createProxyRunHarness({ runtime, adapters, evidenceDirecto
     } catch (error) { if (parent.remaining() < 1) error = new SafetyError(parent.code); revoke(error); throw error; }
     finally { if (guardBudget) { event("operational-guard-end", { elapsedMs: guardBudget.elapsed(), generation: lease.generation, aborted: guardBudget.signal.aborted }); guardBudget.dispose(); } activeBudget = parent; }
   };
-  const registered = child => { const row = { pid: child.pid ?? null, state: child.pid ? "ACTIVE" : "UNKNOWN", startedAt: timestamp() }; runnerProcesses.push(row); children.add(child); event("owned-runner-child-start", row); child.once("close", () => { children.delete(child); row.state = "JOINED"; row.endedAt = timestamp(); event("owned-runner-child-joined", row); }); };
-  const stopChildren = async control => {
-    let complete = true;
-    for (const child of [...children]) {
-      if (child.exitCode !== null || child.signalCode !== null) { await waitWithSignal(new Promise(done => child.once("close", done)), control.signal); continue; }
-      try {
-        control.beforeSpawn();
-        if (process.platform === "win32") await exec(join(process.env.SystemRoot, "System32/taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, timeout: Math.min(5_000, control.effectiveTimeout()), signal: control.signal }); else child.kill("SIGTERM");
-        if (child.exitCode === null && child.signalCode === null) await waitWithSignal(new Promise(done => child.once("close", done)), control.signal);
-        if (child.exitCode === null && child.signalCode === null) complete = false;
-      } catch { complete = false; }
-    }
-    requireSafe(complete, "PROCESS_JOIN_INCOMPLETE");
+  const registered = (child, options = {}) => {
+    registerOwnedRunner(child, children, childJoins, runnerProcesses, event, options);
+    if (signal.aborted) stopOnAbort();
   };
-  const stopOnAbort = () => { if (children.size) { const cleanup = budget(10_000, "PROCESS_STOP_TIMEOUT", null); stoppingChildren ??= cleanup.run("stop-owned-children", 10_000, stopChildren).finally(() => cleanup.dispose()); stoppingChildren.catch(() => {}); } };
+  const stopChildren = async control => {
+    let primary;
+    try { if (workerShutdown) await workerShutdown(control); }
+    catch (error) { primary = error; }
+    try {
+      await stopOwnedRunners(children, childJoins, control, async (child, c) => {
+        const entry = childJoins.get(child);
+        if (entry.handleOnly || process.platform !== "win32") child.kill("SIGTERM");
+        else await runTrackedTaskkill(child, childJoins, c, { record: event, onChild: native => registered(native, { processRole: "NATIVE_TERMINATOR", handleOnly: true }) });
+      }, event);
+    } catch (error) { if (primary) primary.shutdownFailure = error.code; else primary = error; }
+    if (primary) throw primary;
+  };
+  const stopOnAbort = () => {
+    if ((!children.size && !workerRuntimeActive) || stoppingChildren) return;
+    stopDeadline ??= now() + 10_000;
+    const remaining = Math.floor(stopDeadline - now());
+    if (remaining < 1) { processStopFailure ??= new SafetyError("PROCESS_STOP_TIMEOUT"); return; }
+    const cleanup = budget(remaining, "PROCESS_STOP_TIMEOUT", null);
+    const work = cleanup.run("stop-owned-children", remaining, stopChildren).catch(error => { processStopFailure ??= error; throw error; }).finally(() => {
+      cleanup.dispose(); if (stoppingChildren === work) stoppingChildren = null;
+      if (children.size && !processStopFailure) queueMicrotask(stopOnAbort);
+    });
+    stoppingChildren = work; work.catch(() => {});
+  };
   signal.addEventListener("abort", stopOnAbort, { once: true });
   const census = async (synthetic = null) => {
     requireSafe(!revoked && !signal.aborted, "LEASE_REVOKED");
@@ -1266,7 +1399,9 @@ export async function createProxyRunHarness({ runtime, adapters, evidenceDirecto
       const cleanup = budget(D8_LIMITS.teardownMs, "TEARDOWN_TIMEOUT", null); activeBudget = cleanup; let complete = true;
       try {
         const pending = [...inFlight]; if (pending.length) await operation("join-inflight", 5_000, control => waitWithSignal(Promise.allSettled(pending), control.signal));
-        try { await stoppingChildren; await operation("stop-owned-children", 10_000, stopChildren); } catch (error) { complete = false; event("teardown-incomplete", { code: error.code }); }
+        try { await stoppingChildren; } catch (error) { complete = false; event("teardown-incomplete", { code: error.code }); }
+        if (processStopFailure) { complete = false; event("teardown-incomplete", { code: processStopFailure.code }); }
+        try { await operation("stop-owned-children", 10_000, stopChildren); } catch (error) { complete = false; event("teardown-incomplete", { code: error.code }); }
         for (const child of backend.toolchain?.processes ?? []) {
           if (child.pid === monitor?.pid || child.exitCode !== null || child.signalCode !== null) continue;
           try { await operation("infrastructure-stop-join", 5_000, control => new Promise((done, reject) => { const timer = setTimeout(() => reject(new SafetyError("INFRASTRUCTURE_JOIN_INCOMPLETE")), control.timeoutMs); child.once("close", () => { clearTimeout(timer); done(); }); child.kill("SIGKILL"); })); }
@@ -1369,7 +1504,7 @@ export async function createProxyRunHarness({ runtime, adapters, evidenceDirecto
   };
   const run = async role => {
     requireSafe(!busy && !closed && !closing && !revoked, "RUN_BUSY_CLOSED_OR_REVOKED"); requireSafe(simulated || earlyQuiescence?.status === "PASS_VERIFIED", "EARLY_QUIESCENCE_REQUIRED"); const definitions = commandDefinitions(runtime); requireSafe(Object.hasOwn(definitions, role), "COMMAND_NOT_ALLOWLISTED"); busy = true;
-    const roleBudget = budget(deadlineMs, "ROLE_DEADLINE"); activeBudget = roleBudget;
+    const roleBudget = budget(role === "worker-runtime" ? Math.min(deadlineMs, 600_000) : deadlineMs, role === "worker-runtime" ? "WORKER_ROLE_DEADLINE" : "ROLE_DEADLINE"); activeBudget = roleBudget;
     try {
       const before = await operation("source-before", 15_000, control => backend.source(control));
       // npm consumes its full bundle. Other canonical roles execute Node directly;
@@ -1387,7 +1522,20 @@ export async function createProxyRunHarness({ runtime, adapters, evidenceDirecto
       const environment = cleanEnvironment(simulated ? {} : process.env, runtime.directory), generated = Object.fromEntries(["AUTH_RATE_LIMIT_SECRET", "PUBLIC_BOOKING_RATE_LIMIT_SECRET", "PUBLIC_BOOKING_MANAGEMENT_SECRET", "AUTH_DEMO_ADMIN_PASSWORD", "AUTH_DEMO_STAFF_PASSWORD"].map(key => [key, "M13-only-" + randomBytes(32).toString("base64url")])); secrets.push(...Object.values(generated));
       Object.assign(environment, generated, { DATABASE_URL: lease.url, APP_ENV: "development", AUTH_TRUST_PROXY: "false", NEXT_TELEMETRY_DISABLED: "1", RESERVATION_PRIVACY_POLICY_VERSION: "m13-p1-synthetic", RESERVATION_TERMS_VERSION: "m13-p1-synthetic", RESERVATION_IDEMPOTENCY_TTL_HOURS: "24", PUBLIC_BOOKING_RATE_LIMIT_WINDOW_SECONDS: "900", PUBLIC_BOOKING_READ_LIMIT: "10000", PUBLIC_BOOKING_MUTATION_LIMIT: "10000", NPM_CONFIG_CACHE: join(evidenceDirectory, "npm-cache"), NPM_CONFIG_USERCONFIG: join(evidenceDirectory, "empty-user.npmrc"), NPM_CONFIG_GLOBALCONFIG: join(evidenceDirectory, "empty-global.npmrc") });
       let result;
-      if (!simulated && (role.startsWith("vitest") || role.startsWith("e2e"))) {
+      if (!simulated && role === "worker-runtime") {
+        const { runWorkerRuntime } = await import("./m13-p1-worker-runtime.mjs");
+        try {
+          result = await runWorkerRuntime({ environment, requireOwnership: true, ownershipGuard: guard, signal: roleBudget.signal, onChild: registered, onShutdownReady: value => { requireSafe(typeof value === "function" && !workerShutdown, "P1C_SHUTDOWN_OWNER_INVALID"); workerShutdown = value; workerRuntimeActive = true; }, runId, generation: proof.generation, expectedIdentity: proof.server, evidenceDirectory, timeoutMs: Math.floor(roleBudget.remaining()), onAbort: revoke, record: value => event("worker-runtime", { workerEvent: value }) });
+        } catch (error) {
+          const primary = error instanceof SafetyError ? error : new SafetyError(/^P1C_[A-Z0-9_]+$/u.test(error?.code ?? "") ? error.code : "WORKER_RUNTIME_FAILED");
+          primary.joinFailure = error.joinFailure ?? null;
+          if (error.secondaryDiagnosticFailure) primary.secondaryDiagnosticFailure = error.secondaryDiagnosticFailure;
+          if (error.observationId) primary.observationId = error.observationId;
+          if (error.shutdownFailure) primary.shutdownFailure = error.shutdownFailure;
+          if (error.reconciliationFailure) primary.reconciliationFailure = error.reconciliationFailure;
+          throw primary;
+        } finally { workerRuntimeActive = false; }
+      } else if (!simulated && (role.startsWith("vitest") || role.startsWith("e2e"))) {
         const options = { environment, requireOwnership: true, ownershipGuard: guard, signal: roleBudget.signal, onChild: registered };
         if (role.startsWith("vitest")) { const { runIsolatedVitest } = await import("./run-vitest-isolated.mjs"); result = { exitCode: await runIsolatedVitest({ ...options, vitestArguments: definitions[role].slice(1) }), reason: null, executable: process.execPath }; }
         else { const { runE2e } = await import("./run-e2e.mjs"); result = { exitCode: await runE2e({ ...options, argumentsList: definitions[role].slice(1), stopChild: async () => operation("stop-e2e-children", 10_000, stopChildren), onOutcome: value => event("e2e-outcome", value) }), reason: null, executable: process.execPath }; }
@@ -1406,6 +1554,406 @@ export async function createProxyRunHarness({ runtime, adapters, evidenceDirecto
   return Object.freeze({ create, preflight: verifyLease, validateQuiescence, run, close, receipt: () => ({ runId, simulated, earlyQuiescence, runtime: runtime.receipt, artifacts: artifacts?.receipt ?? { status: "PASS_REPORTED_ONLY" }, infrastructureCommands: backend.toolchain?.operations ?? [], events, commands, creationAttempts: attempts.map(a => ({ ...a, imageId: a.imageId })), bootstrapTiming, verification: verificationQuiescence(), taskQuiescence: events.findLast(e => e.kind === "task-quiescence") ?? null, sqlOperations: sqlOperations.map(row => ({ ...row })), positiveOwnership: !simulated && !revoked && events.some(e => e.kind === "preflight-positive"), firstWriterPreflight: firstWriter, teardown: events.findLast(e => e.kind === "teardown") ?? null, proxyEgressRisk: "ACCEPTED_LOCAL_SYNTHETIC_ONLY" }) });
 }
 
+
+export function assertLinuxWorkerContainer(lease, current, slot, image) {
+  const expected = lease.workers[slot], host = current.HostConfig;
+  requireSafe(current.Id === expected.id && current.Created === expected.created && current.Image === image.imageId && current.Config.Image === image.imageId
+    && current.Config.Labels?.["piccadilly.run"] === lease.runId && current.Config.Labels?.["piccadilly.attempt"] === expected.attempt
+    && current.Config.Labels?.["piccadilly.role"] === "worker-" + slot && current.Config.Labels?.["piccadilly.owner"] === lease.owner, "LINUX_CONTAINER_OWNERSHIP_MISMATCH");
+  requireSafe(current.State.Running && current.State.Pid === expected.pid && current.State.StartedAt === expected.started && current.RestartCount === 0
+    && current.State.OOMKilled === false && current.Path === "/usr/local/bin/node" && current.Args.join() === "/app/scripts/m13-p1-worker-linux-entry.mjs"
+    && host.RestartPolicy?.Name === "no" && !current.Config.Healthcheck && current.Config.User === "10001:10001" && host.Init === true
+    && host.ReadonlyRootfs === true && host.Privileged === false && host.CapDrop?.includes("ALL") && !host.CapAdd?.length
+    && host.SecurityOpt?.some(value => /^no-new-privileges(?::true)?$/u.test(value)) && host.SecurityOpt.includes("seccomp=" + JSON.stringify(image.profile.workerSeccomp))
+    && !host.SecurityOpt?.some(value => /unconfined/iu.test(value)), "LINUX_CONTAINER_SECURITY_MISMATCH");
+  requireSafe(host.Sysctls?.["net.ipv6.conf.all.disable_ipv6"] === "1" && host.Sysctls?.["net.ipv6.conf.default.disable_ipv6"] === "1" && host.Sysctls?.["net.ipv4.ip_forward"] === "0", "LINUX_WORKER_SYSCTL_MISMATCH");
+  requireSafe(!host.Binds?.length && !host.VolumesFrom?.length && !host.Devices?.length && !host.ExtraHosts?.length && !host.PidMode && !host.NetworkMode?.startsWith("host")
+    && !Object.keys(host.PortBindings ?? {}).length && !current.Config.Tty && current.Config.OpenStdin && host.LogConfig?.Type === "none"
+    && host.Memory === LINUX_PROFILE.workerMemory && host.MemorySwap === LINUX_PROFILE.workerMemory && host.Dns?.join() === "127.0.0.1", "LINUX_CONTAINER_BOUNDARY_MISMATCH");
+  const mounts = current.Mounts ?? [], temporary = host.Tmpfs;
+  requireSafe(mounts.every(mount => mount.Type === "tmpfs" && mount.Destination === "/run/p1c") && Object.keys(temporary ?? {}).join() === "/run/p1c"
+    && temporary["/run/p1c"].split(",").includes("size=" + LINUX_PROFILE.workerTmpfs) && ["nosuid", "noexec"].every(value => temporary["/run/p1c"].split(",").includes(value)), "LINUX_WORKER_TMPFS_MISMATCH");
+  const networks = Object.values(current.NetworkSettings.Networks);
+  requireSafe(networks.length === 1 && networks[0].NetworkID === lease.backend.id && networks[0].IPAddress === expected.address && !networks[0].Gateway
+    && !networks[0].GlobalIPv6Address && !networks[0].IPv6Gateway, "LINUX_WORKER_NETWORK_MISMATCH");
+  const wanted = [...image.profile.baseEnvironment.filter(value => !value.startsWith("PATH=")), "PATH=/usr/local/bin:/usr/bin:/bin", "P1C_RUN_ID=" + lease.runId, "P1C_GENERATION=" + lease.generation, "P1C_SLOT=" + slot, "P1C_ATTEMPT=" + expected.attempt].sort();
+  requireSafe(JSON.stringify([...current.Config.Env].sort()) === JSON.stringify(wanted), "LINUX_WORKER_ENVIRONMENT_MISMATCH");
+}
+
+export function assertLinuxNetwork(lease, current, role, expectedRoles) {
+  const expected = lease[role];
+  requireSafe(current.Id === expected.id && current.Created === expected.created && current.Labels?.["piccadilly.attempt"] === expected.attempt
+    && labelsMatch(current.Labels, d6Labels(lease, role)) && current.Driver === "bridge" && current.EnableIPv6 === false
+    && current.Internal === (role === "backend") && (role !== "backend" || current.Options?.["com.docker.network.bridge.gateway_mode_ipv4"] === "isolated"), "LINUX_NETWORK_IDENTITY_MISMATCH");
+  const ids = expectedRoles.map(name => name.startsWith("worker-") ? lease.workers[name.slice(-1)]?.id : lease[name]?.id).sort();
+  requireSafe(ids.every(Boolean) && JSON.stringify(Object.keys(current.Containers ?? {}).sort()) === JSON.stringify(ids), "LINUX_FOREIGN_NETWORK_MEMBER");
+}
+
+export function linuxTeardownPhase(started, cutoffMs, now = () => performance.now()) {
+  const remaining = Math.floor(started + Math.min(70000, cutoffMs) - now());
+  requireSafe(remaining > 0 && cutoffMs > 0 && cutoffMs <= 70000, "LINUX_TEARDOWN_DEADLINE"); return remaining;
+}
+
+export async function linuxStorageSnapshot(engine, paths) {
+  const info = await engine.verify(), filesystems = [];
+  for (const [category, path] of Object.entries({ ...paths, docker: info.DockerRootDir })) {
+    requireSafe(isAbsolute(path), "LINUX_STORAGE_PATH_INVALID");
+    const value = await statfs(path); filesystems.push({ category, totalBytes: value.blocks * value.bsize, availableBytes: value.bavail * value.bsize });
+  }
+  const usage = await engine.call("GET", "/system/df");
+  return { measuredAt: timestamp(), filesystems, layersBytes: usage.LayersSize, imageCount: usage.Images?.length ?? 0, containerCount: usage.Containers?.length ?? 0,
+    volumeCount: usage.Volumes?.length ?? 0, buildCacheBytes: (usage.BuildCache ?? []).reduce((sum, entry) => sum + entry.Size, 0), workloadDiskRequirement: "NOT_QUALIFIED_BY_SNAPSHOT" };
+}
+
+// Docker attach events carry a container/attempt, not an HTTP request ID. Keep
+// exactly one operation per worker instance and require both its transport and
+// its event before leaving bootstrap. Never infer authority from container ID alone.
+export function createLinuxResourceEventMonitor({ engine, lease, attempts, ownedExecs, pendingExecEvents, lifecycle, verifyWorker, assertAuthority, revoke, record }) {
+  const runId = lease.runId, generation = lease.generation, owner = lease.owner, plans = new Map();
+  let primary, sealed = false;
+  const fail = error => { primary ??= error instanceof SafetyError ? error : new SafetyError("LINUX_ATTACH_RECONCILIATION_FAILED"); revoke(primary); return false; };
+  const assertOpen = () => {
+    if (primary) throw primary;
+    const state = lifecycle();
+    requireSafe(state.phase === "BOOTSTRAP" && !state.dispatchClosed && !state.closing, "LINUX_ATTACH_PHASE_INVALID");
+    requireSafe(lease.runId === runId && lease.generation === generation && lease.owner === owner, "LINUX_ATTACH_CONTEXT_MISMATCH");
+    assertAuthority();
+  };
+  const identity = id => {
+    const matches = attempts.filter(value => value.id === id);
+    requireSafe(matches.length === 1, "LINUX_UNKNOWN_RESOURCE_EVENT");
+    const attempt = matches[0], slot = /^worker-([AB])$/u.exec(attempt.role)?.[1], current = lease.workers[slot];
+    requireSafe(slot && attempt.owned && attempt.dispatched && !attempt.removed && /^[a-f0-9]{64}$/u.test(id)
+      && /^[a-f0-9-]{36}$/u.test(attempt.attempt) && attempts.filter(value => value.attempt === attempt.attempt).length === 1
+      && attempt.runId === runId && attempt.generation === generation && current?.id === id && current.attempt === attempt.attempt
+      && typeof current.created === "string" && Number.isFinite(Date.parse(current.created)) && typeof current.started === "string" && Number.isFinite(Date.parse(current.started))
+      && Number.isInteger(current.pid) && current.pid > 0 && /^sha256:[a-f0-9]{64}$/u.test(current.imageId), "LINUX_ATTACH_OWNERSHIP_MISMATCH");
+    return { runId, generation, owner, id, attempt: attempt.attempt, role: attempt.role, created: current.created, started: current.started, pid: current.pid, imageId: current.imageId };
+  };
+  const same = (left, right) => Object.keys(left).every(key => left[key] === right?.[key]) && Object.keys(left).length === Object.keys(right ?? {}).length;
+  const emit = plan => record("attach-operation", { ...plan.identity, state: plan.state, eventObserved: plan.observed });
+  const receive = value => {
+    if (value.action === "attach") {
+      try {
+        assertOpen(); const plan = plans.get(value.id);
+        requireSafe(plan && ["DISPATCHED", "CONNECTED"].includes(plan.state) && !plan.observed && value.type === "container"
+          && value.attempt === plan.identity.attempt && !value.execId, "LINUX_UNEXPECTED_ATTACH_EVENT");
+        requireSafe(same(plan.identity, identity(value.id)), "LINUX_ATTACH_IDENTITY_CHANGED");
+        plan.observed = true; emit(plan); return true;
+      } catch (error) { return fail(error); }
+    }
+    // Preserve the existing policy for every other action, including exec events.
+    const attempt = attempts.find(entry => entry.id === value.id || entry.attempt === value.attempt);
+    if (!attempt || attempt.id && attempt.id !== value.id) return fail(new SafetyError("LINUX_UNKNOWN_RESOURCE_EVENT"));
+    if (["exec_create", "exec_start", "exec_die"].includes(value.action)) {
+      if (!["postgres", "haproxy"].includes(attempt.role) || !value.execId) fail(new SafetyError("LINUX_UNKNOWN_EXEC_PROCESS"));
+      else if (!ownedExecs.has(value.execId)) pendingExecEvents.add(value.execId);
+    } else if (!lifecycle().dispatchClosed && (lifecycle().phase === "READY" || !["create", "start", "connect"].includes(value.action))) fail(new SafetyError("LINUX_UNEXPECTED_RESOURCE_EVENT"));
+    record("resource-event", { role: attempt.role, action: value.action }); return !primary;
+  };
+  const attach = async (id, receiveBytes, failure) => {
+    let plan, transport;
+    try {
+      assertOpen(); requireSafe(!sealed && !plans.has(id), "LINUX_ATTACH_OPERATION_COLLISION");
+      plan = { identity: identity(id), state: "VALIDATING", observed: false }; plans.set(id, plan); emit(plan);
+      // Register before this wait. An event during validation is not yet authorized.
+      const proof = await verifyWorker(plan.identity);
+      assertOpen(); requireSafe(same(plan.identity, proof) && same(plan.identity, identity(id)), "LINUX_ATTACH_IDENTITY_CHANGED");
+      plan.state = "DISPATCHED"; emit(plan);
+      // No await between this authorization and invoking the real Engine adapter.
+      transport = await engine.attach(id, receiveBytes, failure);
+      assertOpen(); requireSafe(same(plan.identity, identity(id)), "LINUX_ATTACH_IDENTITY_CHANGED");
+      plan.state = "CONNECTED"; emit(plan); return transport;
+    } catch (error) {
+      if (plan) { plan.state = "FAILED"; emit(plan); }
+      fail(error);
+      if (transport) { try { await linuxBounded(() => transport.close(), 5000, "LINUX_ATTACH_JOIN_FAILED"); } catch { record("attach-close-failure", { code: "LINUX_ATTACH_JOIN_FAILED" }); } }
+      throw primary;
+    }
+  };
+  const ready = async () => {
+    assertOpen(); requireSafe(plans.size === 2 && [...plans.values()].map(value => value.identity.role).sort().join() === "worker-A,worker-B", "LINUX_ATTACH_OPERATIONS_INCOMPLETE");
+    // This wait consumes the caller's existing bootstrap deadline; it adds no retry.
+    while ([...plans.values()].some(plan => !plan.observed || plan.state !== "CONNECTED")) { assertOpen(); await pause(10); }
+    assertOpen(); sealed = true;
+    record("attach-reconciled", { runId, generation, workers: 2 });
+  };
+  return Object.freeze({ receive, attach, ready, records: () => [...plans.values()].map(plan => ({ ...plan.identity, state: plan.state, eventObserved: plan.observed })) });
+}
+
+export async function createLinuxQualificationHarness({ engine, image, sourceNames, evidenceDirectory, signal, toolHashes, now = () => performance.now() }) {
+  requireSafe(process.platform === "linux" && process.arch === "x64" && process.versions.node === NODE_REFERENCE && isQualifiedLinuxImage(image) && isQualifiedLinuxEngine(engine)
+    && image.runtimeNodeSha256 === hash(await regularBytes(process.execPath)), "LINUX_RUNTIME_CAPABILITY_REQUIRED");
+  const { Client } = await import("pg"), { createLinuxWorkerGroup, runWorkerRuntime } = await import("./m13-p1-worker-runtime.mjs");
+  const runId = randomUUID(), generation = randomUUID(), suffix = runId.replaceAll("-", "");
+  const lease = { owner: "m13-p1-c-linux", runId, generation, database: "piccadilly_e2e_" + suffix, role: "m13_p1_" + suffix.slice(0, 16), password: randomBytes(32).toString("base64url"), workers: {} };
+  const events = [], attempts = [], creationPlans = new Map(), createdAt = now(), controller = new AbortController();
+  let group, mainIdentity, url, dispatchClosed = false, ownershipLost = false, evidenceFailed = false, closePromise, bootstrap, teardownStarted, eventMonitor, resourcePhase = "NEW";
+  const ownedExecs = new Set(), pendingExecEvents = new Set(); let resourceMonitor;
+  const operationScope = new AsyncLocalStorage(), engineCall = engine.call;
+  const checkScope = () => {
+    const current = operationScope.getStore();
+    if (current) requireSafe(now() < current.deadline, "LINUX_OPERATION_DEADLINE");
+    if (teardownStarted !== undefined) requireSafe(now() < teardownStarted + 70000, "LINUX_TEARDOWN_DEADLINE");
+  };
+  const scoped = (deadline, work) => operationScope.run({ deadline: Math.min(deadline, operationScope.getStore()?.deadline ?? Infinity) }, work);
+  const rpc = (method, path, body, options = {}) => {
+    checkScope(); const remaining = operationScope.getStore() ? operationScope.getStore().deadline - now() : 15000;
+    const before = options.beforeDispatch;
+    return engineCall(method, path, body, { ...options, timeoutMs: Math.max(1, Math.min(options.timeoutMs ?? 15000, remaining)),
+      beforeDispatch: () => { checkScope(); before?.(); } });
+  };
+  const event = (kind, fields = {}) => {
+    const row = { kind, ...fields, monotonicMs: now() - createdAt };
+    try { requireSafe(events.length < 20000, "LINUX_EVIDENCE_LIMIT"); appendFileSync(join(evidenceDirectory, "linux-events.ndjson"), JSON.stringify(row) + "\n", { encoding: "utf8", mode: 0o600 }); events.push(row); }
+    catch { evidenceFailed = true; dispatchClosed = true; ownershipLost = true; teardownStarted ??= now(); if (!controller.signal.aborted) controller.abort(new SafetyError("LINUX_EVIDENCE_FAILED")); }
+  };
+  const revoke = error => { dispatchClosed = true; teardownStarted ??= now(); if (/UNKNOWN|IDENTITY|MISMATCH|FOREIGN|OWNERSHIP|UNQUALIFIED|SOURCE_CHANGED|RECONCILIATION/u.test(error?.code ?? "")) ownershipLost = true; if (!controller.signal.aborted) controller.abort(error); };
+  const externalAbort = () => revoke(new SafetyError("P1C_ABORTED"));
+  signal?.addEventListener("abort", externalAbort, { once: true }); if (signal?.aborted) externalAbort();
+  const inspect = id => rpc("GET", "/containers/" + id + "/json");
+  const freshSource = async () => {
+    const current = await linuxSourceInventory(projectRoot, sourceNames); requireSafe(current.freeze === image.sourceFreeze && hash(await regularBytes(process.execPath)) === image.runtimeNodeSha256, "LINUX_SOURCE_CHANGED");
+    for (const file of ["node_modules/pg/esm/index.mjs", "node_modules/pg/lib/client.js", "node_modules/tsx/dist/loader.mjs", "node_modules/prisma/build/index.js", "node_modules/prisma/build/cli.js", "node_modules/@prisma/engines/schema-engine-debian-openssl-3.0.x"]) {
+      requireSafe(hash(await regularBytes(join(projectRoot, file))) === image.profile.files["/app/" + file], "LINUX_DEPENDENCY_CHANGED");
+    }
+  };
+  const execContainer = async (id, args, env = [], milliseconds = 5000) => {
+    const stillOwned = () => requireSafe(!ownershipLost, "SQL_OWNERSHIP_LOSS");
+    const created = await rpc("POST", "/containers/" + id + "/exec", { AttachStdout: true, AttachStderr: true, Cmd: args, Env: env, Tty: false }, { beforeDispatch: stillOwned });
+    requireSafe(/^[a-f0-9]{64}$/u.test(created.Id), "LINUX_EXEC_IDENTITY");
+    ownedExecs.add(created.Id); pendingExecEvents.delete(created.Id);
+    const data = await rpc("POST", "/exec/" + created.Id + "/start", { Detach: false, Tty: false }, { timeoutMs: milliseconds, binary: true, beforeDispatch: stillOwned });
+    const chunks = [], stderr = []; let failure;
+    const decoder = decodeDockerFrames(bytes => chunks.push(bytes), bytes => { stderr.push(bytes); failure = new SafetyError("LINUX_EXEC_STDERR"); }, error => { failure = error; }); decoder.push(data); decoder.end();
+    const state = await rpc("GET", "/exec/" + created.Id + "/json");
+    if (args[0] === "psql" && id === lease.postgres.id && !state.Running && state.ExitCode !== 0 && /connection.*refused|database system is starting|could not connect.*not ready/iu.test(Buffer.concat(stderr).toString("utf8"))) throw new SafetyError("POSTGRESQL_STARTING");
+    requireSafe(!state.Running && state.ExitCode === 0 && !failure, failure?.code ?? "LINUX_EXEC_JOIN_FAILED");
+    return Buffer.concat(chunks).toString("utf8");
+  };
+  const sql = async (query, censusName = null, internal = false) => {
+    requireSafe(!ownershipLost, "SQL_OWNERSHIP_LOSS");
+    if (internal) return JSON.parse(await execContainer(lease.postgres.id, ["psql", "-X", "-w", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", lease.pgAddress, "-U", lease.role, "-d", lease.database, "-c", query], ["PGPASSWORD=" + lease.password]));
+    checkScope(); const sqlTimeout = Math.floor(Math.min(5000, (operationScope.getStore()?.deadline ?? Infinity) - now()));
+    requireSafe(sqlTimeout > 0, "LINUX_OPERATION_DEADLINE");
+    const name = censusName ?? "m13-linux-identity", client = new Client({ connectionString: url, application_name: name, connectionTimeoutMillis: sqlTimeout, query_timeout: sqlTimeout, statement_timeout: sqlTimeout });
+    client.on("error", () => revoke(new SafetyError("LINUX_SQL_CLIENT_FAILED")));
+    let primary;
+    try { checkScope(); await client.connect(); checkScope(); requireSafe(!ownershipLost, "SQL_OWNERSHIP_LOSS"); const result = await client.query(query); const selected = Array.isArray(result) ? result.find(value => value.command === "SELECT") : result; requireSafe(selected?.rows?.length === 1, "LINUX_SQL_INCOMPLETE"); return selected.rows[0]; }
+    catch (error) { primary = error; throw error instanceof SafetyError ? error : new SafetyError("LINUX_SQL_OPERATION_FAILED"); }
+    finally { try {
+      const remaining = Math.floor(Math.min(5000, teardownStarted === undefined ? 5000 : teardownStarted + 70000 - now()));
+      requireSafe(remaining > 0, "LINUX_SQL_JOIN_FAILED"); await linuxBounded(() => client.end(), remaining, "LINUX_SQL_JOIN_FAILED");
+    } catch (error) { client.connection?.stream?.destroy(); ownershipLost = true; if (!primary) throw error; event("sql-client-close-failure", { code: error.code }); } }
+  };
+  const census = async () => {
+    requireSafe(!ownershipLost, "SQL_OWNERSHIP_LOSS");
+    const monitorName = "m13-monitor-" + randomUUID(), row = await sql(d14CensusSql, monitorName);
+    const snapshot = Object.values(row)[0], result = classifySessionCensus(snapshot, { database: lease.database, role: lease.role, monitorName });
+    assertD6Identity(lease, await sql(d6IdentitySql, null, true), snapshot.identity);
+    event("sql-live-census", { quiet: result.quiet, others: result.otherClientSessionsCount, monitorClosed: true });
+    requireSafe(result.quiet, "LINUX_SQL_NOT_QUIESCENT"); return result;
+  };
+  const check = async (closing = false) => {
+    if (!closing) requireSafe(!dispatchClosed && !controller.signal.aborted, "P1C_ABORTED");
+    requireSafe(!ownershipLost, "LINUX_OWNERSHIP_REVOKED");
+    await freshSource(); await engine.verify();
+    requireSafe(pendingExecEvents.size === 0, "LINUX_UNKNOWN_EXEC_PROCESS");
+    const pg = await inspect(lease.postgres.id), proxy = await inspect(lease.haproxy.id);
+    assertD6Container(lease, pg, "postgres"); assertD6Container(lease, proxy, "haproxy");
+    requireSafe(pg.RestartCount === 0 && proxy.RestartCount === 0 && pg.State.OOMKilled === false && proxy.State.OOMKilled === false && pg.HostConfig.RestartPolicy.Name === "no" && proxy.HostConfig.RestartPolicy.Name === "no", "LINUX_RESOURCE_RESTARTED");
+    const pgNetwork = Object.values(pg.NetworkSettings.Networks)[0], proxyNetwork = Object.values(proxy.NetworkSettings.Networks).find(value => value.NetworkID === lease.backend.id);
+    requireSafe(pgNetwork.IPAddress === lease.pgAddress && proxyNetwork.IPAddress === lease.proxyAddress, "LINUX_ENDPOINT_CHANGED");
+    for (const slot of ["A", "B"]) if (lease.workers[slot]) assertLinuxWorkerContainer(lease, await inspect(lease.workers[slot].id), slot, image);
+    const roles = ["postgres", "haproxy", ...Object.keys(lease.workers).map(slot => "worker-" + slot)];
+    for (const role of ["backend", "frontend"]) assertLinuxNetwork(lease, await rpc("GET", "/networks/" + lease[role].id), role, role === "backend" ? roles : ["haproxy"]);
+    const [pgObservation, proxyObservation] = await Promise.all([
+      execContainer(lease.postgres.id, ["sh", "-c", pgObservationScript]), execContainer(lease.haproxy.id, ["sh", "-c", proxyObservationScript]),
+    ]);
+    const pgLive = parseObservationSections(pgObservation + "\n", pgObservationNames), proxyLive = parseObservationSections(proxyObservation + "\n", proxyObservationNames);
+    requireSafe(!pgLive.route.split("\n").some(line => line.trim().split(/\s+/u)[1] === "00000000") && proxyLive.forward.trim() === "0", "LINUX_EXTERNAL_ROUTE");
+    requireSafe(proxyLive.hash.trim().split(/\s+/u)[0] === lease.configHash && proxyLive.permissions.trim() === "0:0:444", "LINUX_PROXY_CONFIG_CHANGED");
+    for (const [observed, memory] of [[pgLive, D6_PROFILE.pgMemory], [proxyLive, D6_PROFILE.proxyMemory]]) requireSafe(Number(observed.memory.trim()) === memory && observed.swap.trim() === "0", "LINUX_CGROUP_BUDGET_MISMATCH");
+    const internal = await sql(d6IdentitySql, null, true), row = await sql(d6IdentitySql), host = Object.values(row)[0];
+    assertD6Identity(lease, internal, host); lease.identity ??= host; mainIdentity = host;
+    if (group) await group.snapshot();
+    requireSafe(pendingExecEvents.size === 0, "LINUX_UNKNOWN_EXEC_PROCESS");
+    if (!closing) requireSafe(!dispatchClosed && !controller.signal.aborted, "P1C_ABORTED");
+    return { valid: true, status: "PASS_VERIFIED", generation, server: host };
+  };
+  const guarded = async closing => {
+    try { return await linuxBounded(() => scoped(now() + 15000, () => check(closing)), Math.max(1, Math.min(15000, (operationScope.getStore()?.deadline ?? Infinity) - now())), "LINUX_OPERATIONAL_GUARD_TIMEOUT", closing ? undefined : controller.signal); }
+    catch (error) { ownershipLost = true; revoke(error); throw error; }
+  };
+  const labels = (role, attempt) => ({ ...d6Labels(lease, role), "piccadilly.attempt": attempt });
+  const create = async (role, body, network = false, attemptNonce = randomUUID()) => {
+    const attempt = { runId, generation, role, attempt: attemptNonce, id: null, creation: "PLANNED", dispatched: false, owned: false, removed: false }; attempts.push(attempt);
+    const name = "m13-linux-" + role + "-" + suffix;
+    body.Labels = labels(role, attempt.attempt);
+    if (!network) { body.HostConfig.RestartPolicy = { Name: "no", MaximumRetryCount: 0 }; body.HostConfig.AutoRemove = false; }
+    creationPlans.set(attempt.attempt, { name, body, network });
+    event("creation-attempt", { role, attempt: attempt.attempt, imageId: body.Image ?? null });
+    requireSafe(!dispatchClosed, "P1C_ABORTED");
+    // Attempt registration precedes the asynchronous Engine operation.
+    const result = await rpc("POST", network ? "/networks/create" : "/containers/create?name=" + encodeURIComponent(name), network ? { ...body, Name: name } : body, { beforeDispatch: () => { requireSafe(!dispatchClosed, "P1C_ABORTED"); attempt.dispatched = true; attempt.creation = "DISPATCHED"; } });
+    attempt.id = result.Id; requireSafe(/^[a-f0-9]{64}$/u.test(attempt.id), "LINUX_CREATION_OUTCOME_UNCERTAIN");
+    const current = await rpc("GET", network ? "/networks/" + attempt.id : "/containers/" + attempt.id + "/json");
+    requireSafe(current.Labels?.["piccadilly.attempt"] === attempt.attempt || current.Config?.Labels?.["piccadilly.attempt"] === attempt.attempt, "LINUX_CREATION_OWNERSHIP_MISMATCH");
+    attempt.owned = true;
+    const identity = { id: attempt.id, attempt: attempt.attempt, created: current.Created, imageId: body.Image };
+    if (role.startsWith("worker-")) lease.workers[role.slice(-1)] = identity; else lease[role] = identity;
+    requireSafe(!dispatchClosed, "P1C_ABORTED"); return identity;
+  };
+  const start = async identity => {
+    requireSafe(!dispatchClosed, "P1C_ABORTED"); await rpc("POST", "/containers/" + identity.id + "/start", undefined, { beforeDispatch: () => requireSafe(!dispatchClosed, "P1C_ABORTED") });
+    const current = await inspect(identity.id); requireSafe(current.State.Running && current.State.Pid > 0, "LINUX_CONTAINER_START_FAILED");
+    Object.assign(identity, { started: current.State.StartedAt, pid: current.State.Pid }); return current;
+  };
+  const createResources = async () => {
+    resourcePhase = "BOOTSTRAP";
+    const info = await engine.verify(), memory = await readFile("/proc/meminfo", "utf8");
+    requireSafe(info.MemTotal / 1024 ** 2 >= LINUX_PROFILE.admissionMiB && Number(/^MemAvailable:\s+(\d+) kB$/mu.exec(memory)?.[1]) / 1024 >= LINUX_PROFILE.admissionMiB, "LINUX_MEMORY_ADMISSION_FAILED");
+    const storage = await linuxStorageSnapshot(engine, { root: projectRoot, evidence: evidenceDirectory });
+    requireSafe(storage.filesystems.every(row => row.availableBytes / 1024 ** 2 >= image.diskAdmissionMiB), "LINUX_DISK_ADMISSION_FAILED"); event("storage-before", storage);
+    const images = {};
+    for (const role of ["postgres", "haproxy"]) {
+      const pin = D6_PINS[role], current = await rpc("GET", "/images/" + role + "@" + pin.manifest + "/json");
+      requireSafe(current.Id === pin.config && current.Architecture === "amd64" && current.Os === "linux" && current.RepoDigests?.some(value => [role + "@" + pin.manifest, "library/" + role + "@" + pin.manifest, "docker.io/library/" + role + "@" + pin.manifest].includes(value)), "LINUX_IMAGE_ORIGIN_NOT_VERIFIED"); images[role] = current.Id;
+    }
+    bootstrap = new MonotonicBudget({ durationMs: 30000, code: "LINUX_BOOTSTRAP_TIMEOUT", signal: controller.signal, onTimeout: revoke });
+    try { return await bootstrap.run("linux-bootstrap", 30000, () => scoped(now() + bootstrap.remaining(), async () => {
+      resourceMonitor = createLinuxResourceEventMonitor({ engine, lease, attempts, ownedExecs, pendingExecEvents,
+        lifecycle: () => ({ phase: resourcePhase, dispatchClosed, closing: teardownStarted !== undefined }), assertAuthority: () => { checkScope(); bootstrap.assert(); }, revoke, record: event,
+        verifyWorker: async expected => {
+          const slot = expected.role.slice(-1), current = await inspect(expected.id); assertLinuxWorkerContainer(lease, current, slot, image);
+          const env = Object.fromEntries(current.Config.Env.map(value => { const at = value.indexOf("="); return [value.slice(0, at), value.slice(at + 1)]; }));
+          return { runId: env.P1C_RUN_ID, generation: env.P1C_GENERATION, owner: current.Config.Labels["piccadilly.owner"], id: current.Id,
+            attempt: env.P1C_ATTEMPT, role: current.Config.Labels["piccadilly.role"], created: current.Created, started: current.State.StartedAt, pid: current.State.Pid, imageId: current.Image };
+        } });
+      eventMonitor = await engine.watch(runId, resourceMonitor.receive, revoke);
+      for (const role of ["backend", "frontend"]) await create(role, { Driver: "bridge", Internal: role === "backend", EnableIPv6: false,
+        Options: role === "backend" ? { "com.docker.network.bridge.gateway_mode_ipv4": "isolated" } : {}, CheckDuplicate: true }, true);
+      const pg = await create("postgres", { Image: images.postgres, Env: ["POSTGRES_PASSWORD=" + lease.password, "POSTGRES_DB=" + lease.database, "POSTGRES_USER=" + lease.role],
+        Cmd: ["postgres"], HostConfig: { NetworkMode: lease.backend.id, Memory: D6_PROFILE.pgMemory, MemorySwap: D6_PROFILE.pgMemory,
+          Tmpfs: { "/var/lib/postgresql": "rw,noexec,nosuid,size=" + D6_PROFILE.pgTmpfs }, LogConfig: { Type: "none" } } });
+      lease.pgAddress = Object.values((await start(pg)).NetworkSettings.Networks)[0].IPAddress;
+      const server = createServer(); lease.port = await new Promise((done, reject) => { server.once("error", reject); server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => { const port = server.address().port; server.close(error => error ? reject(error) : done(port)); }); });
+      const config = proxyConfiguration(lease.pgAddress); lease.configHash = hash(config);
+      const proxy = await create("haproxy", { Image: images.haproxy, User: "99:99", Cmd: ["haproxy", "-f", "/usr/local/etc/haproxy/haproxy.cfg"],
+        ExposedPorts: { "15432/tcp": {} }, HostConfig: { NetworkMode: lease.frontend.id, Memory: D6_PROFILE.proxyMemory, MemorySwap: D6_PROFILE.proxyMemory,
+          CapDrop: ["ALL"], SecurityOpt: ["no-new-privileges"], Sysctls: { "net.ipv4.ip_forward": "0" }, Tmpfs: { "/run/haproxy": "rw,noexec,nosuid,size=" + D6_PROFILE.proxyTmpfs + ",uid=99,gid=99,mode=0700" },
+          PortBindings: { "15432/tcp": [{ HostIp: "127.0.0.1", HostPort: String(lease.port) }] }, LogConfig: { Type: "none" } } });
+      await rpc("POST", "/networks/" + lease.backend.id + "/connect", { Container: proxy.id });
+      await rpc("PUT", "/containers/" + proxy.id + "/archive?path=/usr/local/etc/haproxy", proxyConfigArchive(config), { headers: { "Content-Type": "application/x-tar" } });
+      const proxyRunning = await start(proxy); lease.proxyAddress = Object.values(proxyRunning.NetworkSettings.Networks).find(value => value.NetworkID === lease.backend.id).IPAddress;
+      const targetUrl = new URL(`postgresql://127.0.0.1:${lease.port}/${lease.database}`); targetUrl.username = lease.role; targetUrl.password = lease.password; url = targetUrl.href;
+      // Readiness polling belongs to this one bootstrap; it is not a second run.
+      while (true) { bootstrap.assert(); try { await sql(d6IdentitySql, null, true); break; } catch (error) { if (error.code !== "POSTGRESQL_STARTING") throw error; await pause(50); } }
+      await guarded(false);
+      await census(); event("early-quiescence", { status: "PASS_VERIFIED" });
+      for (const slot of ["A", "B"]) {
+        const attempt = randomUUID();
+        const worker = await create("worker-" + slot, { Image: image.imageId, User: "10001:10001", Env: ["PATH=/usr/local/bin:/usr/bin:/bin", "P1C_RUN_ID=" + runId, "P1C_GENERATION=" + generation, "P1C_SLOT=" + slot, "P1C_ATTEMPT=" + attempt],
+          Entrypoint: ["/usr/local/bin/node", "/app/scripts/m13-p1-worker-linux-entry.mjs"], OpenStdin: true, StdinOnce: false, AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: false,
+          HostConfig: { NetworkMode: lease.backend.id, Memory: LINUX_PROFILE.workerMemory, MemorySwap: LINUX_PROFILE.workerMemory, Init: true, ReadonlyRootfs: true,
+            CapDrop: ["ALL"], SecurityOpt: ["no-new-privileges", "seccomp=" + JSON.stringify(image.profile.workerSeccomp)], Dns: ["127.0.0.1"],
+            Sysctls: { "net.ipv6.conf.all.disable_ipv6": "1", "net.ipv6.conf.default.disable_ipv6": "1", "net.ipv4.ip_forward": "0" },
+            Tmpfs: { "/run/p1c": "rw,noexec,nosuid,size=" + LINUX_PROFILE.workerTmpfs + ",uid=10001,gid=10001,mode=0700" }, LogConfig: { Type: "none" } } }, false, attempt);
+        // Correlation in the environment must equal the registered create attempt.
+        requireSafe(worker.attempt === attempt, "LINUX_WORKER_ATTEMPT_MISMATCH");
+        const running = await start(worker); worker.address = Object.values(running.NetworkSettings.Networks)[0].IPAddress;
+      }
+      const backendNetwork = await rpc("GET", "/networks/" + lease.backend.id), bootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
+      requireSafe(backendNetwork.IPAM.Config.length === 1, "LINUX_BACKEND_SUBNET_INVALID");
+      const workers = [];
+      for (const slot of ["A", "B"]) {
+        const current = await inspect(lease.workers[slot].id); assertLinuxWorkerContainer(lease, current, slot, image);
+        workers.push({ ...lease.workers[slot], slot, dnsProof: { runId, generation, slot, attempt: lease.workers[slot].attempt, containerId: current.Id, networkId: lease.backend.id,
+          engineId: engine.id, upstream: current.HostConfig.Dns, subnet: backendNetwork.IPAM.Config[0].Subnet, bootId, created: current.Created, started: current.State.StartedAt, imageId: current.Image },
+          target: { runId, generation, slot, containerId: lease.workers[slot].id, networkId: lease.backend.id,
+        postgresId: lease.postgres.id, serverAddress: lease.pgAddress, database: lease.database, role: lease.role, identity: { ...mainIdentity, clientAddress: lease.workers[slot].address } } });
+      }
+      const controllerNamespaces = { pidns: await readlink("/proc/self/ns/pid"), netns: await readlink("/proc/self/ns/net"), mntns: await readlink("/proc/self/ns/mnt"), bootId };
+      group = createLinuxWorkerGroup({ engine: { attach: resourceMonitor.attach }, image, workers, runId, generation, controllerNamespaces, onFailure: revoke });
+      await group.ready();
+      await resourceMonitor.ready();
+      resourcePhase = "READY"; await guarded(false); return { runId, generation };
+    })); } finally { bootstrap.dispose(); }
+  };
+  const role = async name => {
+    requireSafe(["migrate", "seed", "worker-runtime"].includes(name) && resourcePhase === "READY" && !dispatchClosed, "LINUX_ROLE_NOT_ALLOWED");
+    await guarded(false); event("first-writer-fresh-guard", { role: name });
+    if (name !== "worker-runtime") {
+      const environment = { PATH: dirname(process.execPath) + ":/usr/bin:/bin", APP_ENV: "development", NODE_ENV: "test", DATABASE_URL: url, NEXT_TELEMETRY_DISABLED: "1",
+        PRISMA_SCHEMA_ENGINE_BINARY: image.hostPrisma.schemaEnginePath, PRISMA_GENERATE_SKIP_AUTOINSTALL: "true", CHECKPOINT_DISABLE: "1", PRISMA_HIDE_UPDATE_MESSAGE: "1",
+        AUTH_DEMO_ADMIN_PASSWORD: "M13-only-" + randomBytes(32).toString("base64url"), AUTH_DEMO_STAFF_PASSWORD: "M13-only-" + randomBytes(32).toString("base64url") };
+      const args = name === "migrate" ? [join(projectRoot, "node_modules/prisma/build/index.js"), "migrate", "deploy"] : ["--import", join(projectRoot, "node_modules/tsx/dist/loader.mjs"), join(projectRoot, "prisma/seed.ts")];
+      requireSafe(!dispatchClosed, "P1C_ABORTED");
+      const result = await runLinuxTool(process.execPath, args, { cwd: projectRoot, environment, expectedSha256: image.runtimeNodeSha256, timeoutMs: 60000,
+        beforeSpawn: () => { checkScope(); requireSafe(!dispatchClosed && !controller.signal.aborted, "P1C_ABORTED"); }, signal: controller.signal, allowedHelpers: name === "migrate" ? image.hostPrisma.helpers : [] });
+      await guarded(false); return result;
+    }
+    requireSafe(group && !group.closing, "LINUX_GROUP_NOT_READY");
+    return runWorkerRuntime({ environment: { DATABASE_URL: url }, generation, runId, expectedIdentity: mainIdentity, requireOwnership: true,
+      ownershipGuard: () => guarded(false), signal: controller.signal, onChild: child => group.assertHandle(child), evidenceDirectory, timeoutMs: 600000, linuxGroup: group, onAbort: revoke,
+      record: value => event("worker-runtime", { workerEvent: value }) });
+  };
+  const close = () => {
+    if (closePromise) return closePromise;
+    dispatchClosed = true; resourcePhase = "CLOSING"; teardownStarted ??= now(); const started = teardownStarted;
+    closePromise = (async () => {
+      const failures = []; let joined = !group, quiet = false;
+      const phase = async (cutoff, work) => { try { await linuxBounded(() => scoped(started + cutoff, work), linuxTeardownPhase(started, cutoff, now), "LINUX_TEARDOWN_DEADLINE"); } catch (error) { failures.push(error.code ?? "LINUX_TEARDOWN_FAILED"); event("teardown-failure", { code: failures.at(-1) }); } };
+      await phase(10000, async () => {
+        for (const attempt of attempts.filter(value => value.dispatched && !value.id)) {
+          const plan = creationPlans.get(attempt.attempt), filters = encodeURIComponent(JSON.stringify({ label: ["piccadilly.run=" + runId, "piccadilly.attempt=" + attempt.attempt] }));
+          const matches = await rpc("GET", plan.network ? "/networks?filters=" + filters : "/containers/json?all=1&filters=" + filters);
+          requireSafe(matches.length <= 1, "LINUX_AMBIGUOUS_CREATION_OUTCOME");
+          if (!matches.length) { attempt.creation = "OUTCOME_NOT_VERIFIABLE"; continue; }
+          const id = matches[0].Id, current = await rpc("GET", plan.network ? "/networks/" + id : "/containers/" + id + "/json");
+          const metadata = plan.network ? current.Labels : current.Config.Labels;
+          requireSafe(labelsMatch(metadata, labels(attempt.role, attempt.attempt)) && (plan.network ? current.Name === plan.name : current.Name === "/" + plan.name && current.Image === plan.body.Image), "LINUX_CREATION_RECOVERY_MISMATCH");
+          // Discovery is not authorization to stop a partially identified process.
+          attempt.id = id; attempt.creation = "RECOVERED_METADATA_ONLY_STOP_NOT_AUTHORIZED";
+          event("late-creation-reconciled", { role: attempt.role, resourceId: id, stopAuthorized: false });
+        }
+        if (group) { await group.stopAll(); joined = true; }
+        if (!linuxToolQuiescence().verified) { joined = false; throw new SafetyError("LINUX_TOOL_JOIN_NOT_VERIFIED"); }
+        event("application-processes-joined", { status: joined ? "PASS_VERIFIED" : "NOT_VERIFIABLE" });
+      });
+      await phase(20000, async () => { requireSafe(joined && !ownershipLost, "LINUX_SQL_QUIESCENCE_NOT_VERIFIABLE"); await guarded(true); await census(); quiet = true; event("sql-live-quiescence", { status: "PASS_VERIFIED" }); });
+      await phase(25000, async () => { requireSafe(joined && quiet, "LINUX_RELEASE_FORBIDDEN"); if (group) await group.release();
+        for (const slot of ["A", "B"]) if (lease.workers[slot]) { const result = await rpc("POST", "/containers/" + lease.workers[slot].id + "/wait?condition=not-running", undefined, { timeoutMs: 5000 }); requireSafe(result.StatusCode === 0, "LINUX_SUPERVISOR_EXIT_FAILED"); } });
+      await phase(55000, async () => {
+        requireSafe(joined && quiet && !ownershipLost, "LINUX_OWNED_STOP_FORBIDDEN");
+        await Promise.all(["postgres", "haproxy"].map(async name => { const current = await inspect(lease[name].id); assertD6Container(lease, current, name); await rpc("POST", "/containers/" + current.Id + "/stop?t=" + (name === "postgres" ? "25" : "10"), undefined, { timeoutMs: name === "postgres" ? 25000 : 10000 }); requireSafe(!(await inspect(current.Id)).State.Running, "LINUX_CONTAINER_STOP_FAILED"); }));
+      });
+      await phase(65000, async () => {
+        requireSafe(joined && quiet && !ownershipLost, "LINUX_OWNED_REMOVAL_FORBIDDEN");
+        for (const attempt of attempts.filter(value => !["backend", "frontend"].includes(value.role))) {
+          requireSafe(attempt.owned, "LINUX_UNOWNED_REMOVAL"); const current = await inspect(attempt.id);
+          requireSafe(!current.State.Running && current.Config.Labels["piccadilly.attempt"] === attempt.attempt && current.Created === (attempt.role.startsWith("worker-") ? lease.workers[attempt.role.slice(-1)] : lease[attempt.role]).created, "LINUX_REMOVAL_IDENTITY_MISMATCH");
+          await rpc("DELETE", "/containers/" + attempt.id); attempt.removed = true;
+        }
+        for (const name of ["frontend", "backend"]) if (lease[name]) { const current = await rpc("GET", "/networks/" + lease[name].id); assertLinuxNetwork(lease, current, name, []); await rpc("DELETE", "/networks/" + current.Id); attempts.find(value => value.id === current.Id).removed = true; }
+      });
+      await phase(70000, async () => {
+        const filters = encodeURIComponent(JSON.stringify({ label: ["piccadilly.run=" + runId, "piccadilly.owner=" + lease.owner] }));
+        const containers = await rpc("GET", "/containers/json?all=1&filters=" + filters), networks = await rpc("GET", "/networks?filters=" + filters);
+        group?.dispose();
+        if (eventMonitor) await eventMonitor.close();
+        requireSafe(!containers.length && !networks.length && attempts.every(value => !value.dispatched || value.removed), "LINUX_RESIDUAL_RESOURCES");
+        for (let i = 0; i < 20 && !engine.joined(); i++) await pause(10);
+        requireSafe(engine.joined(), "LINUX_ENGINE_REQUEST_JOIN_FAILED");
+        event("resource-absence", { status: "PASS_VERIFIED" });
+      });
+      group?.dispose(); eventMonitor?.abort(); engine.abortRequests(); bootstrap?.dispose(); signal?.removeEventListener("abort", externalAbort);
+      const result = { complete: failures.length === 0 && !evidenceFailed, failures, evidenceFailed, processesJoined: joined, tools: linuxToolQuiescence(), sqlQuiescence: quiet ? "PASS_VERIFIED" : "NOT_VERIFIABLE", elapsedMs: now() - started };
+      event("teardown", result); return result;
+    })(); return closePromise;
+  };
+  return Object.freeze({ create: createResources, run: role, close, receipt: () => ({ runId, generation, events, attempts, attachOperations: resourceMonitor?.records() ?? [], group: group?.records() ?? [], sourceFreeze: image.sourceFreeze, resourcePhase, ownershipLost, dispatchClosed, toolHashes }) });
+}
 
 if (!isMainThread && workerData?.kind === "m13-runtime-verifier") await runtimeVerifierEntry(workerData);
 

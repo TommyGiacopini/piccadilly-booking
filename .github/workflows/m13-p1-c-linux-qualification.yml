@@ -1,0 +1,96 @@
+name: M13 P1-C Linux Qualification (Controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_manifest_url:
+        description: Public project release JSON approved separately by CLASSIC3 and WORK3
+        required: true
+        type: string
+      approved_manifest_sha256:
+        description: Independently approved SHA-256 of the Linux artifact qualification manifest
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: m13-p1-c-linux-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualification:
+    if: github.repository == 'TommyGiacopini/piccadilly-booking' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions: {}
+    defaults:
+      run:
+        shell: bash
+    env:
+      APPROVED_MANIFEST_URL: ${{ inputs.approved_manifest_url }}
+      APPROVED_MANIFEST_SHA256: ${{ inputs.approved_manifest_sha256 }}
+    steps:
+      - name: Establish bounded job and collect resource snapshot
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$APPROVED_MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$RUNNER_OS" == Linux && "$RUNNER_ARCH" == X64 ]]
+          task_dir="$(mktemp -d "$RUNNER_TEMP/p1c-alt07.XXXXXXXX")"
+          printf 'P1C_TASK_DIRECTORY=%s\n' "$task_dir" >> "$GITHUB_ENV"
+          node --input-type=module -e '
+            import {readFileSync, appendFileSync, statfsSync} from "node:fs";
+            import {availableParallelism} from "node:os";
+            const memory = readFileSync("/proc/meminfo", "utf8");
+            const availableMiB = Number(/^MemAvailable:\s+(\d+) kB$/m.exec(memory)?.[1]) / 1024;
+            const disk = statfsSync(process.env.RUNNER_TEMP);
+            const started = Math.floor(Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]) * 1000);
+            if (availableParallelism() < 4 || availableMiB < 3840) throw Error("RESOURCE_ADMISSION_FAILED");
+            appendFileSync(process.env.GITHUB_ENV, `P1C_JOB_STARTED_UPTIME_MS=${started}\n`);
+            console.log(JSON.stringify({cpu:availableParallelism(), availableMemoryMiB:availableMiB,
+              availableDiskBytes:disk.bavail*disk.bsize, admissionMiB:3840, hardLimitsMiB:2816, reserveMiB:1024,
+              workloadPeak:"NOT_QUALIFIED", workloadDiskRequirement:"REQUIRES_APPROVED_MANIFEST_AND_MEASUREMENTS"}));
+          '
+          docker --host unix:///var/run/docker.sock version --format '{{.Server.Version}}'
+
+      - name: Retrieve only the dispatched public source revision
+        run: |
+          set -euo pipefail
+          source_dir="$P1C_TASK_DIRECTORY/source"
+          git init --quiet "$source_dir"
+          git -C "$source_dir" config core.autocrlf false
+          git -C "$source_dir" remote add origin https://github.com/TommyGiacopini/piccadilly-booking.git
+          git -C "$source_dir" -c credential.helper= fetch --quiet --no-tags --depth=1 origin "$GITHUB_SHA"
+          git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+          [[ "$(git -C "$source_dir" rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          git -C "$source_dir" ls-files -z > "$P1C_TASK_DIRECTORY/source-files.bin"
+
+      - name: Require independently approved artifact and disk identities
+        working-directory: ${{ env.P1C_TASK_DIRECTORY }}/source
+        run: |
+          set -euo pipefail
+          node scripts/m13-p1-worker-linux-image.mjs --fetch-approval \
+            "$APPROVED_MANIFEST_URL" "$APPROVED_MANIFEST_SHA256" "$P1C_TASK_DIRECTORY/approved-linux.json"
+
+      - name: Prepare qualified Linux artifacts and run one controlled role
+        working-directory: ${{ env.P1C_TASK_DIRECTORY }}/source
+        run: |
+          set -euo pipefail
+          node scripts/m13-p1-worker-linux-image.mjs --prepare-job \
+            "$P1C_TASK_DIRECTORY/approved-linux.json" "$APPROVED_MANIFEST_SHA256" \
+            "$P1C_TASK_DIRECTORY/source-files.bin" "$P1C_TASK_DIRECTORY/evidence"
+
+      - name: Show sanitized result without publishing artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import {readFileSync, existsSync} from "node:fs";
+            const path = process.env.P1C_TASK_DIRECTORY + "/evidence/linux-qualification.json";
+            if (!existsSync(path)) { console.log("QUALIFICATION_RESULT=NOT_COMPLETED;NO_PASS_INFERRED"); process.exit(0); }
+            const value = JSON.parse(readFileSync(path, "utf8"));
+            console.log(JSON.stringify({status:value.status, primary:value.primary, scenarios:value.scenarios,
+              processesJoined:value.teardown?.processesJoined, sqlQuiescence:value.teardown?.sqlQuiescence,
+              teardownComplete:value.teardown?.complete, sourceFreeze:value.sourceFreeze}));
+          '
