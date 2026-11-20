@@ -19,9 +19,591 @@ import { D15_ENGINE_ENDPOINT, assertDockerTarget, verifyDockerEngine, readLocalE
 import { createLinuxAuthority, parseLinuxStat, reconcileLinuxProcesses, reconcileLinuxDrain, createLinuxLineReader, runLinuxSupervisor, assertLinuxDnsIsolation } from "./m13-p1-worker-linux-entry.mjs";
 import { decodeDockerFrames, assertLinuxArtifactPlan, LINUX_NODE_ARCHIVE_SHA256, linuxImageSpecification, handoffLinuxRuntime, downloadLinuxArtifact, createLinuxEngine } from "./m13-p1-worker-linux-image.mjs";
 import { fileURLToPath } from "node:url";
-import { linuxTeardownPhase, assertLinuxNetwork, assertLinuxWorkerContainer, createLinuxResourceEventMonitor } from "./m13-p1-environment.mjs";
+import { linuxTeardownPhase, assertLinuxNetwork, assertLinuxWorkerContainer, createLinuxResourceEventMonitor, assertLinuxRuntimeDispatch } from "./m13-p1-environment.mjs";
 import { runInNewContext } from "node:vm";
+import { performance } from "node:perf_hooks";
+import { gunzipSync } from "node:zlib";
+import { symlink, unlink } from "node:fs/promises";
+import { isAbsolute } from "node:path";
+import { LinuxSafetyError } from "./m13-p1-worker-linux-entry.mjs";
+import { spawnSync } from "node:child_process";
+import { assertLinuxPreparationCensus, readLinuxPreparationResources, prepareLinuxImage } from "./m13-p1-worker-linux-image.mjs";
+import { ADMISSION_PHASE_SECONDS, EVIDENCE_POLICY, parseLinuxJson, createPreparationAuthority, withPreparationAuthority, assertLinuxToolDescendant,
+  assertLinuxApprovalBinding, createLinuxWorkloadAdmission, isLinuxWorkloadAdmission, admitLinuxDisk, runLinuxDiskPhase, linuxJobSchedule,
+  runLinuxPreparationDaemon, parseLinuxDaemonCompletion, createLinuxEvidence, packageLinuxEvidence, validateLinuxEvidenceMembers, assertLinuxEvidenceRow,
+  createLinuxAdmissionOutcome, preserveLinuxAdmissionFailure, linuxRetentionResult, selectLinuxAdmissionMode, runLinuxTool, assertLinuxRetentionTail, projectLinuxWorkerEvent, removeOwnedLinuxImage, linuxFinalizationWindow } from "./m13-p1-worker-linux-image.mjs";
 const { test } = process.env.VITEST ? await import("vitest") : await import("node:test");
+
+// Every identity and byte budget below is SYNTHETIC. These tests never execute
+// Linux, a Docker CLI, a socket, PostgreSQL, application consumers or an upload.
+const d3Hash = value => createHash("sha256").update(value).digest("hex");
+const d3Uuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const d3Error = () => new LinuxSafetyError("LINUX_TEST_PRIMARY");
+const d3Deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const d3Owner = () => createPreparationAuthority({ deadline: performance.now() + 5000, now: () => performance.now() });
+function d3Plan(purpose = "ARTIFACT_DISCOVERY") {
+  const allocation = category => ({ category, incrementalBytes: 10, remainingBytes: 20, teardownBytes: 5, evidenceBytes: 7, headroomBytes: 8, maximumOutputBytes: 100 });
+  return { v: 2, platform: "linux/amd64", nodeVersion: "24.14.1", nodeArchiveSha256: LINUX_NODE_ARCHIVE_SHA256, nodeSha256: "a".repeat(64), sourceFreeze: "b".repeat(64),
+    baseReference: "docker.io/library/node@sha256:" + "c".repeat(64), baseConfig: "sha256:" + "d".repeat(64), init: { path: "/sbin/docker-init", sha256: "e".repeat(64) },
+    tools: { tar: "f".repeat(64), docker: "1".repeat(64) }, osFiles: { "/usr/lib/libc.so": "2".repeat(64), "/usr/lib/libssl.so": "3".repeat(64) },
+    workerSeccomp: { defaultAction: "SCMP_ACT_ERRNO", architectures: ["SCMP_ARCH_X86_64"], syscalls: [{ names: ["read"], action: "SCMP_ACT_ALLOW" }] },
+    prisma: { engineCommit: "e".repeat(40), gzipSha256: "5".repeat(64), binarySha256: "6".repeat(64), helpers: { generate: [], migrate: [] } }, diskAdmissionMiB: 1,
+    purpose, binding: { repository: "TommyGiacopini/piccadilly-booking", commit: "a".repeat(40), tree: "b".repeat(40), workflowSha256: "c".repeat(64),
+      runnerProfile: { os: "Linux", arch: "X64", image: "ubuntu-24.04", imageVersion: "synthetic-1", engineVersion: "0.0.0" }, bootstrapIdentity: { version: "0.0.0", sha256: "d".repeat(64) },
+      provenance: { nodeReleaseProofSha256: "1".repeat(64), baseImageProofSha256: "2".repeat(64), prismaReleaseProofSha256: "3".repeat(64) } },
+    preparation: { xz: { path: "/usr/bin/xz", sha256: "7".repeat(64), argv0: "xz", args: ["-d"] }, contextMaximumBytes: 100, imageArchiveMaximumBytes: 100 },
+    diskBudget: { v: 1, basis: purpose === "QUALIFIED_WORKLOAD" ? "MEASURED_APPROVED" : "DISCOVERY_CAP", phases: ["dependencies", "pulls", "build", "workload"].map(name => ({ name, allocations: [allocation("root")] })) },
+    timeBudget: { ...ADMISSION_PHASE_SECONDS } };
+}
+const d3Validate = plan => { const bytes = Buffer.from(JSON.stringify(plan)); return assertLinuxArtifactPlan(plan, bytes, d3Hash(bytes)); };
+const d3Observed = plan => ({ repository: plan.binding.repository, commit: plan.binding.commit, tree: plan.binding.tree, sourceFreeze: plan.sourceFreeze,
+  workflowSha256: plan.binding.workflowSha256, runnerProfile: { ...plan.binding.runnerProfile }, bootstrapIdentity: { ...plan.binding.bootstrapIdentity } });
+
+test("D3 PREP01 revocation during filesystem await fences the real late dispatch predicate", async () => {
+  const owner = d3Owner(), gate = d3Deferred(); let spawns = 0;
+  const token = owner.register("TOOL", "late-spawn");
+  const result = owner.run("FS", "synthetic-filesystem", async () => { await gate.promise; return owner.dispatch(token, () => spawns++); }).catch(error => error);
+  owner.revoke(d3Error()); gate.resolve(); assert.equal((await result).code, "LINUX_TEST_PRIMARY");
+  await new Promise(done => setImmediate(done)); assert.equal(spawns, 0); assert.equal(owner.revoked, true); assert.throws(() => owner.assert(), /LINUX_TEST_PRIMARY/u); owner.dispose();
+});
+test("D3 PREP01 deadline before dispatch is irreversible and cannot regain authority", () => {
+  let now = 1, calls = 0; const owner = createPreparationAuthority({ deadline: 10, now: () => now }), token = owner.register("DAEMON", "build");
+  now = 11; assert.throws(() => owner.dispatch(token, () => calls++), /PREPARATION_DEADLINE/u); now = 1;
+  assert.throws(() => owner.dispatch(token, () => calls++), /PREPARATION_DEADLINE/u); assert.equal(calls, 0); owner.dispose();
+});
+test("D3 PREP01 actual runLinuxTool cannot spawn after its executable filesystem await", async () => {
+  const owner = d3Owner(), gate = d3Deferred(), data = Buffer.from("synthetic executable metadata"); let spawns = 0;
+  const pending = runLinuxTool(process.execPath, [], { authority: owner, expectedSha256: d3Hash(data), environment: {}, synthetic: true,
+    readExecutable: () => gate.promise, spawnProcess: () => { spawns++; throw Error("forbidden synthetic spawn"); } }).catch(error => error);
+  owner.revoke(d3Error()); gate.resolve(data); assert.equal((await pending).code, "LINUX_TEST_PRIMARY");
+  await new Promise(done => setImmediate(done)); assert.equal(spawns, 0); owner.dispose();
+});
+test("D3 PREP01 registered tool STOP is shared, positive, bounded and preserves the primary", async () => {
+  const owner = d3Owner(), token = owner.register("TOOL", "owned-helper"), child = { pid: 123 }; let stops = 0, joined = false;
+  await owner.track(token, owner.dispatch(token, () => { owner.registerTool(child, { pid: 123, executableSha256: "a".repeat(64), operationId: token.id },
+    { stop: async () => { stops++; joined = true; }, joined: () => joined }); return Promise.resolve(); }));
+  owner.revoke(d3Error()); const one = owner.stop({ deadline: performance.now() + 100 }), two = owner.stop({ deadline: performance.now() + 200 });
+  assert.equal(one, two); const result = await one; assert.equal(stops, 1); assert.equal(result.primary, "LINUX_TEST_PRIMARY"); assert.equal(result.complete, true); owner.dispose();
+});
+test("D3 PREP01 an unregistered handle cannot be adopted and incomplete join is explicit", async () => {
+  const rejected = d3Owner();
+  assert.throws(() => rejected.registerTool({ pid: 123 }, { pid: 123, executableSha256: "a".repeat(64), operationId: "unknown" }, { stop() {}, joined: () => true }), /TOOL_OWNERSHIP/u);
+  assert.equal(rejected.revoked, true); rejected.dispose();
+  const owner = d3Owner();
+  const token = owner.register("TOOL", "owned-helper"); await owner.track(token, owner.dispatch(token, () => { owner.registerTool({ pid: 123 }, { pid: 123, executableSha256: "a".repeat(64), operationId: token.id }, { stop() {}, joined: () => false }); }));
+  owner.revoke(d3Error()); const result = await owner.stop({ deadline: performance.now() + 20 }); assert.equal(result.complete, false);
+  assert.ok(result.failures.includes("LINUX_PREPARATION_JOIN_INCOMPLETE")); assert.equal(result.primary, "LINUX_TEST_PRIMARY"); owner.dispose();
+});
+test("D3 PREP01 CLI close cannot prove daemon completion or permit a cleanup PASS", async () => {
+  const owner = d3Owner(), token = owner.register("DAEMON", "build");
+  await owner.track(token, owner.dispatch(token, () => Promise.resolve({ cliClosed: true })));
+  assert.equal(owner.quiescent(), false); const result = await owner.stop({ deadline: performance.now() + 20 });
+  assert.equal(result.complete, false); assert.deepEqual(result.residualOperations, [token.id]); owner.dispose();
+});
+test("D3 PREP01 Engine adapter rechecks authority after its actual socket await", async () => {
+  let block = false, writes = 0; const gate = d3Deferred(), owner = d3Owner();
+  const request = options => { if (options.method !== "GET") writes++; const req = new EventEmitter(); req.destroy = () => req.emit("close");
+    req.end = () => queueMicrotask(() => { const res = new EventEmitter(); res.statusCode = 200; res.destroy = () => {}; req.emit("response", res);
+      res.emit("data", Buffer.from(JSON.stringify({ ID: "SYNTHETIC_ENGINE", OSType: "linux", Architecture: "amd64" }))); res.emit("end"); req.emit("close"); }); return req; };
+  const engine = await createLinuxEngine({ synthetic: true, request, inspectSocket: async () => { if (block) await gate.promise; return { isSocket: () => true, isSymbolicLink: () => false, uid: 0, dev: 1, ino: 2 }; } });
+  block = true; const pending = withPreparationAuthority(owner, () => engine.call("POST", "/build")).catch(error => error);
+  owner.revoke(d3Error()); block = false; gate.resolve(); assert.equal((await pending).code, "LINUX_TEST_PRIMARY"); assert.equal(writes, 0); owner.dispose();
+});
+test("D3 a late bootstrap continuation cannot borrow cleanup authority after abort", () => {
+  for (const method of ["POST", "PUT", "DELETE"]) {
+    assert.throws(() => assertLinuxRuntimeDispatch({ method, dispatchClosed: true, resourcePhase: "BOOTSTRAP", cleanup: true }), /P1C_ABORTED/u);
+    assert.throws(() => assertLinuxRuntimeDispatch({ method, dispatchClosed: true, resourcePhase: "CLOSING", cleanup: false }), /P1C_ABORTED/u);
+    assert.doesNotThrow(() => assertLinuxRuntimeDispatch({ method, dispatchClosed: true, resourcePhase: "CLOSING", cleanup: true }));
+  }
+});
+test("D3 PREP01 correlated daemon response and fresh instance are both required", async () => {
+  const owner = d3Owner(), reference = "docker.io/library/node@sha256:" + "a".repeat(64), config = "sha256:" + "b".repeat(64), gate = d3Deferred(); let inspecting;
+  const entered = new Promise(done => { inspecting = done; });
+  const engine = { id: "SYNTHETIC_ENGINE", verify: async () => ({}), async call(method, _path, _body, options = {}) {
+    if (method === "POST") { options.beforeDispatch(); return Buffer.from(JSON.stringify({ status: "Digest: sha256:" + "a".repeat(64) }) + "\n" + JSON.stringify({ status: "Status: Downloaded newer image for " + reference }) + "\n"); }
+    inspecting(); await gate.promise; return { Id: config, Os: "linux", Architecture: "amd64", RepoDigests: [reference] };
+  } };
+  const pending = runLinuxPreparationDaemon({ authority: owner, engine, kind: "pull", reference, expectedConfig: config }).catch(error => error);
+  await entered; owner.revoke(d3Error()); gate.resolve(); assert.equal((await pending).code, "LINUX_TEST_PRIMARY");
+  await new Promise(done => setImmediate(done)); const result = await owner.stop({ deadline: performance.now() + 20 }); assert.equal(result.complete, false); owner.dispose();
+});
+test("D3 daemon stream rejects errors and never infers completion from image presence", () => {
+  assert.throws(() => parseLinuxDaemonCompletion(Buffer.from('{"error":"synthetic failure"}\n'), "build"), /DAEMON_OPERATION_FAILED/u);
+  assert.throws(() => parseLinuxDaemonCompletion(Buffer.from('{"stream":"image visible"}\n'), "build"), /COMPLETION_MISSING/u);
+  const id = "sha256:" + "a".repeat(64); assert.equal(parseLinuxDaemonCompletion(Buffer.from(JSON.stringify({ aux: { ID: id } }) + "\n"), "build").artifactId, id);
+});
+test("D3 preparation cannot issue application RPCs and cleanup cannot recreate preparation", () => {
+  for (const path of ["/containers/create?name=foreign", "/networks/create", "/containers/" + "a".repeat(64) + "/attach"]) {
+    const owner = d3Owner(); assert.throws(() => owner.assertEngineDispatch("POST", path), /RPC_FORBIDDEN/u); assert.equal(owner.revoked, true); owner.dispose();
+  }
+  const imageId = "sha256:" + "a".repeat(64), owner = createPreparationAuthority({ deadline: performance.now() + 1000, now: () => performance.now(), purpose: "OWNED_ARTIFACT_CLEANUP", ownedImage: imageId });
+  owner.assertEngineDispatch("DELETE", "/images/" + imageId); assert.throws(() => owner.register("TOOL", "forbidden-spawn"), /PURPOSE_FORBIDDEN/u); assert.equal(owner.revoked, true); owner.dispose();
+});
+for (const wrongOwner of [false, true]) test("D3 owned image cleanup " + (wrongOwner ? "rejects foreign provenance" : "requires response, absence and resource reconciliation"), async () => {
+  const owner = d3Owner(), id = "sha256:" + "a".repeat(64), image = { imageId: id, preparationOwner: owner.attempt, sourceFreeze: "b".repeat(64), preparationResources: { containers: [], networks: [], volumes: [] } };
+  const events = []; let removed = false, deletes = 0;
+  const engine = { id: "SYNTHETIC_ENGINE", async call(method, path, _body, options = {}) {
+    if (method === "DELETE") { options.beforeDispatch(); deletes++; removed = true; return Buffer.from("[]"); }
+    if (path.startsWith("/images/")) { if (removed) throw new LinuxSafetyError("LINUX_ENGINE_HTTP_404"); return { Id: id, Config: { Labels: { "piccadilly.preparation": wrongOwner ? d3Uuid : owner.attempt, "piccadilly.source": image.sourceFreeze } } }; }
+    return path === "/volumes" ? { Volumes: [] } : [];
+  } };
+  const work = () => removeOwnedLinuxImage({ image, engine, authority: owner, record: (kind, data) => events.push(assertLinuxEvidenceRow({ seq: events.length + 1, kind, monotonicMs: 1, data })) });
+  if (wrongOwner) { await assert.rejects(work(), /IMAGE_OWNERSHIP/u); assert.equal(deletes, 0); }
+  else { await work(); assert.equal(deletes, 1); assert.equal(owner.quiescent(), true); assert.equal(events.at(-1).data.removed, true); }
+  owner.dispose();
+});
+// CLEANUP01: exercise the real removal and census path with synthetic Engine
+// observations. Missing observations and partial removal must never resolve.
+const cleanup01Cases = [
+  { name: "image still present", mode: "present", code: "LINUX_DISCOVERY_IMAGE_RESIDUAL" },
+  { name: "delete failure", mode: "delete-failure", code: "LINUX_ENGINE_HTTP_500" },
+  { name: "missing delete response", mode: "missing-response", code: "LINUX_DISCOVERY_IMAGE_RESIDUAL" },
+  { name: "absence observation failure", mode: "read-failure", code: "LINUX_ENGINE_HTTP_500" },
+  { name: "residual container", mode: "container", code: "LINUX_ARTIFACT_RESIDUAL_RESOURCES" },
+  { name: "residual network", mode: "network", code: "LINUX_ARTIFACT_RESIDUAL_RESOURCES" },
+  { name: "residual volume", mode: "volume", code: "LINUX_ARTIFACT_RESIDUAL_RESOURCES" },
+  { name: "partial cleanup without census", mode: "missing-census", code: "LINUX_ENGINE_HTTP_500" },
+  { name: "already absent without current ownership proof", mode: "already-absent", code: "LINUX_ENGINE_HTTP_404" },
+];
+function cleanup01Fixture(mode) {
+  const owner = d3Owner(), id = "sha256:" + "a".repeat(64), events = [];
+  const image = { imageId: id, preparationOwner: owner.attempt, sourceFreeze: "b".repeat(64), preparationResources: { containers: [], networks: [], volumes: [] } };
+  let removed = false, deletes = 0, absenceReads = 0, censusReads = 0;
+  const engine = { id: "SYNTHETIC_ENGINE", async call(method, path, _body, options = {}) {
+    if (method === "DELETE") {
+      options.beforeDispatch(); deletes++;
+      if (mode === "delete-failure") throw new LinuxSafetyError("LINUX_ENGINE_HTTP_500");
+      removed = true; return mode === "missing-response" ? undefined : Buffer.from("[]");
+    }
+    if (path.startsWith("/images/")) {
+      if (mode === "already-absent") throw new LinuxSafetyError("LINUX_ENGINE_HTTP_404");
+      if (removed) {
+        absenceReads++;
+        if (mode === "read-failure") throw new LinuxSafetyError("LINUX_ENGINE_HTTP_500");
+        if (mode !== "present") throw new LinuxSafetyError("LINUX_ENGINE_HTTP_404");
+      }
+      return { Id: id, Config: { Labels: { "piccadilly.preparation": owner.attempt, "piccadilly.source": image.sourceFreeze } } };
+    }
+    censusReads++;
+    if (mode === "missing-census") throw new LinuxSafetyError("LINUX_ENGINE_HTTP_500");
+    if (path === "/containers/json?all=1") return mode === "container" ? [{ Id: "c".repeat(64) }] : [];
+    if (path === "/networks") return mode === "network" ? [{ Id: "d".repeat(64) }] : [];
+    assert.equal(path, "/volumes"); return { Volumes: mode === "volume" ? [{ Name: "synthetic-residual-volume" }] : [] };
+  } };
+  return { owner, events, counts: () => ({ deletes, absenceReads, censusReads }), work: () => removeOwnedLinuxImage({ image, engine, authority: owner,
+    record: (kind, data) => events.push(assertLinuxEvidenceRow({ seq: events.length + 1, kind, monotonicMs: 1, data })) }) };
+}
+for (const scenario of cleanup01Cases) test("CLEANUP01 rejects " + scenario.name, async () => {
+  const fixture = cleanup01Fixture(scenario.mode); let resolved = false;
+  try {
+    await assert.rejects(fixture.work().then(() => { resolved = true; }), error => error.code === scenario.code);
+    assert.equal(resolved, false);
+    assert.equal(fixture.counts().deletes, scenario.mode === "already-absent" ? 0 : 1);
+    if (["present", "missing-response", "read-failure", "container", "network", "volume", "missing-census"].includes(scenario.mode)) assert.equal(fixture.counts().absenceReads, 1);
+    if (["container", "network", "volume", "missing-census"].includes(scenario.mode)) assert.equal(fixture.counts().censusReads, 3);
+    if (["present", "delete-failure", "missing-response", "read-failure", "already-absent"].includes(scenario.mode)) assert.equal(fixture.events.some(row => row.kind === "image-disposition" && row.data.removed), false);
+  } finally { fixture.owner.dispose(); }
+});
+test("CLEANUP01 cleanup failure preserves a previous primary and leaves daemon join incomplete", async () => {
+  const fixture = cleanup01Fixture("delete-failure"), outcome = createLinuxAdmissionOutcome("ARTIFACT_DISCOVERY");
+  preserveLinuxAdmissionFailure(outcome, new LinuxSafetyError("LINUX_TEST_PRIMARY"));
+  try {
+    await assert.rejects(fixture.work(), error => { preserveLinuxAdmissionFailure(outcome, error); return error.code === "LINUX_ENGINE_HTTP_500"; });
+    const stopped = await fixture.owner.stop({ deadline: performance.now() + 30 });
+    assert.equal(outcome.primary, "LINUX_TEST_PRIMARY"); assert.deepEqual(outcome.secondary, ["LINUX_ENGINE_HTTP_500"]);
+    assert.equal(outcome.status, "FAIL"); assert.equal(stopped.complete, false);
+    assert.ok(stopped.failures.includes("LINUX_PREPARATION_RECONCILIATION_INCOMPLETE"));
+    assert.equal(fixture.owner.revoked, true); assert.throws(() => fixture.owner.assert(), /LINUX_ENGINE_HTTP_500/u);
+    let lateDispatch = 0; assert.throws(() => fixture.owner.dispatch(fixture.owner.records()[0], () => lateDispatch++), /LINUX_ENGINE_HTTP_500/u); assert.equal(lateDispatch, 0);
+  } finally { fixture.owner.dispose(); }
+});
+const r1Workflow = () => readFile(new URL("../.github/workflows/m13-p1-c-linux-qualification.yml", import.meta.url), "utf8");
+const r1Inline = text => [...text.matchAll(/^\s+node --input-type=module -e '([\s\S]*?)^\s+'[ \t]*$/gmu)].map(match => match[1]);
+test("R1 WF01 parses every actual inline JavaScript block individually", async () => {
+  const text = await r1Workflow(), blocks = r1Inline(text);
+  assert.equal(blocks.length, 2); assert.equal(blocks.length, (text.match(/node --input-type=module -e '/gu) ?? []).length);
+  for (const block of blocks) { const result = spawnSync(process.execPath, ["--input-type=module", "--check"], { input: block, encoding: "utf8", timeout: 10000 }); assert.equal(result.status, 0, result.stderr); }
+});
+function r1CompleteOutcome() {
+  const outcome = createLinuxAdmissionOutcome("QUALIFIED_WORKLOAD");
+  Object.assign(outcome, { status: "PASS_VERIFIED", preparationComplete: true, daemonReconciled: true, processesJoined: true,
+    sqlQuiescence: "PASS_VERIFIED", teardownComplete: true, artifactCleanup: "PASS_VERIFIED" });
+  for (const key of Object.keys(outcome.scenarios)) outcome.scenarios[key] = "PASS_VERIFIED";
+  return outcome;
+}
+for (const mode of ["nominal", "failure", "missing", "malformed", "retention-failed", "previous-primary", "incomplete"]) test("R1 WF01 executes the actual final inline step: " + mode, async () => {
+  const text = await r1Workflow(), block = r1Inline(text).at(-1), root = await mkdtemp(join(tmpdir(), "p1c-r1-wf-"));
+  try {
+    const source = join(root, "source/scripts"), sanitized = join(root, "sanitized"); await mkdir(source, { recursive: true }); await mkdir(sanitized);
+    // Exact source copies allow the unchanged inline import path to execute;
+    // no project CLI, bootstrap, Docker or database operation is invoked.
+    for (const name of ["m13-p1-worker-linux-image.mjs", "m13-p1-worker-linux-entry.mjs"]) {
+      const bytes = await readFile(new URL(name, import.meta.url)); await writeFile(join(source, name), bytes); assert.equal(d3Hash(await readFile(join(source, name))), d3Hash(bytes));
+    }
+    const outcome = r1CompleteOutcome();
+    if (["failure", "previous-primary"].includes(mode)) preserveLinuxAdmissionFailure(outcome, new LinuxSafetyError("LINUX_TEST_PRIMARY"), { secondary: ["LINUX_UPLOAD_NOT_VERIFIED"] });
+    if (mode === "incomplete") delete outcome.preparationComplete;
+    if (mode !== "missing") await writeFile(join(sanitized, "outcome.json"), mode === "malformed" ? "{invalid-json" : JSON.stringify(outcome));
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", block], { encoding: "utf8", timeout: 10000, maxBuffer: 128 * 1024,
+      env: { SystemRoot: process.env.SystemRoot, P1C_TASK_DIRECTORY: root, P1C_SANITIZED_DIRECTORY: sanitized,
+        RETENTION_STEP_OUTCOME: mode === "retention-failed" ? "failure" : "success", RETENTION_ARTIFACT_ID: "1",
+        RETENTION_ARTIFACT_URL: "https://github.com/TommyGiacopini/piccadilly-booking/actions/runs/1/artifacts/1",
+        RETENTION_ARTIFACT_DIGEST: "a".repeat(64), P1C_ARCHIVE_SHA256: "b".repeat(64) } });
+    assert.equal(result.error, undefined);
+    if (mode === "nominal") { assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(result.stdout).complete, true); }
+    else {
+      assert.notEqual(result.status, 0);
+      if (mode === "malformed") { assert.equal(result.stdout, ""); assert.match(result.stderr, /SyntaxError/u); }
+      else { const summary = JSON.parse(result.stdout);
+        if (mode === "missing") {
+          await assert.rejects(readFile(join(sanitized, "outcome.json")), { code: "ENOENT" });
+          assert.equal(result.status, 2); assert.equal(result.signal, null); assert.equal(result.stderr, "");
+          assert.ok(!summary.complete); assert.notEqual(summary.status, "PASS_VERIFIED");
+          assert.equal(summary.status, "NOT_COMPLETED"); assert.equal(summary.mode, "NOT_VERIFIABLE");
+          assert.equal(summary.primary, "LINUX_RUNTIME_EVIDENCE_INCOMPLETE");
+          assert.deepEqual(summary.omissions, ["LINUX_RUNTIME_EVIDENCE_INCOMPLETE"]); assert.deepEqual(summary.secondary, []);
+        } else assert.equal(summary.complete, false);
+        if (["failure", "previous-primary"].includes(mode)) { assert.equal(summary.primary, "LINUX_TEST_PRIMARY"); assert.deepEqual(summary.secondary, ["LINUX_UPLOAD_NOT_VERIFIED"]); }
+        if (["missing", "incomplete"].includes(mode)) assert.equal(summary.status, "NOT_COMPLETED");
+      }
+    }
+  } finally { assert.ok(isAbsolute(root) && root.startsWith(join(tmpdir(), "p1c-r1-wf-"))); await rm(root, { recursive: true, force: true }); }
+});
+
+const r3WarningsCases = [
+  ["empty inventory and null warnings", { Volumes: [], Warnings: null }, []],
+  ["empty inventory and empty warnings", { Volumes: [], Warnings: [] }, []],
+  ["absent optional warnings", { Volumes: [] }, []],
+  ["identified inventory and null warnings", { Volumes: [{ Name: "retained-volume" }], Warnings: null }, ["retained-volume"]],
+  ["missing inventory despite null warnings", { Warnings: null }, null],
+  ["null inventory despite null warnings", { Volumes: null, Warnings: null }, null],
+  ["wrong inventory type", { Volumes: {}, Warnings: null }, null],
+  ["string warnings", { Volumes: [], Warnings: "warning" }, null],
+  ["numeric warnings", { Volumes: [], Warnings: 0 }, null],
+  ["object warnings", { Volumes: [], Warnings: {} }, null],
+  ["real nonempty warnings", { Volumes: [], Warnings: ["synthetic daemon warning"] }, null],
+  ["volume without identity", { Volumes: [{}], Warnings: null }, null],
+  ["duplicate volume identity", { Volumes: [{ Name: "duplicate" }, { Name: "duplicate" }], Warnings: null }, null],
+  ["explicit undefined warning value", { Volumes: [], Warnings: undefined }, null],
+  ["boolean warnings", { Volumes: [], Warnings: false }, null],
+  ["malformed nonempty warning elements", { Volumes: [], Warnings: [null] }, null],
+  ["empty string warnings", { Volumes: [], Warnings: "" }, null],
+];
+for (const [name, response, expected] of r3WarningsCases) test("R3 CENSUS02 validator: " + name, () => {
+  if (expected) assert.deepEqual(assertLinuxPreparationCensus([], [], response), { containers: [], networks: [], volumes: expected });
+  else assert.throws(() => assertLinuxPreparationCensus([], [], response), /LINUX_PREPARATION_CENSUS_(?:INVALID|INCOMPLETE|AMBIGUOUS)/u);
+});
+for (const missing of [false, true]) test("R3 CENSUS02 initial reader " + (missing ? "rejects absent inventory" : "accepts valid null warnings"), async () => {
+  const engine = r1CensusEngine({ containers: [], networks: [], volumes: missing ? { Warnings: null } : { Volumes: [], Warnings: null } });
+  if (missing) await assert.rejects(readLinuxPreparationResources(engine), /LINUX_PREPARATION_CENSUS_INVALID/u);
+  else assert.deepEqual(await readLinuxPreparationResources(engine), { containers: [], networks: [], volumes: [] });
+  assert.equal(engine.gets, 3);
+});
+for (const missing of [false, true]) test("R3 CENSUS02 exact post-build census block " + (missing ? "rejects absent inventory" : "accepts valid null warnings"), async () => {
+  const source = prepareLinuxImage.toString(), begin = source.indexOf("const resourcesAfterBuild = await readLinuxPreparationResources(engine);"), end = source.indexOf("linuxAssert(/^sha256:", begin);
+  assert.ok(begin > 0 && end > begin);
+  // Execute the actual post-build statements, not a rewritten census predicate.
+  // Image build and all earlier native preparation remain deliberately NOT_RUN.
+  const block = source.slice(begin, end), execute = runInNewContext("(async (engine, readLinuxPreparationResources, resourcesBeforeBuild, record, digest, built, linuxAssert) => {" + block + "return resourcesAfterBuild;})");
+  const { linuxAssert } = await import("./m13-p1-worker-linux-entry.mjs"), events = [];
+  const engine = Object.assign(r1CensusEngine({ containers: [], networks: [], volumes: missing ? { Warnings: null } : { Volumes: [], Warnings: null } }), { id: "SYNTHETIC_ENGINE" });
+  const baseline = { containers: [], networks: [], volumes: [] }, work = () => execute(engine, readLinuxPreparationResources, baseline, (kind, data) => events.push({ kind, data }), d3Hash, { Id: "sha256:" + "a".repeat(64) }, linuxAssert);
+  if (missing) { await assert.rejects(work(), /LINUX_PREPARATION_CENSUS_INVALID/u); assert.equal(events.length, 0); }
+  else { assert.deepEqual(await work(), baseline); assert.equal(events.length, 1); assert.equal(events[0].data.phase, "after-build"); }
+  assert.equal(engine.gets, 3);
+});
+for (const missing of [false, true]) test("R3 CENSUS02 actual image cleanup " + (missing ? "rejects the empty-object counterexample" : "accepts valid null warnings"), async () => {
+  const fixture = r1Removal({ containers: [], networks: [], volumes: missing ? {} : { Volumes: [], Warnings: null } });
+  try {
+    if (missing) { await assert.rejects(fixture.work(), /LINUX_PREPARATION_CENSUS_INVALID/u); assert.equal(fixture.events.some(row => row.kind === "image-disposition" && row.data.removed), false); }
+    else { await fixture.work(); assert.equal(fixture.events.at(-1).data.removed, true); assert.equal(fixture.owner.quiescent(), true); }
+    assert.equal(fixture.deletes(), 1); assert.equal(fixture.census.gets, 3);
+  } finally { fixture.owner.dispose(); }
+});
+test("R3 CENSUS02 malformed cleanup warnings preserve a previous primary", async () => {
+  const fixture = r1Removal({ ...r1Empty(), volumes: { Volumes: [], Warnings: {} } }), outcome = createLinuxAdmissionOutcome("ARTIFACT_DISCOVERY");
+  preserveLinuxAdmissionFailure(outcome, new LinuxSafetyError("LINUX_TEST_PRIMARY"));
+  try { await assert.rejects(fixture.work(), error => { preserveLinuxAdmissionFailure(outcome, error); return error.code === "LINUX_PREPARATION_CENSUS_INCOMPLETE"; });
+    assert.equal(outcome.primary, "LINUX_TEST_PRIMARY"); assert.deepEqual(outcome.secondary, ["LINUX_PREPARATION_CENSUS_INCOMPLETE"]); assert.equal(outcome.status, "FAIL");
+  } finally { fixture.owner.dispose(); }
+});
+test("R3 CENSUS02 actual cleanup refuses real daemon warnings", async () => {
+  const fixture = r1Removal({ ...r1Empty(), volumes: { Volumes: [], Warnings: ["synthetic daemon warning"] } });
+  try { await assert.rejects(fixture.work(), /LINUX_PREPARATION_CENSUS_INCOMPLETE/u); } finally { fixture.owner.dispose(); }
+});
+test("R3 CENSUS02 actual cleanup refuses a residual volume with null warnings", async () => {
+  const fixture = r1Removal({ ...r1Empty(), volumes: { Volumes: [{ Name: "unexpected-residual" }], Warnings: null } });
+  try { await assert.rejects(fixture.work(), /LINUX_ARTIFACT_RESIDUAL_RESOURCES/u); } finally { fixture.owner.dispose(); }
+});
+test("R3 CENSUS02 a volume GET failure never becomes an empty census", async () => {
+  const fixture = r1Removal({ ...r1Empty(), failVolumes: true });
+  try { await assert.rejects(fixture.work(), /LINUX_ENGINE_HTTP_500/u); } finally { fixture.owner.dispose(); }
+});
+test("R3 CENSUS02 image absence cannot seal an owner with incomplete join", async () => {
+  const fixture = r1Removal({ ...r1Empty(), volumes: { Volumes: [], Warnings: null } });
+  fixture.owner.registerChannel({ stop() {}, joined: () => false });
+  try { await fixture.work(); assert.equal(fixture.owner.quiescent(), false); assert.throws(() => fixture.owner.seal(), /LINUX_PREPARATION_JOIN_INCOMPLETE/u); }
+  finally { fixture.owner.dispose(); }
+});
+test("R3 CENSUS02 unverified image ownership cannot dispatch cleanup", async () => {
+  const owner = d3Owner(), id = "sha256:" + "a".repeat(64), calls = [];
+  const engine = { id: "SYNTHETIC_ENGINE", async call(method, path) { calls.push([method, path]); return { Id: id, Config: { Labels: { "piccadilly.preparation": "foreign", "piccadilly.source": "b".repeat(64) } } }; } };
+  try { await assert.rejects(removeOwnedLinuxImage({ image: { imageId: id, preparationOwner: owner.attempt, sourceFreeze: "b".repeat(64) }, engine, authority: owner, record: () => assert.fail("unowned cleanup evidence") }), /LINUX_DISCOVERY_IMAGE_OWNERSHIP/u);
+    assert.deepEqual(calls, [["GET", "/images/" + id + "/json"]]);
+  } finally { owner.dispose(); }
+});
+test("R3 CENSUS02 the actual Engine decoder preserves null warnings for the reader", async () => {
+  const request = options => { const req = new EventEmitter(); req.destroy = () => req.emit("close");
+    req.end = () => queueMicrotask(() => { const res = new EventEmitter(); res.statusCode = 200; res.destroy = () => {}; req.emit("response", res);
+      const body = options.path.endsWith("/info") ? { ID: "SYNTHETIC_ENGINE", OSType: "linux", Architecture: "amd64" } : options.path.endsWith("/volumes") ? { Volumes: [], Warnings: null } : [];
+      res.emit("data", Buffer.from(JSON.stringify(body))); res.emit("end"); req.emit("close"); }); return req; };
+  const engine = await createLinuxEngine({ synthetic: true, request, inspectSocket: async () => ({ isSocket: () => true, isSymbolicLink: () => false, uid: 0, dev: 1, ino: 2 }) });
+  const wire = await engine.call("GET", "/volumes"); assert.equal(Object.hasOwn(wire, "Warnings"), true); assert.equal(wire.Warnings, null);
+  assert.deepEqual(await readLinuxPreparationResources(engine), { containers: [], networks: [], volumes: [] }); assert.equal(engine.joined(), true);
+});
+
+const r1Empty = () => ({ containers: [], networks: [], volumes: { Volumes: [] } });
+function r1CensusEngine(observation) {
+  let gets = 0;
+  return { get gets() { return gets; }, async call(method, path) {
+    assert.equal(method, "GET"); gets++;
+    if (path === "/containers/json?all=1") return observation.containers;
+    if (path === "/networks") return observation.networks;
+    assert.equal(path, "/volumes"); if (observation.failVolumes) throw new LinuxSafetyError("LINUX_ENGINE_HTTP_500"); return observation.volumes;
+  } };
+}
+function r1Removal(observation, preparationResources = { containers: [], networks: [], volumes: [] }) {
+  const owner = d3Owner(), id = "sha256:" + "a".repeat(64), census = r1CensusEngine(observation), events = [];
+  let removed = false, deletes = 0;
+  const image = { imageId: id, preparationOwner: owner.attempt, sourceFreeze: "b".repeat(64), preparationResources };
+  const engine = { id: "SYNTHETIC_ENGINE", async call(method, path, body, options = {}) {
+    if (method === "DELETE") { assert.equal(path, "/images/" + id); options.beforeDispatch(); deletes++; removed = true; return Buffer.from("[]"); }
+    if (path.startsWith("/images/")) { assert.equal(method, "GET"); if (removed) throw new LinuxSafetyError("LINUX_ENGINE_HTTP_404"); return { Id: id, Config: { Labels: { "piccadilly.preparation": owner.attempt, "piccadilly.source": image.sourceFreeze } } }; }
+    return census.call(method, path, body);
+  } };
+  return { owner, events, deletes: () => deletes, census, work: () => removeOwnedLinuxImage({ image, engine, authority: owner,
+    record: (kind, data) => events.push(assertLinuxEvidenceRow({ seq: events.length + 1, kind, monotonicMs: 1, data })) }) };
+}
+const r1InvalidCensus = [
+  ["missing Volumes WORK3 counterexample", () => ({ volumes: {} })],
+  ["wrong Volumes type", () => ({ volumes: { Volumes: {} } })],
+  ["null Volumes outside the array contract", () => ({ volumes: { Volumes: null } })],
+  ["null volume response", () => ({ volumes: null })],
+  ["missing volume identity", () => ({ volumes: { Volumes: [{}] } })],
+  ["invalid volume identity", () => ({ volumes: { Volumes: [{ Name: "" }] } })],
+  ["incomplete container list", () => ({ containers: {} })],
+  ["container without identity", () => ({ containers: [{}] })],
+  ["incomplete network list", () => ({ networks: null })],
+  ["network without identity", () => ({ networks: [{}] })],
+  ["duplicate identity", () => ({ networks: [{ Id: "a".repeat(64) }, { Id: "a".repeat(64) }] })],
+  ["volume warning means incomplete observation", () => ({ volumes: { Volumes: [], Warnings: ["synthetic incomplete observation"] } })],
+  ["volume transport failure", () => ({ failVolumes: true })],
+];
+for (const stage of ["preparation", "cleanup"]) for (const [name, invalid] of r1InvalidCensus) test("R1 CENSUS01 " + stage + " rejects " + name, async () => {
+  const observation = { ...r1Empty(), ...invalid() };
+  if (stage === "preparation") { const engine = r1CensusEngine(observation); await assert.rejects(readLinuxPreparationResources(engine), /LINUX_(?:PREPARATION_CENSUS|ENGINE_HTTP_500)/u); assert.equal(engine.gets, 3); }
+  else { const fixture = r1Removal(observation); try { await assert.rejects(fixture.work(), /LINUX_(?:PREPARATION_CENSUS|ENGINE_HTTP_500)/u);
+    assert.equal(fixture.deletes(), 1); assert.equal(fixture.census.gets, 3); assert.equal(fixture.events.some(row => row.kind === "image-disposition" && row.data.removed), false);
+  } finally { fixture.owner.dispose(); } }
+});
+test("R1 CENSUS01 valid empty initial and final inventories complete nominal cleanup", async () => {
+  assert.deepEqual(await readLinuxPreparationResources(r1CensusEngine(r1Empty())), { containers: [], networks: [], volumes: [] });
+  const fixture = r1Removal(r1Empty()); try { await fixture.work(); assert.equal(fixture.census.gets, 3); assert.equal(fixture.events.at(-1).data.removed, true); assert.equal(fixture.owner.quiescent(), true); }
+  finally { fixture.owner.dispose(); }
+});
+test("R1 CENSUS01 a valid census observes existing resources without adopting or deleting them", async () => {
+  const observation = { containers: [{ Id: "c".repeat(64) }], networks: [{ Id: "d".repeat(64) }], volumes: { Volumes: [{ Name: "foreign-volume" }], Warnings: [] } };
+  const baseline = await readLinuxPreparationResources(r1CensusEngine(observation));
+  const fixture = r1Removal(observation, baseline); try { await fixture.work(); assert.equal(fixture.deletes(), 1); assert.deepEqual(fixture.events.find(row => row.kind === "preparation-resources").data.containers, baseline.containers); }
+  finally { fixture.owner.dispose(); }
+});
+test("R1 CENSUS01 residual resources fail and incomplete census preserves the prior primary", async () => {
+  const residual = r1Removal({ ...r1Empty(), containers: [{ Id: "c".repeat(64) }] });
+  try { await assert.rejects(residual.work(), /LINUX_ARTIFACT_RESIDUAL_RESOURCES/u); } finally { residual.owner.dispose(); }
+  const fixture = r1Removal({ ...r1Empty(), volumes: {} }), outcome = createLinuxAdmissionOutcome("ARTIFACT_DISCOVERY"); preserveLinuxAdmissionFailure(outcome, new LinuxSafetyError("LINUX_TEST_PRIMARY"));
+  try { await assert.rejects(fixture.work(), error => { preserveLinuxAdmissionFailure(outcome, error); return error.code === "LINUX_PREPARATION_CENSUS_INVALID"; });
+    assert.equal(outcome.primary, "LINUX_TEST_PRIMARY"); assert.deepEqual(outcome.secondary, ["LINUX_PREPARATION_CENSUS_INVALID"]); assert.equal(outcome.status, "FAIL");
+  } finally { fixture.owner.dispose(); }
+});
+test("R1 CENSUS01 both build boundaries use the same real census validator", () => {
+  const source = prepareLinuxImage.toString(); assert.equal((source.match(/await readLinuxPreparationResources\(engine\)/gu) ?? []).length, 2);
+  assert.deepEqual(assertLinuxPreparationCensus([], [], { Volumes: [], Warnings: [] }), { containers: [], networks: [], volumes: [] });
+});
+for (const offsetSeconds of [0, 1, 24, 25, 60, 120, 599, 600, 700]) test("R1 STEP01 preserves absolute phase boundaries at step offset " + offsetSeconds, async () => {
+  const text = await r1Workflow(), step = text.split("id: admission")[1].split("- name: Finalize")[0], minutes = Number(/timeout-minutes: (\d+)/u.exec(step)?.[1]);
+  let now = 100 + offsetSeconds * 1000; const schedule = linuxJobSchedule(100, () => now), before = JSON.stringify(schedule.ends);
+  assert.equal(minutes, Math.ceil((schedule.ends.finalization - schedule.started) / 60000));
+  const relativeTimeout = now + minutes * 60000;
+  assert.ok(relativeTimeout > schedule.ends.finalization); assert.equal(schedule.ends.finalization - schedule.started, 1525000);
+  assert.equal(schedule.ends.retention - schedule.ends.finalization, 120000); assert.equal(schedule.jobDeadline - schedule.ends.retention, 155000);
+  assert.equal(schedule.ends.teardown - schedule.ends.worker, 70000);
+  if (offsetSeconds < 600) assert.equal(schedule.admit("preparation"), schedule.started + 600000); else assert.throws(() => schedule.admit("preparation"), /PHASE_EXPIRED/u);
+  now = schedule.ends.finalization; assert.throws(() => schedule.admit("finalization"), /PHASE_EXPIRED/u); assert.equal(JSON.stringify(schedule.ends), before);
+});
+test("R1 STEP01 the shared finalization window cannot reset and the job remains 1800 seconds", () => {
+  const start = 100, schedule = linuxJobSchedule(start, () => start), finalStart = schedule.ends.teardown;
+  assert.equal(linuxFinalizationWindow(schedule, finalStart, finalStart + 29999), schedule.ends.finalization);
+  assert.throws(() => linuxFinalizationWindow(schedule, finalStart, finalStart + 30000), /FINALIZATION_DEADLINE/u);
+  assert.equal(schedule.jobDeadline - schedule.started, 1800000); assert.equal(ADMISSION_PHASE_SECONDS.preparation, 600); assert.equal(ADMISSION_PHASE_SECONDS.worker, 600);
+});
+test("D3 exact XZ helper identity, argv hash, parent, instance and namespace are mandatory", () => {
+  const root = { pid: 100, pidns: "pid:[1]", netns: "net:[2]", mntns: "mnt:[3]", bootId: d3Uuid };
+  const helper = { path: "/usr/bin/xz", sha256: "a".repeat(64), commandSha256: "b".repeat(64) };
+  const observed = { ...root, pid: 101, parent: 100, executable: helper.path, executableSha256: helper.sha256, commandSha256: helper.commandSha256, state: "S", startTicks: "123" };
+  assert.equal(assertLinuxToolDescendant(observed, root, [helper], null, false), observed);
+  for (const changes of [{ parent: 90 }, { executableSha256: "c".repeat(64) }, { commandSha256: "c".repeat(64) }, { netns: "net:[4]" }, { mntns: "mnt:[4]" }, { startTicks: "124" }]) {
+    assert.throws(() => assertLinuxToolDescendant({ ...observed, ...changes }, root, [helper], observed, false), /UNKNOWN_TOOL_DESCENDANT/u);
+  }
+  assert.throws(() => assertLinuxToolDescendant(observed, root, [], null, false), /UNKNOWN_TOOL_DESCENDANT/u);
+});
+
+test("D3 V2 plan is explicit and does not silently extend the historical V1 contract", () => {
+  const plan = d3Plan(); assert.equal(d3Validate(plan), plan); assert.equal(Object.keys(plan).length, 19);
+  assert.throws(() => d3Validate({ ...plan, v: 1 }), /PLAN_INVALID/u); assert.throws(() => d3Validate({ ...plan, v: 3 }), /PLAN_INVALID/u);
+});
+for (const [name, raw] of [["duplicate", '{"v":1,"v":2}'], ["escape alias", '{"v":1,"\\u0076":2}'], ["single escaped field alias", '{"\\u0076":1}'], ["nested alias", '{"outer":{"a":1,"\\u0061":2}}'], ["non-finite", '{"a":1e999}']]) {
+  test("D3 raw manifest rejects " + name, () => assert.throws(() => parseLinuxJson(Buffer.from(raw)), /JSON_AMBIGUOUS/u));
+}
+test("D3 wrong SHA, missing identity and incomplete XZ profile fail closed", () => {
+  const plan = d3Plan(), bytes = Buffer.from(JSON.stringify(plan)); assert.throws(() => assertLinuxArtifactPlan(plan, bytes, "0".repeat(64)), /APPROVAL_MISSING/u);
+  const missing = d3Plan(); delete missing.init.sha256; assert.throws(() => d3Validate(missing), /PLAN_INVALID/u);
+  const xz = d3Plan(); delete xz.preparation.xz.sha256; assert.throws(() => d3Validate(xz), /XZ_PROFILE_INCOMPLETE/u);
+});
+test("D3 approval binding rejects commit, tree, freeze, workflow and bootstrap drift", () => {
+  const plan = d3Validate(d3Plan()), observed = d3Observed(plan);
+  assert.equal(assertLinuxApprovalBinding(plan, observed, "d".repeat(64), plan.purpose).purpose, "ARTIFACT_DISCOVERY");
+  for (const changes of [{ commit: "0".repeat(40) }, { tree: "0".repeat(40) }, { sourceFreeze: "0".repeat(64) }, { workflowSha256: "0".repeat(64) }, { bootstrapIdentity: { version: "0.0.1", sha256: "0".repeat(64) } }]) {
+    assert.throws(() => assertLinuxApprovalBinding(plan, { ...observed, ...changes }, "d".repeat(64), plan.purpose), /BINDING_MISMATCH/u);
+  }
+});
+test("D3 discovery cannot fall through to workload or create application authority", async () => {
+  const calls = []; const result = await selectLinuxAdmissionMode("ARTIFACT_DISCOVERY", { discovery: () => { calls.push("discovery"); return "observations"; }, workload: () => calls.push("application") });
+  assert.equal(result, "observations"); assert.deepEqual(calls, ["discovery"]);
+  const plan = d3Plan(); assert.throws(() => createLinuxWorkloadAdmission({ plan, observed: d3Observed(plan), authorized: true }), /WORKLOAD_NOT_AUTHORIZED/u);
+  assert.equal(isLinuxWorkloadAdmission({ mode: "QUALIFIED_WORKLOAD" }), false);
+});
+test("D3 a workload requires measured-approved disk and separate human authorization", () => {
+  const plan = d3Plan("QUALIFIED_WORKLOAD"); plan.diskBudget.basis = "DISCOVERY_CAP"; assert.throws(() => d3Validate(plan), /WORKLOAD_DISK_NOT_APPROVED/u);
+  const valid = d3Plan("QUALIFIED_WORKLOAD"); assert.throws(() => createLinuxWorkloadAdmission({ plan: valid, observed: d3Observed(valid), authorized: false }), /WORKLOAD_NOT_AUTHORIZED/u);
+});
+test("D3 exact synthetic workload binding grants only an in-process capability", () => {
+  const plan = d3Validate(d3Plan("QUALIFIED_WORKLOAD")), schedule = linuxJobSchedule(100, () => 100);
+  const admission = createLinuxWorkloadAdmission({ plan, observed: d3Observed(plan), manifestSha256: "e".repeat(64), authorized: true, schedule, record() {} });
+  assert.equal(isLinuxWorkloadAdmission(admission), true); assert.equal(admission.mode, "QUALIFIED_WORKLOAD");
+  assert.equal(isLinuxWorkloadAdmission(JSON.parse(JSON.stringify(admission))), false);
+});
+
+test("D3 disk groups shared devices once and keeps teardown and evidence reserves", async () => {
+  const budget = d3Plan().diskBudget, allocation = budget.phases[0].allocations[0]; budget.phases[0].allocations.push({ ...allocation, category: "temp", incrementalBytes: 20 });
+  const measured = await admitLinuxDisk({ budget, phase: "dependencies", paths: { root: "/synthetic/root", temp: "/synthetic/temp" }, measure: async () => ({ device: "1", availableBytes: 100, totalBytes: 200 }) });
+  assert.equal(measured.filesystems.length, 1); assert.equal(measured.filesystems[0].requiredBytes, 70); assert.equal(measured.filesystems[0].availableBytes, 100);
+  assert.equal(measured.enforcement, "OBSERVATION_NOT_HARD_DOCKER_QUOTA");
+});
+test("D3 a budget cannot silently omit a relevant Docker or evidence filesystem", async () => {
+  const owner = d3Owner();
+  await assert.rejects(admitLinuxDisk({ budget: d3Plan().diskBudget, phase: "dependencies", paths: { root: "/synthetic/root", docker: "/synthetic/docker" }, authority: owner,
+    measure: async () => ({ device: "1", availableBytes: 100, totalBytes: 200 }) }), /COVERAGE_INCOMPLETE/u);
+  assert.equal(owner.revoked, true); owner.dispose();
+});
+for (const kind of ["insufficient", "missing measurement", "unknown budget", "missing phase"]) {
+  test("D3 disk rejects " + kind + " and revokes new dispatch", async () => {
+    const owner = d3Owner(); let calls = 0;
+    const options = { budget: d3Plan().diskBudget, phase: "dependencies", paths: { root: "/synthetic" }, authority: owner,
+      measure: async () => kind === "missing measurement" ? {} : ({ device: "1", availableBytes: 1, totalBytes: 200 }) };
+    if (kind === "unknown budget") options.budget = null; if (kind === "missing phase") options.phase = "unknown";
+    await assert.rejects(admitLinuxDisk(options), /LINUX_DISK_/u); assert.equal(owner.revoked, true);
+    assert.throws(() => owner.dispatch(owner.register("TOOL", "forbidden"), () => calls++), /LINUX_DISK_/u); assert.equal(calls, 0); owner.dispose();
+  });
+}
+test("D3 disk observation during an operation detects output excess without claiming a hard quota", async () => {
+  const owner = d3Owner(); let sample = 0;
+  await assert.rejects(runLinuxDiskPhase({ budget: d3Plan().diskBudget, phase: "dependencies", paths: { root: "/synthetic" }, authority: owner,
+    measure: async () => ({ device: "1", availableBytes: ++sample === 1 ? 1000 : 500, totalBytes: 2000 }), pollMs: 1000 }, async () => "done"), /PHASE_OUTPUT_LIMIT/u);
+  assert.equal(owner.revoked, true); owner.dispose();
+});
+test("D3 global time model preserves 1800s, 70s teardown and both evidence tails", () => {
+  let now = 100; const schedule = linuxJobSchedule(100, () => now);
+  assert.equal(schedule.jobDeadline, 1800100); assert.equal(schedule.ends.preparation, 600100); assert.equal(schedule.ends.teardown, 1495100); assert.equal(schedule.ends.retention, 1645100);
+  now = schedule.ends.preparation; assert.throws(() => schedule.admit("preparation"), /PHASE_EXPIRED/u);
+  now = schedule.ends.finalization; assert.throws(() => schedule.admit("finalization"), /PHASE_EXPIRED/u);
+  now = schedule.ends.retention; assert.throws(() => schedule.admit("retention"), /PHASE_EXPIRED/u);
+});
+test("D3 missing retention tail and changed canonical phase caps are rejected", () => {
+  let now = 100; const schedule = linuxJobSchedule(100, () => now); now = schedule.ends.retention - 119999;
+  assert.throws(() => assertLinuxRetentionTail(schedule), /RETENTION_TAIL_UNAVAILABLE/u);
+  const plan = d3Plan(); plan.timeBudget.teardown = 71; assert.throws(() => d3Validate(plan), /TIME_BUDGET_INVALID/u);
+});
+test("D3 finalization and packaging share one absolute 30s window without reset", () => {
+  const schedule = linuxJobSchedule(100, () => 100), first = linuxFinalizationWindow(schedule, 1000, 1000);
+  assert.equal(first, 31000); assert.equal(linuxFinalizationWindow(schedule, 1000, 15000), first);
+  assert.throws(() => linuxFinalizationWindow(schedule, 1000, 31000), /FINALIZATION_DEADLINE/u);
+});
+
+function d3Identity() { return { v: 1, mode: "ARTIFACT_DISCOVERY", repository: "TommyGiacopini/piccadilly-booking", commit: "a".repeat(40), tree: "b".repeat(40), sourceFreeze: "c".repeat(64), workflowSha256: "d".repeat(64), manifestSha256: "e".repeat(64), manifestUrl: null, runId: "1", runAttempt: "1", attempt: d3Uuid,
+  runner: { os: "Linux", arch: "X64", imageVersion: "synthetic-1", engineId: "SYNTHETIC_ENGINE" }, bootstrap: { version: "0.0.0", sha256: "f".repeat(64) },
+  policy: { retentionDays: 14, compressedMaxBytes: EVIDENCE_POLICY.compressedBytes }, approvalModel: "HUMAN_WORK3_CLASSIC3_REQUIRED_NOT_CRYPTOGRAPHIC_SIGNATURE" }; }
+async function d3Evidence(work) {
+  const root = await mkdtemp(join(tmpdir(), "p1c-d3-")), directory = join(root, "sanitized"), writer = createLinuxEvidence(directory, d3Identity(), { now: () => 1 });
+  try { const outcome = createLinuxAdmissionOutcome("ARTIFACT_DISCOVERY"); preserveLinuxAdmissionFailure(outcome, d3Error(), { omissions: ["LINUX_WORKLOAD_NOT_ENTERED"] }); writer.outcome(outcome); await work({ root, directory, writer, outcome }); }
+  finally { assert.ok(isAbsolute(root) && root.startsWith(join(tmpdir(), "p1c-d3-"))); await rm(root, { recursive: true, force: true }); }
+}
+test("D3 evidence package verifies closed members, tar bytes and SHA-256 without external tools", async () => d3Evidence(async ({ root, directory }) => {
+  const output = join(root, "evidence.tar.gz"), receipt = await packageLinuxEvidence(directory, output), archive = await readFile(output);
+  assert.equal(receipt.sha256, d3Hash(archive)); assert.equal(receipt.members.length, 3); const tar = gunzipSync(archive); const members = new Map();
+  for (let at = 0; at + 512 <= tar.length && tar[at] !== 0;) { const name = tar.subarray(at, at + 100).toString().split("\0")[0], size = parseInt(tar.subarray(at + 124, at + 136).toString(), 8);
+    assert.ok(!members.has(name)); members.set(name, tar.subarray(at + 512, at + 512 + size)); at += 512 + Math.ceil(size / 512) * 512; }
+  assert.equal(members.size, 4); const manifest = parseLinuxJson(members.get("members.json"));
+  for (const row of manifest.members) { assert.equal(d3Hash(members.get(row.name)), row.sha256); assert.equal(members.get(row.name).length, row.bytes); }
+}));
+test("D3 evidence rejects unexpected files before reading their payload", async () => d3Evidence(async ({ root, directory }) => {
+  await writeFile(join(directory, "credentials.log"), "SYNTHETIC_SECRET_SENTINEL"); await assert.rejects(packageLinuxEvidence(directory, join(root, "evidence.tar.gz")), /UNEXPECTED_FILE/u);
+}));
+test("D3 evidence rejects symlink or junction members", async () => d3Evidence(async ({ root, directory }) => {
+  const target = join(root, "target"); await mkdir(target); await unlink(join(directory, "identity.json")); await symlink(target, join(directory, "identity.json"), "junction");
+  await assert.rejects(packageLinuxEvidence(directory, join(root, "evidence.tar.gz")), /FILE_REJECTED/u);
+}));
+test("D3 evidence rejects traversal and duplicate member names", () => {
+  const entry = { name: "identity.json", bytes: 1, sha256: "a".repeat(64) };
+  assert.throws(() => validateLinuxEvidenceMembers([entry, entry, { ...entry, name: "outcome.json" }]), /MEMBER_REJECTED/u);
+  assert.throws(() => validateLinuxEvidenceMembers([entry, { ...entry, name: "../observations.ndjson" }, { ...entry, name: "outcome.json" }]), /MEMBER_REJECTED/u);
+});
+test("D3 evidence refuses sensitive sentinels and unknown fields rather than redacting permissively", async () => d3Evidence(async ({ writer }) => {
+  assert.throws(() => writer.record("error", { primary: "PASSWORD_SENTINEL", secondary: [], omissions: [] }), /SCHEMA_REJECTED/u);
+  assert.throws(() => writer.record("error", { primary: null, secondary: [], omissions: [], password: "SYNTHETIC_SECRET" }), /SCHEMA_REJECTED/u);
+  assert.throws(() => assertLinuxEvidenceRow({ seq: 1, kind: "environment", monotonicMs: 1, data: {} }), /SCHEMA_REJECTED/u);
+}));
+test("D3 evidence refuses compressed overflow without removing mandatory members", async () => d3Evidence(async ({ root, directory }) => {
+  await assert.rejects(packageLinuxEvidence(directory, join(root, "evidence.tar.gz"), { maximumBytes: 1 }), /COMPRESSED_LIMIT/u);
+  assert.ok((await readFile(join(directory, "outcome.json"))).length > 0);
+}));
+test("D3 ambiguous raw evidence JSON is rejected during packaging", async () => d3Evidence(async ({ root, directory }) => {
+  await writeFile(join(directory, "outcome.json"), '{"status":"FAIL","status":"PASS_VERIFIED"}');
+  await assert.rejects(packageLinuxEvidence(directory, join(root, "evidence.tar.gz")), /JSON_AMBIGUOUS/u);
+}));
+test("D3 failure before harness, teardown and unavailable upload preserve the primary", () => {
+  const outcome = createLinuxAdmissionOutcome("QUALIFIED_WORKLOAD"); preserveLinuxAdmissionFailure(outcome, d3Error(), { omissions: ["LINUX_WORKLOAD_NOT_ENTERED"] });
+  preserveLinuxAdmissionFailure(outcome, new LinuxSafetyError("LINUX_TEARDOWN_FAILED")); const result = linuxRetentionResult(outcome, { step: "failure" });
+  assert.equal(result.primary, "LINUX_TEST_PRIMARY"); assert.ok(result.secondary.includes("LINUX_TEARDOWN_FAILED")); assert.equal(result.retentionFailure, "LINUX_UPLOAD_NOT_VERIFIED");
+  assert.equal(result.complete, false); assert.equal(result.status, "FAIL"); assert.ok(result.omissions.includes("LINUX_WORKLOAD_NOT_ENTERED"));
+  const sql = createLinuxAdmissionOutcome("QUALIFIED_WORKLOAD"); preserveLinuxAdmissionFailure(sql, new SafetyError("SQL_OWNERSHIP_LOSS"));
+  preserveLinuxAdmissionFailure(sql, new LinuxSafetyError("LINUX_UPLOAD_NOT_VERIFIED")); assert.equal(sql.primary, "SQL_OWNERSHIP_LOSS");
+  assert.ok(sql.secondary.includes("LINUX_UPLOAD_NOT_VERIFIED"));
+});
+test("D3 actual worker-event projections retain STOP and lease facts without raw payloads", () => {
+  for (const event of [{ event: "consumer-stopped", slot: "B", databaseClosed: true }, { event: "abort-observed", slot: "B" },
+    { event: "lease-replay-proof", leaseMs: 120000, attempts: 2, outcomes: ["ABANDONED", "SUCCESS"], deduplicated: true }]) {
+    const [proof] = projectLinuxWorkerEvent(event, d3Uuid, d3Uuid); assertLinuxEvidenceRow({ seq: 1, kind: proof.kind, monotonicMs: 1, data: proof.data });
+  }
+  const [receipt] = projectLinuxWorkerEvent({ event: "receipt-observed", slot: "A", id: d3Uuid, reference: "synthetic-receipt", payloadHash: "a".repeat(64), customerPayload: "SYNTHETIC_SECRET_SENTINEL" }, d3Uuid, d3Uuid);
+  assertLinuxEvidenceRow({ seq: 1, kind: receipt.kind, monotonicMs: 1, data: receipt.data }); assert.ok(!JSON.stringify(receipt).includes("SENTINEL"));
+});
+test("D3 workflow remains manual, mode-separated, minimum-permission and SHA-pinned", async () => {
+  const text = await readFile(new URL("../.github/workflows/m13-p1-c-linux-qualification.yml", import.meta.url), "utf8");
+  assert.match(text, /workflow_dispatch:/u); assert.doesNotMatch(text, /^\s+(?:push|pull_request|pull_request_target|schedule|workflow_run):/mu);
+  assert.equal((text.match(/permissions: \{\}/gu) ?? []).length, 2); assert.match(text, /timeout-minutes: 30/u); assert.match(text, /default: ARTIFACT_DISCOVERY/u);
+  assert.match(text, /workload_authorized:/u); assert.match(text, /actions\/upload-artifact@[a-f0-9]{40}/u); assert.match(text, /retention-days: 14/u); assert.match(text, /archive: false/u);
+  assert.doesNotMatch(text, /secrets\.|docker (?:run|pull|build)|prisma (?:migrate|db)|notifications:worker|deploy/iu);
+});
 
 // In-memory HTTP/socket adapters exercise the unchanged Engine event decoder
 // and attach endpoint; no socket, native process, Docker or SQL is opened.

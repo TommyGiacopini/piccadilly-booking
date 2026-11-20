@@ -12,7 +12,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { inflateRawSync } from "node:zlib";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { statfs } from "node:fs/promises";
-import { LINUX_PROFILE, decodeDockerFrames, linuxSourceInventory, runLinuxTool, isQualifiedLinuxImage, isQualifiedLinuxEngine, linuxToolQuiescence } from "./m13-p1-worker-linux-image.mjs";
+import { LINUX_PROFILE, decodeDockerFrames, linuxSourceInventory, runLinuxTool, isQualifiedLinuxImage, isQualifiedLinuxEngine, linuxToolQuiescence,
+  isLinuxWorkloadAdmission, admitLinuxDisk, projectLinuxProcess, projectLinuxResource, projectLinuxWorkerEvent } from "./m13-p1-worker-linux-image.mjs";
 import { linuxBounded } from "./m13-p1-worker-linux-entry.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -1598,7 +1599,7 @@ export async function linuxStorageSnapshot(engine, paths) {
   const info = await engine.verify(), filesystems = [];
   for (const [category, path] of Object.entries({ ...paths, docker: info.DockerRootDir })) {
     requireSafe(isAbsolute(path), "LINUX_STORAGE_PATH_INVALID");
-    const value = await statfs(path); filesystems.push({ category, totalBytes: value.blocks * value.bsize, availableBytes: value.bavail * value.bsize });
+    const [value, metadata] = await Promise.all([statfs(path), lstat(path)]); filesystems.push({ category, device: String(metadata.dev), totalBytes: value.blocks * value.bsize, availableBytes: value.bavail * value.bsize });
   }
   const usage = await engine.call("GET", "/system/df");
   return { measuredAt: timestamp(), filesystems, layersBytes: usage.LayersSize, imageCount: usage.Images?.length ?? 0, containerCount: usage.Containers?.length ?? 0,
@@ -1608,7 +1609,7 @@ export async function linuxStorageSnapshot(engine, paths) {
 // Docker attach events carry a container/attempt, not an HTTP request ID. Keep
 // exactly one operation per worker instance and require both its transport and
 // its event before leaving bootstrap. Never infer authority from container ID alone.
-export function createLinuxResourceEventMonitor({ engine, lease, attempts, ownedExecs, pendingExecEvents, lifecycle, verifyWorker, assertAuthority, revoke, record }) {
+export function createLinuxResourceEventMonitor({ engine, lease, attempts, ownedExecs, pendingExecEvents, lifecycle, verifyWorker, assertAuthority, revoke, record, beforePacket = () => {} }) {
   const runId = lease.runId, generation = lease.generation, owner = lease.owner, plans = new Map();
   let primary, sealed = false;
   const fail = error => { primary ??= error instanceof SafetyError ? error : new SafetyError("LINUX_ATTACH_RECONCILIATION_FAILED"); revoke(primary); return false; };
@@ -1661,9 +1662,11 @@ export function createLinuxResourceEventMonitor({ engine, lease, attempts, owned
       assertOpen(); requireSafe(same(plan.identity, proof) && same(plan.identity, identity(id)), "LINUX_ATTACH_IDENTITY_CHANGED");
       plan.state = "DISPATCHED"; emit(plan);
       // No await between this authorization and invoking the real Engine adapter.
-      transport = await engine.attach(id, receiveBytes, failure);
+      transport = await engine.attach(id, receiveBytes, failure, { beforeDispatch: assertOpen });
       assertOpen(); requireSafe(same(plan.identity, identity(id)), "LINUX_ATTACH_IDENTITY_CHANGED");
-      plan.state = "CONNECTED"; emit(plan); return transport;
+      plan.state = "CONNECTED"; emit(plan);
+      const connected = transport;
+      return { ...connected, write(packet) { beforePacket(packet); connected.write(packet); } };
     } catch (error) {
       if (plan) { plan.state = "FAILED"; emit(plan); }
       fail(error);
@@ -1681,32 +1684,45 @@ export function createLinuxResourceEventMonitor({ engine, lease, attempts, owned
   return Object.freeze({ receive, attach, ready, records: () => [...plans.values()].map(plan => ({ ...plan.identity, state: plan.state, eventObserved: plan.observed })) });
 }
 
-export async function createLinuxQualificationHarness({ engine, image, sourceNames, evidenceDirectory, signal, toolHashes, now = () => performance.now() }) {
-  requireSafe(process.platform === "linux" && process.arch === "x64" && process.versions.node === NODE_REFERENCE && isQualifiedLinuxImage(image) && isQualifiedLinuxEngine(engine)
+export function assertLinuxRuntimeDispatch({ method, dispatchClosed, resourcePhase, cleanup }) {
+  requireSafe(["GET", "POST", "PUT", "DELETE"].includes(method) && (method === "GET" || !dispatchClosed || resourcePhase === "CLOSING" && cleanup === true), "P1C_ABORTED");
+}
+export async function createLinuxQualificationHarness({ engine, image, sourceNames, evidenceDirectory, signal, toolHashes, admission, now = () => performance.now() }) {
+  requireSafe(isLinuxWorkloadAdmission(admission) && image.admissionPurpose === "QUALIFIED_WORKLOAD" && process.platform === "linux" && process.arch === "x64" && process.versions.node === NODE_REFERENCE && isQualifiedLinuxImage(image) && isQualifiedLinuxEngine(engine)
     && image.runtimeNodeSha256 === hash(await regularBytes(process.execPath)), "LINUX_RUNTIME_CAPABILITY_REQUIRED");
   const { Client } = await import("pg"), { createLinuxWorkerGroup, runWorkerRuntime } = await import("./m13-p1-worker-runtime.mjs");
   const runId = randomUUID(), generation = randomUUID(), suffix = runId.replaceAll("-", "");
   const lease = { owner: "m13-p1-c-linux", runId, generation, database: "piccadilly_e2e_" + suffix, role: "m13_p1_" + suffix.slice(0, 16), password: randomBytes(32).toString("base64url"), workers: {} };
   const events = [], attempts = [], creationPlans = new Map(), createdAt = now(), controller = new AbortController();
-  let group, mainIdentity, url, dispatchClosed = false, ownershipLost = false, evidenceFailed = false, closePromise, bootstrap, teardownStarted, eventMonitor, resourcePhase = "NEW";
+  let group, mainIdentity, url, dispatchClosed = false, ownershipLost = false, evidenceFailed = false, closePromise, bootstrap, teardownStarted, eventMonitor, resourcePhase = "NEW", admissionPhase = "bootstrap";
   const ownedExecs = new Set(), pendingExecEvents = new Set(); let resourceMonitor;
   const operationScope = new AsyncLocalStorage(), engineCall = engine.call;
   const checkScope = () => {
+    admission.assertPhase(teardownStarted === undefined ? admissionPhase : "teardown");
     const current = operationScope.getStore();
     if (current) requireSafe(now() < current.deadline, "LINUX_OPERATION_DEADLINE");
     if (teardownStarted !== undefined) requireSafe(now() < teardownStarted + 70000, "LINUX_TEARDOWN_DEADLINE");
   };
-  const scoped = (deadline, work) => operationScope.run({ deadline: Math.min(deadline, operationScope.getStore()?.deadline ?? Infinity) }, work);
+  const scoped = (deadline, work, cleanup = operationScope.getStore()?.cleanup ?? false) => operationScope.run({ deadline: Math.min(deadline, operationScope.getStore()?.deadline ?? Infinity), cleanup }, work);
   const rpc = (method, path, body, options = {}) => {
     checkScope(); const remaining = operationScope.getStore() ? operationScope.getStore().deadline - now() : 15000;
     const before = options.beforeDispatch;
     return engineCall(method, path, body, { ...options, timeoutMs: Math.max(1, Math.min(options.timeoutMs ?? 15000, remaining)),
-      beforeDispatch: () => { checkScope(); before?.(); } });
+      beforeDispatch: () => { checkScope(); assertLinuxRuntimeDispatch({ method, dispatchClosed, resourcePhase, cleanup: operationScope.getStore()?.cleanup }); before?.(); } });
   };
   const event = (kind, fields = {}) => {
     const row = { kind, ...fields, monotonicMs: now() - createdAt };
     try { requireSafe(events.length < 20000, "LINUX_EVIDENCE_LIMIT"); appendFileSync(join(evidenceDirectory, "linux-events.ndjson"), JSON.stringify(row) + "\n", { encoding: "utf8", mode: 0o600 }); events.push(row); }
     catch { evidenceFailed = true; dispatchClosed = true; ownershipLost = true; teardownStarted ??= now(); if (!controller.signal.aborted) controller.abort(new SafetyError("LINUX_EVIDENCE_FAILED")); }
+    if (kind === "worker-runtime") for (const proof of projectLinuxWorkerEvent(fields.workerEvent, runId, generation)) evidence(proof.kind, proof.data);
+    if (["attach-operation", "attach-event-observed", "attach-reconciled", "early-quiescence", "first-writer-fresh-guard", "application-processes-joined", "sql-live-quiescence", "resource-absence", "late-creation-reconciled", "teardown-failure"].includes(kind)) {
+      evidence("lifecycle", { runId, generation, event: kind, role: fields.role ?? null, attempt: fields.attempt ?? null, resourceId: fields.resourceId ?? fields.id ?? null,
+        state: fields.state ?? null, status: fields.status ?? null, code: fields.code ?? null });
+    }
+  };
+  const evidence = (kind, value) => {
+    try { admission.record(kind, value); }
+    catch { evidenceFailed = true; revoke(new SafetyError("LINUX_EVIDENCE_FAILED")); throw new SafetyError("LINUX_EVIDENCE_FAILED"); }
   };
   const revoke = error => { dispatchClosed = true; teardownStarted ??= now(); if (/UNKNOWN|IDENTITY|MISMATCH|FOREIGN|OWNERSHIP|UNQUALIFIED|SOURCE_CHANGED|RECONCILIATION/u.test(error?.code ?? "")) ownershipLost = true; if (!controller.signal.aborted) controller.abort(error); };
   const externalAbort = () => revoke(new SafetyError("P1C_ABORTED"));
@@ -1733,6 +1749,7 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
   };
   const sql = async (query, censusName = null, internal = false) => {
     requireSafe(!ownershipLost, "SQL_OWNERSHIP_LOSS");
+    assertLinuxRuntimeDispatch({ method: "POST", dispatchClosed, resourcePhase, cleanup: operationScope.getStore()?.cleanup });
     if (internal) return JSON.parse(await execContainer(lease.postgres.id, ["psql", "-X", "-w", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", lease.pgAddress, "-U", lease.role, "-d", lease.database, "-c", query], ["PGPASSWORD=" + lease.password]));
     checkScope(); const sqlTimeout = Math.floor(Math.min(5000, (operationScope.getStore()?.deadline ?? Infinity) - now()));
     requireSafe(sqlTimeout > 0, "LINUX_OPERATION_DEADLINE");
@@ -1751,6 +1768,8 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
     const monitorName = "m13-monitor-" + randomUUID(), row = await sql(d14CensusSql, monitorName);
     const snapshot = Object.values(row)[0], result = classifySessionCensus(snapshot, { database: lease.database, role: lease.role, monitorName });
     assertD6Identity(lease, await sql(d6IdentitySql, null, true), snapshot.identity);
+    evidence("sql", { runId, generation, monitor: result.monitor, sessions: result.sessions, sameRoleNonClients: result.sameRoleNonClients,
+      identity: snapshot.identity, quiet: result.quiet, monitorClosed: true });
     event("sql-live-census", { quiet: result.quiet, others: result.otherClientSessionsCount, monitorClosed: true });
     requireSafe(result.quiet, "LINUX_SQL_NOT_QUIESCENT"); return result;
   };
@@ -1761,10 +1780,15 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
     requireSafe(pendingExecEvents.size === 0, "LINUX_UNKNOWN_EXEC_PROCESS");
     const pg = await inspect(lease.postgres.id), proxy = await inspect(lease.haproxy.id);
     assertD6Container(lease, pg, "postgres"); assertD6Container(lease, proxy, "haproxy");
+    evidence("resource", projectLinuxResource(pg, { runId, generation, attempt: lease.postgres.attempt, role: "postgres" }));
+    evidence("resource", projectLinuxResource(proxy, { runId, generation, attempt: lease.haproxy.attempt, role: "haproxy" }));
     requireSafe(pg.RestartCount === 0 && proxy.RestartCount === 0 && pg.State.OOMKilled === false && proxy.State.OOMKilled === false && pg.HostConfig.RestartPolicy.Name === "no" && proxy.HostConfig.RestartPolicy.Name === "no", "LINUX_RESOURCE_RESTARTED");
     const pgNetwork = Object.values(pg.NetworkSettings.Networks)[0], proxyNetwork = Object.values(proxy.NetworkSettings.Networks).find(value => value.NetworkID === lease.backend.id);
     requireSafe(pgNetwork.IPAddress === lease.pgAddress && proxyNetwork.IPAddress === lease.proxyAddress, "LINUX_ENDPOINT_CHANGED");
-    for (const slot of ["A", "B"]) if (lease.workers[slot]) assertLinuxWorkerContainer(lease, await inspect(lease.workers[slot].id), slot, image);
+    for (const slot of ["A", "B"]) if (lease.workers[slot]) {
+      const current = await inspect(lease.workers[slot].id); assertLinuxWorkerContainer(lease, current, slot, image);
+      evidence("resource", projectLinuxResource(current, { runId, generation, attempt: lease.workers[slot].attempt, role: "worker-" + slot }));
+    }
     const roles = ["postgres", "haproxy", ...Object.keys(lease.workers).map(slot => "worker-" + slot)];
     for (const role of ["backend", "frontend"]) assertLinuxNetwork(lease, await rpc("GET", "/networks/" + lease[role].id), role, role === "backend" ? roles : ["haproxy"]);
     const [pgObservation, proxyObservation] = await Promise.all([
@@ -1776,7 +1800,7 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
     for (const [observed, memory] of [[pgLive, D6_PROFILE.pgMemory], [proxyLive, D6_PROFILE.proxyMemory]]) requireSafe(Number(observed.memory.trim()) === memory && observed.swap.trim() === "0", "LINUX_CGROUP_BUDGET_MISMATCH");
     const internal = await sql(d6IdentitySql, null, true), row = await sql(d6IdentitySql), host = Object.values(row)[0];
     assertD6Identity(lease, internal, host); lease.identity ??= host; mainIdentity = host;
-    if (group) await group.snapshot();
+    if (group) for (const snapshot of await group.snapshot()) evidence("process", { runId, generation, slot: snapshot.slot, rows: snapshot.rows.map(projectLinuxProcess) });
     requireSafe(pendingExecEvents.size === 0, "LINUX_UNKNOWN_EXEC_PROCESS");
     if (!closing) requireSafe(!dispatchClosed && !controller.signal.aborted, "P1C_ABORTED");
     return { valid: true, status: "PASS_VERIFIED", generation, server: host };
@@ -1810,10 +1834,14 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
     Object.assign(identity, { started: current.State.StartedAt, pid: current.State.Pid }); return current;
   };
   const createResources = async () => {
+    admissionPhase = "bootstrap"; admission.assertPhase(admissionPhase);
     resourcePhase = "BOOTSTRAP";
     const info = await engine.verify(), memory = await readFile("/proc/meminfo", "utf8");
     requireSafe(info.MemTotal / 1024 ** 2 >= LINUX_PROFILE.admissionMiB && Number(/^MemAvailable:\s+(\d+) kB$/mu.exec(memory)?.[1]) / 1024 >= LINUX_PROFILE.admissionMiB, "LINUX_MEMORY_ADMISSION_FAILED");
     const storage = await linuxStorageSnapshot(engine, { root: projectRoot, evidence: evidenceDirectory });
+    const diskProof = await admitLinuxDisk({ budget: image.diskBudget, phase: "workload", paths: { root: projectRoot, temp: process.env.RUNNER_TEMP,
+      docker: info.DockerRootDir, cache: process.env.RUNNER_TEMP, artifact: evidenceDirectory, evidence: evidenceDirectory } });
+    checkScope(); evidence("storage", diskProof);
     requireSafe(storage.filesystems.every(row => row.availableBytes / 1024 ** 2 >= image.diskAdmissionMiB), "LINUX_DISK_ADMISSION_FAILED"); event("storage-before", storage);
     const images = {};
     for (const role of ["postgres", "haproxy"]) {
@@ -1824,13 +1852,15 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
     try { return await bootstrap.run("linux-bootstrap", 30000, () => scoped(now() + bootstrap.remaining(), async () => {
       resourceMonitor = createLinuxResourceEventMonitor({ engine, lease, attempts, ownedExecs, pendingExecEvents,
         lifecycle: () => ({ phase: resourcePhase, dispatchClosed, closing: teardownStarted !== undefined }), assertAuthority: () => { checkScope(); bootstrap.assert(); }, revoke, record: event,
+        beforePacket: packet => { checkScope(); requireSafe(!dispatchClosed || ["STOP", "STATUS"].includes(packet.type)
+          || packet.type === "RELEASE" && resourcePhase === "CLOSING" && operationScope.getStore()?.cleanup === true, "P1C_ABORTED"); },
         verifyWorker: async expected => {
           const slot = expected.role.slice(-1), current = await inspect(expected.id); assertLinuxWorkerContainer(lease, current, slot, image);
           const env = Object.fromEntries(current.Config.Env.map(value => { const at = value.indexOf("="); return [value.slice(0, at), value.slice(at + 1)]; }));
           return { runId: env.P1C_RUN_ID, generation: env.P1C_GENERATION, owner: current.Config.Labels["piccadilly.owner"], id: current.Id,
             attempt: env.P1C_ATTEMPT, role: current.Config.Labels["piccadilly.role"], created: current.Created, started: current.State.StartedAt, pid: current.State.Pid, imageId: current.Image };
         } });
-      eventMonitor = await engine.watch(runId, resourceMonitor.receive, revoke);
+      eventMonitor = await engine.watch(runId, resourceMonitor.receive, revoke, { beforeDispatch: () => { checkScope(); bootstrap.assert(); } });
       for (const role of ["backend", "frontend"]) await create(role, { Driver: "bridge", Internal: role === "backend", EnableIPv6: false,
         Options: role === "backend" ? { "com.docker.network.bridge.gateway_mode_ipv4": "isolated" } : {}, CheckDuplicate: true }, true);
       const pg = await create("postgres", { Image: images.postgres, Env: ["POSTGRES_PASSWORD=" + lease.password, "POSTGRES_DB=" + lease.database, "POSTGRES_USER=" + lease.role],
@@ -1882,6 +1912,7 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
   };
   const role = async name => {
     requireSafe(["migrate", "seed", "worker-runtime"].includes(name) && resourcePhase === "READY" && !dispatchClosed, "LINUX_ROLE_NOT_ALLOWED");
+    admissionPhase = name === "worker-runtime" ? "workerGuard" : "writers"; checkScope();
     await guarded(false); event("first-writer-fresh-guard", { role: name });
     if (name !== "worker-runtime") {
       const environment = { PATH: dirname(process.execPath) + ":/usr/bin:/bin", APP_ENV: "development", NODE_ENV: "test", DATABASE_URL: url, NEXT_TELEMETRY_DISABLED: "1",
@@ -1894,6 +1925,7 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
       await guarded(false); return result;
     }
     requireSafe(group && !group.closing, "LINUX_GROUP_NOT_READY");
+    admissionPhase = "worker"; checkScope();
     return runWorkerRuntime({ environment: { DATABASE_URL: url }, generation, runId, expectedIdentity: mainIdentity, requireOwnership: true,
       ownershipGuard: () => guarded(false), signal: controller.signal, onChild: child => group.assertHandle(child), evidenceDirectory, timeoutMs: 600000, linuxGroup: group, onAbort: revoke,
       record: value => event("worker-runtime", { workerEvent: value }) });
@@ -1903,7 +1935,7 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
     dispatchClosed = true; resourcePhase = "CLOSING"; teardownStarted ??= now(); const started = teardownStarted;
     closePromise = (async () => {
       const failures = []; let joined = !group, quiet = false;
-      const phase = async (cutoff, work) => { try { await linuxBounded(() => scoped(started + cutoff, work), linuxTeardownPhase(started, cutoff, now), "LINUX_TEARDOWN_DEADLINE"); } catch (error) { failures.push(error.code ?? "LINUX_TEARDOWN_FAILED"); event("teardown-failure", { code: failures.at(-1) }); } };
+      const phase = async (cutoff, work) => { try { await linuxBounded(() => scoped(started + cutoff, work, true), linuxTeardownPhase(started, cutoff, now), "LINUX_TEARDOWN_DEADLINE"); } catch (error) { failures.push(error.code ?? "LINUX_TEARDOWN_FAILED"); event("teardown-failure", { code: failures.at(-1) }); } };
       await phase(10000, async () => {
         for (const attempt of attempts.filter(value => value.dispatched && !value.id)) {
           const plan = creationPlans.get(attempt.attempt), filters = encodeURIComponent(JSON.stringify({ label: ["piccadilly.run=" + runId, "piccadilly.attempt=" + attempt.attempt] }));
@@ -1917,13 +1949,16 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
           attempt.id = id; attempt.creation = "RECOVERED_METADATA_ONLY_STOP_NOT_AUTHORIZED";
           event("late-creation-reconciled", { role: attempt.role, resourceId: id, stopAuthorized: false });
         }
-        if (group) { await group.stopAll(); joined = true; }
+        if (group) { await group.stopAll(); joined = true;
+          for (const snapshot of await group.snapshot()) evidence("process", { runId, generation, slot: snapshot.slot, rows: snapshot.rows.map(projectLinuxProcess) }); }
         if (!linuxToolQuiescence().verified) { joined = false; throw new SafetyError("LINUX_TOOL_JOIN_NOT_VERIFIED"); }
         event("application-processes-joined", { status: joined ? "PASS_VERIFIED" : "NOT_VERIFIABLE" });
       });
       await phase(20000, async () => { requireSafe(joined && !ownershipLost, "LINUX_SQL_QUIESCENCE_NOT_VERIFIABLE"); await guarded(true); await census(); quiet = true; event("sql-live-quiescence", { status: "PASS_VERIFIED" }); });
       await phase(25000, async () => { requireSafe(joined && quiet, "LINUX_RELEASE_FORBIDDEN"); if (group) await group.release();
-        for (const slot of ["A", "B"]) if (lease.workers[slot]) { const result = await rpc("POST", "/containers/" + lease.workers[slot].id + "/wait?condition=not-running", undefined, { timeoutMs: 5000 }); requireSafe(result.StatusCode === 0, "LINUX_SUPERVISOR_EXIT_FAILED"); } });
+        for (const slot of ["A", "B"]) if (lease.workers[slot]) { const result = await rpc("POST", "/containers/" + lease.workers[slot].id + "/wait?condition=not-running", undefined, { timeoutMs: 5000 }); requireSafe(result.StatusCode === 0, "LINUX_SUPERVISOR_EXIT_FAILED");
+          const worker = group.records().find(value => value.slot === slot);
+          evidence("release", { runId, generation, slot, containerId: lease.workers[slot].id, joined: worker.joined, released: worker.released, exitCode: result.StatusCode }); } });
       await phase(55000, async () => {
         requireSafe(joined && quiet && !ownershipLost, "LINUX_OWNED_STOP_FORBIDDEN");
         await Promise.all(["postgres", "haproxy"].map(async name => { const current = await inspect(lease[name].id); assertD6Container(lease, current, name); await rpc("POST", "/containers/" + current.Id + "/stop?t=" + (name === "postgres" ? "25" : "10"), undefined, { timeoutMs: name === "postgres" ? 25000 : 10000 }); requireSafe(!(await inspect(current.Id)).State.Running, "LINUX_CONTAINER_STOP_FAILED"); }));
@@ -1942,13 +1977,18 @@ export async function createLinuxQualificationHarness({ engine, image, sourceNam
         const containers = await rpc("GET", "/containers/json?all=1&filters=" + filters), networks = await rpc("GET", "/networks?filters=" + filters);
         group?.dispose();
         if (eventMonitor) await eventMonitor.close();
+        evidence("absence", { runId, generation, containers: containers.map(value => value.Id), networks: networks.map(value => value.Id),
+          attempts: attempts.map(value => ({ id: value.id, attempt: value.attempt, role: value.role, owned: value.owned, dispatched: value.dispatched, removed: value.removed })), engineJoined: engine.joined() });
         requireSafe(!containers.length && !networks.length && attempts.every(value => !value.dispatched || value.removed), "LINUX_RESIDUAL_RESOURCES");
         for (let i = 0; i < 20 && !engine.joined(); i++) await pause(10);
+        evidence("absence", { runId, generation, containers: containers.map(value => value.Id), networks: networks.map(value => value.Id),
+          attempts: attempts.map(value => ({ id: value.id, attempt: value.attempt, role: value.role, owned: value.owned, dispatched: value.dispatched, removed: value.removed })), engineJoined: engine.joined() });
         requireSafe(engine.joined(), "LINUX_ENGINE_REQUEST_JOIN_FAILED");
         event("resource-absence", { status: "PASS_VERIFIED" });
       });
       group?.dispose(); eventMonitor?.abort(); engine.abortRequests(); bootstrap?.dispose(); signal?.removeEventListener("abort", externalAbort);
       const result = { complete: failures.length === 0 && !evidenceFailed, failures, evidenceFailed, processesJoined: joined, tools: linuxToolQuiescence(), sqlQuiescence: quiet ? "PASS_VERIFIED" : "NOT_VERIFIABLE", elapsedMs: now() - started };
+      evidence("teardown", { complete: result.complete, processesJoined: joined, sqlQuiescence: result.sqlQuiescence, elapsedMs: result.elapsedMs, failures });
       event("teardown", result); return result;
     })(); return closePromise;
   };
